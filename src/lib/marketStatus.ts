@@ -1,11 +1,13 @@
+import { nyseCalendarDay } from "./nyseCalendar";
 import type { Ticker } from "./types";
 
 export type MarketStatus = "open" | "pre" | "after" | "closed";
 
 /**
- * Regular-hours-only approximation - no US market holiday or early-close
- * calendar. Good enough for a status badge and to gate predictions; a real
- * deployment should source this from the data provider's own calendar.
+ * Regular-hours check backed by the rule-based NYSE holiday/early-close
+ * calendar (nyseCalendar.ts) for "regular"-session tickers. The "almost24"
+ * (CME Globex-style) branch below is intentionally untouched - futures
+ * observe their own holiday calendar, out of scope here.
  */
 function easternParts(now: number) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -40,10 +42,19 @@ export function getMarketStatus(ticker: Ticker, now: number = Date.now()): Marke
   }
 
   if (isWeekend) return "closed";
+
+  const calendarDay = nyseCalendarDay(now);
+  if (calendarDay.status === "closed") return "closed";
+
+  // Early-close days (day after Thanksgiving, Christmas Eve, July 3rd) end
+  // the regular session at 1:00pm ET instead of 4:00pm, but keep the same
+  // 4-hour after-hours window TradingView-style platforms show afterward.
+  const closeMinute = calendarDay.status === "early-close" ? 13 * 60 : 16 * 60;
+
   if (minutesOfDay < 4 * 60) return "closed";
   if (minutesOfDay < 9 * 60 + 30) return "pre";
-  if (minutesOfDay < 16 * 60) return "open";
-  if (minutesOfDay < 20 * 60) return "after";
+  if (minutesOfDay < closeMinute) return "open";
+  if (minutesOfDay < closeMinute + 4 * 60) return "after";
   return "closed";
 }
 
@@ -54,13 +65,15 @@ export function formatOpensIn(ms: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-/** Rough "opens in Xh Ym" for the closed badge - next weekday 9:30 ET, ignoring holidays. */
+/** "Opens in Xh Ym" for the closed badge - next weekday 9:30 ET that isn't a
+ * full NYSE holiday (an early-close day still opens normally at 9:30). */
 export function nextOpenMs(now: number = Date.now()): number {
   const oneDay = 24 * 60 * 60_000;
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 12; i++) {
     const candidate = now + i * oneDay;
     const { weekday } = easternParts(candidate);
     if (weekday === "Sat" || weekday === "Sun") continue;
+    if (nyseCalendarDay(candidate).status === "closed") continue;
     // Build a Date for 9:30 ET on that candidate day using the same
     // formatter's date parts, then just search forward minute-by-minute
     // from `now` is overkill - approximate by snapping to 9:30 ET via offset.
