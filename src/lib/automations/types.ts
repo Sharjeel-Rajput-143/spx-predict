@@ -67,4 +67,7 @@ export interface AlertTriggerLog {
   success: boolean;
   error?: string;
   attempt: number;
+  /** True for a manually-fired "Send Test", so the log can tell a real
+   * trigger apart from someone validating the rule. Absent on older/real logs. */
+  isTest?: boolean;
 }

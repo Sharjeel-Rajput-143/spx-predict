@@ -18,16 +18,27 @@ import type { Bar } from "./types";
  * trailing still-forming bucket is dropped here.
  */
 export function getServerBars(symbol: string, tf: Timeframe, count: number): Bar[] {
-  const tfMs = TF_MS[tf];
-  const now = Date.now();
-  const from = now - tfMs * (count + 5);
-
   // isLiveSymbol() only says Google Finance *can* serve this symbol - it
   // isn't the mock/live switch. Match the same NEXT_PUBLIC_DATA_SOURCE check
   // the client-side getMarketDataFeed() factory uses, or this would poll
   // Google Finance for symbols like SPX even while the app is in mock mode.
   const useLive = process.env.NEXT_PUBLIC_DATA_SOURCE === "live" && isLiveSymbol(symbol);
-  const bars = useLive ? aggregateTicksToBars(getTicks(symbol, from, now), tfMs) : mockBars(symbol, tf, from, now);
+  return getServerBarsForced(symbol, tf, count, useLive ? "live" : "mock");
+}
+
+/**
+ * Same as getServerBars(), but the caller picks the source directly instead
+ * of deferring to NEXT_PUBLIC_DATA_SOURCE. Used by the automations "Send
+ * Test" action, which needs to validate a rule against mock or the last
+ * known live price on demand, independent of whatever mode the rest of the
+ * app is running in.
+ */
+export function getServerBarsForced(symbol: string, tf: Timeframe, count: number, source: "mock" | "live"): Bar[] {
+  const tfMs = TF_MS[tf];
+  const now = Date.now();
+  const from = now - tfMs * (count + 5);
+
+  const bars = source === "live" ? aggregateTicksToBars(getTicks(symbol, from, now), tfMs) : mockBars(symbol, tf, from, now);
   const finalized = bars.filter((b) => b.t + tfMs <= now);
 
   return finalized.slice(-count);

@@ -17,27 +17,47 @@ const CONDITIONS: { value: ConditionType; label: string }[] = [
 const fieldClass = "w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm";
 const labelClass = "mb-1 block text-xs font-medium text-muted";
 
+interface DuplicateSource {
+  name: string;
+  symbol: string;
+  timeframe: Timeframe;
+  operandA: IndicatorOperand;
+  condition: ConditionType;
+  operandB: IndicatorOperand | ValueOperand;
+  connectionId: string;
+  message?: string;
+}
+
 export function AddRuleModal({
   connections,
   onClose,
   onCreated,
+  duplicateFrom,
 }: {
   connections: AlertConnectionView[];
   onClose: () => void;
   onCreated: () => void;
+  /** Pre-fills every field from an existing rule, for "Duplicate" - still a
+   * fresh POST on submit, so it gets its own id/enabled/history. */
+  duplicateFrom?: DuplicateSource;
 }) {
-  const [symbol, setSymbol] = useState(TICKERS[0].symbol);
-  const [timeframe, setTimeframe] = useState<Timeframe>("5m");
-  const [operandA, setOperandA] = useState<IndicatorOperand>({ mode: "indicator", kind: "ema", settings: { length: 9, source: "close" }, lineKey: "value" });
-  const [condition, setCondition] = useState<ConditionType>("crossing_up");
-  const [operandB, setOperandB] = useState<IndicatorOperand | ValueOperand>({
-    mode: "indicator",
-    kind: "ema",
-    settings: { length: 20, source: "close" },
-    lineKey: "value",
-  });
-  const [connectionId, setConnectionId] = useState(connections[0]?.id ?? "");
-  const [message, setMessage] = useState("");
+  const [name, setName] = useState(duplicateFrom ? `Copy of ${duplicateFrom.name}` : "");
+  const [symbol, setSymbol] = useState(duplicateFrom?.symbol ?? TICKERS[0].symbol);
+  const [timeframe, setTimeframe] = useState<Timeframe>(duplicateFrom?.timeframe ?? "5m");
+  const [operandA, setOperandA] = useState<IndicatorOperand>(
+    duplicateFrom?.operandA ?? { mode: "indicator", kind: "ema", settings: { length: 9, source: "close" }, lineKey: "value" },
+  );
+  const [condition, setCondition] = useState<ConditionType>(duplicateFrom?.condition ?? "crossing_up");
+  const [operandB, setOperandB] = useState<IndicatorOperand | ValueOperand>(
+    duplicateFrom?.operandB ?? {
+      mode: "indicator",
+      kind: "ema",
+      settings: { length: 20, source: "close" },
+      lineKey: "value",
+    },
+  );
+  const [connectionId, setConnectionId] = useState(duplicateFrom?.connectionId ?? connections[0]?.id ?? "");
+  const [message, setMessage] = useState(duplicateFrom?.message ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -52,7 +72,7 @@ export function AddRuleModal({
       const res = await fetch("/api/automations/rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, timeframe, operandA, condition, operandB, connectionId, message }),
+        body: JSON.stringify({ name, symbol, timeframe, operandA, condition, operandB, connectionId, message }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -88,13 +108,24 @@ export function AddRuleModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-line p-4">
-          <h2 className="text-sm font-semibold">Add rule</h2>
+          <h2 className="text-sm font-semibold">{duplicateFrom ? "Duplicate rule" : "Add rule"}</h2>
           <button onClick={onClose} aria-label="Close" className="text-muted hover:text-fg">
             <IconX width={16} height={16} />
           </button>
         </div>
 
         <div className="flex flex-col gap-3 overflow-y-auto p-4 text-sm">
+          <div>
+            <label className={labelClass}>Name (optional)</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Auto-generated from the condition if left blank"
+              className={fieldClass}
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className={labelClass}>Symbol</label>

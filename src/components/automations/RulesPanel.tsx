@@ -6,6 +6,7 @@ import { IconChevron } from "../icons";
 import type { AlertConnectionView, AlertRule } from "@/lib/automations/types";
 import { AddRuleModal } from "./AddRuleModal";
 import { RuleLog } from "./RuleLog";
+import { TestAlertButton } from "./TestAlertButton";
 
 type RuleView = AlertRule & { description: string };
 
@@ -24,6 +25,7 @@ export function RulesPanel({ connections }: { connections: AlertConnectionView[]
   const [rules, setRules] = useState<RuleView[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [duplicateOf, setDuplicateOf] = useState<RuleView | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = () => {
@@ -86,6 +88,14 @@ export function RulesPanel({ connections }: { connections: AlertConnectionView[]
                     <input type="checkbox" checked={rule.enabled} onChange={() => toggleEnabled(rule)} />
                     Enabled
                   </label>
+                  <TestAlertButton ruleId={rule.id} />
+                  <button
+                    onClick={() => setDuplicateOf(rule)}
+                    className="text-xs font-medium text-muted hover:text-fg"
+                    aria-label={`Duplicate ${rule.name}`}
+                  >
+                    Duplicate
+                  </button>
                   <button onClick={() => remove(rule)} className="text-xs font-medium text-muted hover:text-down" aria-label={`Delete ${rule.name}`}>
                     Delete
                   </button>
@@ -106,6 +116,14 @@ export function RulesPanel({ connections }: { connections: AlertConnectionView[]
       )}
 
       {showAdd && <AddRuleModal connections={connections} onClose={() => setShowAdd(false)} onCreated={load} />}
+      {duplicateOf && (
+        <AddRuleModal
+          connections={connections}
+          onClose={() => setDuplicateOf(null)}
+          onCreated={load}
+          duplicateFrom={duplicateOf}
+        />
+      )}
     </div>
   );
 }

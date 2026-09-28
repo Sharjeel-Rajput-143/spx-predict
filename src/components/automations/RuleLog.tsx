@@ -21,6 +21,7 @@ export function RuleLog({ ruleId }: { ruleId: string }) {
         <li key={entry.id} className="flex items-center justify-between gap-2 border-b border-line px-2.5 py-1.5 text-xs last:border-b-0">
           <span className="text-muted">{new Date(entry.firedAt).toLocaleString()}</span>
           <span className="flex items-center gap-1.5">
+            {entry.isTest && <span className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-faint">TEST</span>}
             {entry.attempt > 1 && <span className="text-faint">attempt {entry.attempt}</span>}
             <span
               className={

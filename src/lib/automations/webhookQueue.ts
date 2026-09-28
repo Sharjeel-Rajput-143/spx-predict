@@ -34,7 +34,7 @@ async function processQueue() {
   }
 }
 
-function logAttempt(job: DeliveryJob, statusCode: number | null, success: boolean, error?: string) {
+function logAttempt(job: DeliveryJob, statusCode: number | null, success: boolean, error?: string, isTest = false) {
   triggerLogStore.insert({
     id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     ruleId: job.ruleId,
@@ -44,6 +44,7 @@ function logAttempt(job: DeliveryJob, statusCode: number | null, success: boolea
     success,
     error,
     attempt: job.attempt,
+    isTest,
   });
 }
 
@@ -56,29 +57,47 @@ function scheduleRetry(job: DeliveryJob) {
   }, delay);
 }
 
-async function attemptDelivery(job: DeliveryJob) {
+interface PostResult {
+  statusCode: number | null;
+  success: boolean;
+  error?: string;
+  /** false when the URL itself is the problem (SSRF guard) - retrying
+   * against the same unsafe URL would never help. */
+  retryable: boolean;
+}
+
+async function postOnce(url: string, payload: Record<string, unknown>): Promise<PostResult> {
   // Re-checked at delivery time, not just at save time - a URL that was
   // safe when saved could now resolve differently.
-  const safety = await isSafeWebhookUrl(job.url);
-  if (!safety.ok) {
-    logAttempt(job, null, false, safety.reason);
-    return; // not retryable - the URL itself is the problem
-  }
+  const safety = await isSafeWebhookUrl(url);
+  if (!safety.ok) return { statusCode: null, success: false, error: safety.reason, retryable: false };
 
   try {
-    const res = await fetch(job.url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(job.payload),
+      body: JSON.stringify(payload),
       // Never blindly follow a redirect to a different, unvetted host (spec 5.3).
       redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
     const success = res.status >= 200 && res.status < 300;
-    logAttempt(job, res.status, success);
-    if (!success) scheduleRetry(job);
+    return { statusCode: res.status, success, retryable: !success };
   } catch (err) {
-    logAttempt(job, null, false, err instanceof Error ? err.message : "Unknown error");
-    scheduleRetry(job);
+    return { statusCode: null, success: false, error: err instanceof Error ? err.message : "Unknown error", retryable: true };
   }
+}
+
+async function attemptDelivery(job: DeliveryJob) {
+  const result = await postOnce(job.url, job.payload);
+  logAttempt(job, result.statusCode, result.success, result.error);
+  if (!result.success && result.retryable) scheduleRetry(job);
+}
+
+/** Manual "Send Test": a single attempt, no retry, logged and reported back
+ * to the caller synchronously so the UI can show success/failure right away. */
+export async function sendTestWebhook(job: { ruleId: string; url: string; payload: Record<string, unknown> }) {
+  const result = await postOnce(job.url, job.payload);
+  logAttempt({ ...job, attempt: 1 }, result.statusCode, result.success, result.error, true);
+  return { ok: result.success, statusCode: result.statusCode, error: result.error };
 }
