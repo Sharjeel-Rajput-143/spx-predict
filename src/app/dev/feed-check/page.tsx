@@ -13,11 +13,19 @@ const LIVE_MODE = process.env.NEXT_PUBLIC_DATA_SOURCE === "live";
  * so they can be compared line by line against TradingView's own chart.
  * Target tolerance is 0.01 index points. Not linked from the app nav.
  */
+interface FeedStatus {
+  healthy: boolean;
+  source: "google" | "yahoo" | null;
+  consecutiveFailures: number;
+  lastTickAt: number | null;
+}
+
 export default function FeedCheckPage() {
   const [symbol, setSymbol] = useState<string>(LIVE_FEED_SYMBOLS[0]);
   const [timeframe, setTimeframe] = useState<Timeframe>("1m");
   const [bars, setBars] = useState<Bar[]>([]);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [status, setStatus] = useState<FeedStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,11 +40,21 @@ export default function FeedCheckPage() {
       setUpdatedAt(now);
     };
 
+    const loadStatus = async () => {
+      if (!LIVE_MODE) return;
+      const res = await fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}`);
+      const data = await res.json();
+      if (!cancelled) setStatus(data);
+    };
+
     load();
+    loadStatus();
     const id = setInterval(load, 5000);
+    const statusId = setInterval(loadStatus, 2000);
     return () => {
       cancelled = true;
       clearInterval(id);
+      clearInterval(statusId);
     };
   }, [symbol, timeframe]);
 
@@ -48,9 +66,26 @@ export default function FeedCheckPage() {
     <div className="min-h-dvh bg-bg p-6 text-fg">
       <h1 className="text-lg font-semibold">Feed check</h1>
       <p className="mt-1 text-sm text-muted">
-        Data source: <b className="tabular">{LIVE_MODE ? "live (Google Finance scrape)" : "mock"}</b>
+        Data source: <b className="tabular">{LIVE_MODE ? "live (Google Finance, Yahoo Finance fallback)" : "mock"}</b>
         {!LIVE_MODE && " - set NEXT_PUBLIC_DATA_SOURCE=live to check the real feed."}
       </p>
+
+      {LIVE_MODE && status && (
+        <p className="mt-1 text-sm text-muted">
+          Feed health:{" "}
+          <b className={status.healthy ? "text-up" : "text-down"}>{status.healthy ? "healthy" : "down"}</b>
+          {status.source && (
+            <>
+              {" "}
+              via <b className="tabular">{status.source}</b>
+            </>
+          )}
+          {status.consecutiveFailures > 0 && (
+            <span className="text-down"> ({status.consecutiveFailures} consecutive failures, backing off)</span>
+          )}
+          {status.lastTickAt && <span className="text-faint"> - last tick {new Date(status.lastTickAt).toLocaleTimeString()}</span>}
+        </p>
+      )}
 
       <div className="mt-4 flex flex-wrap gap-3">
         <select
