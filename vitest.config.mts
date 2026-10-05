@@ -11,8 +11,11 @@ export default defineConfig({
       "server-only": path.resolve(import.meta.dirname, "./node_modules/server-only/empty.js"),
     },
   },
+  // Next compiles JSX itself; tests that render components need it transformed here.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

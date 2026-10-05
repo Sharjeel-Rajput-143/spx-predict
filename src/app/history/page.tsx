@@ -90,7 +90,7 @@ export default function HistoryPage() {
       ) : groups.length === 0 ? (
         <Card className="p-10 text-center">
           <p className="text-sm text-muted">Nothing here yet.</p>
-          <Link href="/" className="mt-3 inline-block rounded-lg bg-fg px-4 py-2 text-sm font-semibold text-bg">
+          <Link href="/predict" className="mt-3 inline-block rounded-lg bg-fg px-4 py-2 text-sm font-semibold text-bg">
             Make a call
           </Link>
         </Card>
