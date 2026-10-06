@@ -46,7 +46,8 @@ describe("creating a webhook", () => {
   it("is found by its token and nothing else", () => {
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
     expect(findWebhookByToken(w.token)?.id).toBe(w.id);
-    expect(findWebhookByToken(w.token.slice(0, -1) + "0")).toBeUndefined();
+    const last = w.token.at(-1) === "0" ? "1" : "0"; // always a different last character
+    expect(findWebhookByToken(w.token.slice(0, -1) + last)).toBeUndefined();
     expect(findWebhookByToken("")).toBeUndefined();
   });
 
