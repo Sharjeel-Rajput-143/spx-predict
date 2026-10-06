@@ -52,7 +52,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { theme, toggleTheme } = useGame();
   const [collapsed, setCollapsed] = useState(false);
-  const [auth, setAuth] = useState<{ authRequired: boolean; signedIn: boolean; authDisabled?: boolean } | null>(null);
+  const [auth, setAuth] = useState<{ authRequired: boolean; signedIn: boolean } | null>(null);
 
   useEffect(() => {
     try {
@@ -179,11 +179,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <main className={cn("mx-auto max-w-5xl px-4 pb-28 pt-4 xl:max-w-none xl:px-8 xl:pb-12 xl:pt-6", collapsed ? "xl:ml-16" : "xl:ml-56")}>
-        {auth?.authDisabled && (
-          <div className="mb-4 rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-500">
-            <span className="font-semibold">Sign-in is off.</span> Anyone who can reach this address can control the bots, see the webhook URLs and change settings. Fine for a demo with nothing real behind it; set AUTOMATION_STATUS_PASSWORD before connecting a broker.
-          </div>
-        )}
         {children}
       </main>
 
