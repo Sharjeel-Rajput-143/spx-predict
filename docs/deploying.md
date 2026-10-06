@@ -40,3 +40,15 @@ Limits to know when showing it:
 - A broker can't be driven from Vercel (`EXECUTOR=tradier` is refused there). That needs a server that stays up, as above.
 
 Sign-in comes back automatically as soon as it matters: set `AUTOMATION_STATUS_PASSWORD` and the password box returns; set `EXECUTOR=tradier` with no password and access is denied until you set one.
+
+## Where production storage lives, and how the flip wait and the sweep run
+
+**Storage.** The engine's records (bots, signals, decisions, orders, positions, runs, alerts, webhooks, settings) are JSON files in `AUTOMATION_DATA_DIR` (default `data/automation`), written atomically. In production that has to be a **persistent disk on an always-on server** (a VPS, or Railway / Render / Fly with a volume), backed up. **Vercel is not a place for it**: its filesystem is read-only apart from a per-instance temporary folder that is lost when the instance is replaced, and the engine refuses to start a broker there (`storageProblem`).
+
+**The flip wait.** A flip is close, wait for the confirmation, then open. It runs as ordinary async work in the server process, inside that bot's lock, and answers the webhook immediately. With the price ladder a close can wait up to about 2.5 minutes (3 prices x 10s, then the final price's 2 minutes) and the open the same - so one flip can take around 5 minutes of wall time. That is fine in a process that stays up and not in a serverless function, which is stopped soon after it responds and has a maximum run time.
+
+**The end-of-day sweep.** A one-minute timer in the same process (`startEodScheduler` in `eodSweep.ts`) checks each bot's own sweep time (NDX: 16:05 ET) and sweeps once a day, inside the bot's lock. It is started **when the server boots** (`src/instrumentation.ts`), not by the first webhook, so a restart at 4pm with no alert since doesn't skip it. After a restart a broker run also reads back any order left in flight (`recovery.ts`), and the per-signal stale-position check expires anything left from a previous day.
+
+**One instance only.** The locks, the timer and the caches live in one process; two copies would each run a sweep and each hold their own lock.
+
+**If it had to run on Vercel** it would be a rewrite, not a setting: the records move to an external database (Postgres or Redis) with a lock that works across instances; the sweep becomes a scheduled function (Vercel Cron calling a secured route; check the plan's cron frequency, since the daily-only plans can't hit 16:05); and the flip wait becomes a durable queue or workflow, because a function can't wait minutes and stay alive. Not recommended with money, and not in scope now: the Vercel site stays a mock demo.

@@ -2,6 +2,10 @@
 
 Everything below runs on the **mock executor**. No broker, no real orders, no outside network. Every trade on screen is labelled **TEST**.
 
+> **Do not place manual orders on positions the bot manages.** An order placed by hand (at the broker, or in another app) is invisible to the bot: it can leave a position the bot believes is open already closed, or one it has never heard of. To get out of a position, use **Close position** in this app, so the bot, its limits and its log stay in step with the account. The status page carries the same note.
+>
+> Scope: this walkthrough is the **NDX bot only**. SPX stays in Option Alpha and is not part of this engine.
+
 ## Before you start (once, privately)
 
 1. Put the run settings in a local, git-ignored env file (for example `.env.local`): `WEBHOOK_SECRET`, `AUTOMATION_TEST_MODE=true`, and clearly-labelled **test** values for each bot's required settings (see `.env.example`). Do not use or show real values; the owner hasn't given them yet.
@@ -11,7 +15,7 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
 ## What he sees on arrival
 
 - A yellow banner: **Mock executor - test trades only. Nothing reaches a broker.**
-- One card per bot (SPX and NDX) with an **On/Off** switch (the kill switch), the numbers he knows from Option Alpha - **Allocation, Capital at risk, Available, Positions today (of the daily limit), Active positions (of the position limit)** - a line saying how strikes are chosen, and **Send test alert** with a price box and two buttons.
+- The NDX bot's card with an **On/Off** switch (the kill switch), the numbers he knows from Option Alpha - **Allocation, Capital at risk, Available, Positions today (of the daily limit), Active positions (of the position limit)** - a line saying how strikes are chosen, and **Send test alert** with a price box and two buttons.
 - An **Activity alerts** list (opened, closed, warning, error). Email is off.
 - Empty tables: Active positions, Closed and expired positions, Orders, and Alerts and the decision for each.
 
@@ -34,9 +38,11 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
    - Click **Bearish** again straight away: `duplicate_signal` - the engine refuses a repeat inside the window.
    - Type an SPX-sized price (for example 7,720) in the NDX box and send: `price_out_of_range` - a wrong chart can't produce NDX strikes.
    - Switch the NDX bot **Off**, send an alert: `automations_off`, nothing placed. Switch it back **On**.
-4. **The other bot.** Repeat step 1 on the SPX card. Show that the NDX position is untouched - each bot has its own limits and queue.
-5. **Replay a run (optional).** Open a bot from the Automation list, **Log** tab, click a row: the step-by-step trace with each check's Yes/No and the value it measured.
-6. **Reset.** Click **Reset test data** (bottom, next to the alerts) and confirm. Everything recorded clears; bots and settings stay.
+4. **A limit switches the bot off.** Open the NDX bot's Settings > Safeguards, set the allocation to a small number (for example 600) and send a bullish alert: the decision is `allocation_limit_reached`, the card shows **Needs attention** with the reason, an *Activity alert* is raised, and the bot is **Off**. Put the allocation back, check the bot, switch it **On**. The position limit and the daily limit do the same. Ten errors in one trading day do it too (`error_failsafe`); the count starts again the next trading day.
+   - Say: "When a safeguard trips, the bot stops and tells you why. It doesn't carry on trading and it doesn't keep guessing."
+5. **The end-of-day sweep.** The NDX bot's sweep time is 16:05 ET, ten minutes before its options stop trading (4:15pm). With a position still open, **Settings > Bot inputs > End-of-day sweep** decides what happens: *estimate* (the position expires and its P/L is worked out from the underlying's price, labelled *est.*), *market* (a market close order is sent), or *manual* (it expires and appears under **Waiting for your P/L**, where you type the result in). With no fresh price to estimate from, the position waits there too.
+6. **Replay a run (optional).** With live quotes each price the order tried is listed in the trace, in order, with what happened at each. Open a bot from the Automation list, **Log** tab, click a row: the step-by-step trace with each check's Yes/No and the value it measured.
+7. **Reset.** Click **Reset test data** (bottom, next to the alerts) and confirm. Everything recorded clears; bots and settings stay.
 
 ## What to say if he asks
 

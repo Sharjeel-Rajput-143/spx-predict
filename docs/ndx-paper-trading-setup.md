@@ -20,7 +20,7 @@ WEBHOOK_SECRET=<any long random string>
 AUTOMATION_STATUS_PASSWORD=<a password for the admin pages>
 AUTOMATION_DRY_RUN=true            # decisions and ladders only, no orders - until you turn it off
 
-# The NDX bot needs no settings: it has working defaults (strike spacing 5, option root NDXP, sweep 16:15 ET,
+# The NDX bot needs no settings: it has working defaults (strike spacing 5, option root NDXP, end-of-day sweep 16:05 ET (estimate),
 # offsets -0.01/+0.01). The probe below prints the real spacing/root if you want to override them.
 ```
 Do **not** set `TRADIER_BASE_URL` or `TRADIER_ALLOW_PRODUCTION`. Leave the sandbox default.
@@ -48,8 +48,8 @@ Then BearishNDX: the put spread should close first, then the call spread open.
 
 ## 6. Point TradingView at it
 1. Public address: run `ngrok http 3000` and use the https address it prints (or your server's own domain).
-2. On the NDX chart, make an alert on the **confirmed** bullish signal. **Notifications > Webhook URL**: paste BullishNDX's URL. **Message**: `{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}`.
-3. Do the same for the bearish signal with BearishNDX's URL. Never wire the raw EMA-cross alerts.
+2. On the NDX chart, make an alert for the **confirmed** bullish signal. **Notifications > Webhook URL**: paste BullishNDX's URL. **Message**: `{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}`.
+3. Do the same for the bearish signal with BearishNDX's URL. Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.
 4. When an alert fires, watch the status page: the signal, its decisions, the order.
 
 ## If something is off
