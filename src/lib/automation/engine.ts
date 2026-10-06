@@ -8,6 +8,7 @@ import {
   ORDER_FILL_TIMEOUT_SECONDS,
   getFlipCooldownSeconds,
   isDryRun,
+  isTestMode,
 } from "./config";
 import { logDecision } from "./decisions";
 import { recordError } from "./errors";
@@ -24,7 +25,7 @@ import {
 import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
 import { computeStrikes, maxRisk, validateStrikes, type StrikePair } from "./strikes";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
-import { describeTradingTime, describeWindow, easternDateKey, isWithinTradingHours } from "./tradingHours";
+import { describeTradingTime, describeWindow, easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
 import type { BotStaticConfig, BrokerExecutor, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
 
 export interface ReceiveSignalInput {
@@ -188,6 +189,18 @@ async function closePosition(
  * invoked through withBotLock so two signals for the same bot never run at
  * once. Takes an already-persisted signal row (see receiveAndSaveSignal).
  */
+const fmtLevel = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+/** Why a signal's price can't be used, or null when it can. */
+function priceRangeProblem(price: number, config: BotStaticConfig): string | null {
+  if (!Number.isFinite(price) || price <= 0) return `Price ${price} is not a positive number.`;
+  const range = config.priceRange;
+  if (range && (price < range.min || price > range.max)) {
+    return `Price ${fmtLevel(price)} is outside the ${config.underlying} sanity range ${fmtLevel(range.min)} - ${fmtLevel(range.max)}; nothing done.`;
+  }
+  return null;
+}
+
 const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
 
 /** The settings a close order is sent with - a snapshot for the run log. */
@@ -270,10 +283,42 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   }
 
   // Step 2: hours guard.
-  const inHours = isWithinTradingHours(now);
-  rec.decision(`Current market time is between ${describeWindow()}`, inHours, describeTradingTime(now));
+  const hours = hoursConfigFor(staticConfig.hours);
+  const realInHours = isWithinTradingHours(now, hours);
+  // Only the admin page's Send test alert can skip the clock, and only when AUTOMATION_TEST_MODE=true.
+  // The flag is set server-side after the secret check; a webhook body can't carry it.
+  const hoursSkipped = !realInHours && (signal.raw as { test?: unknown } | null)?.test === true && isTestMode();
+  const inHours = realInHours || hoursSkipped;
+  rec.decision(
+    `Current market time is between ${describeWindow(hours)}`,
+    inHours,
+    hoursSkipped ? `Testing mode: clock check skipped. ${describeTradingTime(now, hours)}` : describeTradingTime(now, hours),
+  );
   if (!inHours) {
     log("outside_hours", "Outside the configured trading window.");
+    return;
+  }
+
+  // Data checks (after the switches and the clock, before anything is closed or opened): a signal from the wrong
+  // chart must never turn into strikes for this bot's underlying.
+  const symbol = (signal.raw as { symbol?: unknown } | null)?.symbol;
+  if (typeof symbol === "string" && symbol.trim()) {
+    const sent = symbol.trim().toUpperCase();
+    const matches = sent === staticConfig.underlying.toUpperCase();
+    rec.decision(`Signal symbol is ${staticConfig.underlying}`, matches, matches ? `Symbol ${sent}` : `The signal says ${sent}, this bot trades ${staticConfig.underlying}`);
+    if (!matches) {
+      log("symbol_mismatch", `Signal symbol "${sent}" doesn't match this bot's underlying ${staticConfig.underlying}; nothing done.`, { sent, expected: staticConfig.underlying });
+      return;
+    }
+  }
+  const priceProblem = priceRangeProblem(signal.price, staticConfig);
+  rec.decision(
+    staticConfig.priceRange ? `Price is between ${fmtLevel(staticConfig.priceRange.min)} and ${fmtLevel(staticConfig.priceRange.max)}` : "Price is a positive number",
+    priceProblem === null,
+    priceProblem ?? `Price ${fmtLevel(signal.price)}`,
+  );
+  if (priceProblem) {
+    log("price_out_of_range", priceProblem, { price: signal.price, range: staticConfig.priceRange ?? null });
     return;
   }
 
@@ -532,6 +577,9 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     brokerOrderRef: null,
     underlyingAtOpen: ctx.price,
     manual: ctx.manual,
+    venue: executor.venue ?? "mock",
+    optionRoot: staticConfig.optionRoot,
+    ...((signal?.raw as { test?: unknown } | null)?.test === true ? { test: true } : {}),
   };
   positionsStore.insert(position);
   created = position;
@@ -549,6 +597,8 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   try {
     ({ ref } = await executor.placeOpenOrder({
       botId,
+      underlying: staticConfig.underlying,
+      optionRoot: staticConfig.optionRoot,
       positionType: wanted,
       shortStrike: strikes.shortStrike,
       longStrike: strikes.longStrike,
@@ -636,8 +686,9 @@ export async function manualOpen(
 
   try {
     expireStalePositions(botId, now);
-    const inHours = isWithinTradingHours(now);
-    rec.decision(`Current market time is between ${describeWindow()}`, inHours, describeTradingTime(now));
+    const hours = hoursConfigFor(staticConfig.hours);
+    const inHours = isWithinTradingHours(now, hours);
+    rec.decision(`Current market time is between ${describeWindow(hours)}`, inHours, describeTradingTime(now, hours));
     if (!inHours) return log("outside_hours", "Outside the configured trading window.");
 
     const longStrike = input.type === "short_put_spread" ? input.shortStrike - staticConfig.widthPoints : input.shortStrike + staticConfig.widthPoints;

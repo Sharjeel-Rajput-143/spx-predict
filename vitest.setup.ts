@@ -5,3 +5,7 @@ import path from "node:path";
 // by default - the same files `npm run dev` uses. Point the test suite at a
 // throwaway directory instead so running tests never clobbers real app data.
 process.env.AUTOMATION_DATA_DIR = path.join(os.tmpdir(), `spx-predict-automation-test-${process.pid}`);
+
+// Orders on the mock executor fill instantly, so poll for the fill quickly
+// instead of waiting the production 2s between checks.
+process.env.AUTOMATION_ORDER_POLL_INTERVAL_MS = "10";

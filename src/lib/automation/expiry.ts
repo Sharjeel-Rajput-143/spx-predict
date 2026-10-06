@@ -18,10 +18,11 @@ export function expireStalePositions(botId: string, nowMs: number): number {
   return stale.length;
 }
 
-/** The actual 4:05pm ET sweep: every still-active position expires outright,
- * same day or not - the engine never sends an order to close on expiry. */
-export function expireAllActivePositions(nowMs: number): number {
-  const active = positionsStore.query((p) => ACTIVE_POSITION_STATUSES.includes(p.status));
+/** The end-of-day sweep: every still-active position expires outright, same
+ * day or not - the engine never sends an order to close on expiry. Given a
+ * bot id it touches only that bot's positions. */
+export function expireAllActivePositions(nowMs: number, botId?: string): number {
+  const active = positionsStore.query((p) => ACTIVE_POSITION_STATUSES.includes(p.status) && (botId === undefined || p.botId === botId));
   for (const p of active) positionsStore.update(p.id, { status: "expired", closedAt: nowMs });
   return active.length;
 }

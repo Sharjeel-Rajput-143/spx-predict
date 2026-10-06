@@ -274,7 +274,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           {bot.needsAttentionReason ? ` — ${bot.needsAttentionReason}` : ""}. Turning the bot back on clears this flag.
         </div>
       )}
-      {bot.configError && !bot.needsAttention && <div className="rounded-xl bg-down-soft px-4 py-3 text-sm text-down">{bot.configError}</div>}
+      {bot.configError && !bot.needsAttention && <SetupBanner error={bot.configError} missing={bot.missingSettings} />}
       {data.mockPricing && (
         <div className="rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-500">
           Simulated pricing is on: the mock executor is making up close prices, so every P/L figure here is fictional.
@@ -429,3 +429,27 @@ function BotSwitcher({ current }: { current: BotDetailData["bot"] }) {
   );
 }
 
+/** A bot that can't trade yet: a checklist of what's missing, not an alarm. */
+function SetupBanner({ error, missing }: { error: string; missing: { key: string; why: string }[] | null }) {
+  return (
+    <div className="rounded-xl bg-amber-500/10 px-4 py-3 text-sm text-amber-500">
+      <div className="font-semibold">Setup needed — this bot can&apos;t trade yet</div>
+      {missing && missing.length > 0 ? (
+        <>
+          <p className="mt-1 opacity-90">
+            Set {missing.length === 1 ? "this value" : `these ${missing.length} values`} in <span className="font-mono">.env.local</span> and restart. They have no defaults on purpose, so nothing is guessed.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {missing.map((m) => (
+              <li key={m.key}>
+                <span className="font-mono text-xs">{m.key.replace(/^BOT_[A-Z]+_EMA_BIAS_/, "")}</span> <span className="opacity-80">— {m.why}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-1 opacity-90">{error}</p>
+      )}
+    </div>
+  );
+}

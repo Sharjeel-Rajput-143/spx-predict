@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { signalsStore } from "@/lib/automation/store";
-import { TEST_BOT_ID, resetAutomationStores, setTestBotEnv } from "@/lib/automation/testSupport";
+import { NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
 import { POST } from "./route";
 
 process.env.WEBHOOK_SECRET = "test-secret";
 setTestBotEnv();
+setNdxTestEnv();
 
 function makeRequest(body: unknown) {
   return new NextRequest("http://localhost/api/webhook/tradingview", {
@@ -71,5 +72,20 @@ describe("POST /api/webhook/tradingview", () => {
     const signals = signalsStore.query((s) => s.botId === TEST_BOT_ID);
     expect(signals).toHaveLength(1);
     expect(signals[0]).toMatchObject({ status: "accepted", signal: "bullish", barTime: validBody.bar_time });
+  });
+
+  it("returns 400 for a bot that doesn't exist and logs it as unknown_bot", async () => {
+    const res = await POST(makeRequest({ ...validBody, bot: "xyz_bot" }));
+    expect(res.status).toBe(400);
+    expect(signalsStore.all()[0]).toMatchObject({ status: "rejected", rejectReason: "unknown_bot" });
+  });
+
+  it("routes the NDX alert (bot ndx_ema_bias, symbol NDX) to the NDX bot only", async () => {
+    // The body is the TradingView alert message from the NDX addendum, field for field.
+    const res = await POST(makeRequest({ secret: "test-secret", bot: NDX_BOT_ID, signal: "bearish", symbol: "NDX", price: 21003.7, bar_time: "2026-10-06T14:40:00Z", interval: "5" }));
+    expect(res.status).toBe(200);
+    expect(signalsStore.query((s) => s.botId === NDX_BOT_ID)).toHaveLength(1);
+    expect(signalsStore.query((s) => s.botId === TEST_BOT_ID)).toHaveLength(0);
+    expect(signalsStore.all()[0].raw).toMatchObject({ symbol: "NDX" });
   });
 });

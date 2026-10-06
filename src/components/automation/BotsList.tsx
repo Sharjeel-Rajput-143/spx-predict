@@ -183,6 +183,9 @@ export function BotsList() {
         title="Automation"
         actions={
           <>
+            <Link href="/automation/status" className={headerButtonClass}>
+              Testing
+            </Link>
             <Link href="/automations/rules" className={headerButtonClass}>
               Rules
             </Link>

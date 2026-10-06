@@ -2,3 +2,8 @@ node_modules
 .next
 next-env.d.ts
 data/
+
+# Local env files hold secrets and test values - never committed. Only the template is.
+.env
+.env.*
+!.env.example

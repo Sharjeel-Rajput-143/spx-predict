@@ -67,6 +67,7 @@ function scenarioPriceFor(position: Position, simulate: boolean): number | undef
 }
 
 export class MockExecutor implements BrokerExecutor {
+  readonly venue = "mock" as const;
   private orders = new Map<string, TrackedOrder>();
   private scenarioQueues = new Map<string, MockScenario[]>();
   private simulatePricing: boolean;

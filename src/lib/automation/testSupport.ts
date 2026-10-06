@@ -21,6 +21,20 @@ export function setTestBotEnv(): void {
   process.env.BOT_SPX_EMA_BIAS_ACCOUNT_ID = "test-account";
 }
 
+export const NDX_BOT_ID = "ndx_ema_bias";
+
+/** The NDX bot's required-with-no-default settings, set to concrete test
+ * values. These are test numbers only - the real ones come from Blue. */
+export function setNdxTestEnv(): void {
+  process.env.BOT_NDX_EMA_BIAS_STRIKE_INCREMENT = "5";
+  process.env.BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET = "-30";
+  process.env.BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET = "30";
+  process.env.BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE = "3.5";
+  process.env.BOT_NDX_EMA_BIAS_PRICE_MIN = "15000";
+  process.env.BOT_NDX_EMA_BIAS_PRICE_MAX = "30000";
+  process.env.BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME = "16:15";
+}
+
 export function resetAutomationStores(): void {
   __resetAllStores();
 }

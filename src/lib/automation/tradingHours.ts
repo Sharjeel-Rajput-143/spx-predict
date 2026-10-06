@@ -1,6 +1,6 @@
 import "server-only";
 import { nyseCalendarDay } from "@/lib/nyseCalendar";
-import { TRADING_HOURS } from "./config";
+import { TRADING_HOURS, parseClockMinutes } from "./config";
 
 export interface TradingHoursConfig {
   timezone: string;
@@ -22,6 +22,16 @@ const NYSE_CALENDAR: Pick<TradingHoursConfig, "isHoliday" | "earlyCloseMinutes">
   isHoliday: (ms) => nyseCalendarDay(ms).status === "closed",
   earlyCloseMinutes: (ms) => (nyseCalendarDay(ms).status === "early-close" ? EARLY_CLOSE_MINUTES : undefined),
 };
+
+/** The hours guard for one bot: its own window when it sets one, else the
+ * global window - both on the NYSE calendar. */
+export function hoursConfigFor(hours?: { start: string; end: string }): TradingHoursConfig {
+  return {
+    ...TRADING_HOURS,
+    ...(hours ? { startMinutes: parseClockMinutes(hours.start, "hours.start"), endMinutes: parseClockMinutes(hours.end, "hours.end") } : {}),
+    ...NYSE_CALENDAR,
+  };
+}
 
 function easternParts(ms: number, timezone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {

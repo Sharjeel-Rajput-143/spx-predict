@@ -37,8 +37,8 @@ export default async function AutomationStatusPage({
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold">Automation status</h1>
-        <p className="mt-1 text-sm text-muted">Signal automation engine - kill switch, positions, decisions and signals.</p>
+        <h1 className="text-lg font-semibold">Automation status &amp; testing</h1>
+        <p className="mt-1 text-sm text-muted">Send a test alert through the real webhook path and watch the positions, orders and decisions it produces. Bot on/off is the kill switch.</p>
       </div>
       <StatusDashboard />
     </div>

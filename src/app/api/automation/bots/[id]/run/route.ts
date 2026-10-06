@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isKnownBot } from "@/lib/automation/bots";
+import { getBotStaticConfig, isKnownBot } from "@/lib/automation/bots";
 import { withBotLock } from "@/lib/automation/botLock";
 import { processSignal, receiveAndSaveSignal } from "@/lib/automation/engine";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
@@ -21,8 +21,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const signal = body.signal;
     if (signal !== "bullish" && signal !== "bearish") return badRequest('signal must be "bullish" or "bearish".');
 
+    // The signal carries the bot's own underlying (NDX bot -> NDX), and only SPX has a live quote to default to.
+    let underlying = "SPX";
+    try {
+      underlying = getBotStaticConfig(id).underlying;
+    } catch {
+      /* no complete inputs yet: the engine logs config_error for it */
+    }
     const lastSignalPrice = signalsStore.query((s) => s.botId === id && s.status === "accepted").at(-1)?.price;
-    const price = typeof body.price === "number" && Number.isFinite(body.price) ? body.price : (getLastTick("SPX")?.price ?? lastSignalPrice);
+    const price = typeof body.price === "number" && Number.isFinite(body.price) ? body.price : ((underlying === "SPX" ? getLastTick("SPX")?.price : undefined) ?? lastSignalPrice);
     if (price === undefined || !Number.isFinite(price)) return badRequest("Enter a price - there's no live quote or earlier signal to default to.");
 
     const now = Date.now();
@@ -32,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       price,
       barTime: `manual-${new Date(now).toISOString()}`,
       interval: "manual",
-      raw: { source: "manual", symbol: "SPX" },
+      raw: { source: "manual", symbol: underlying },
       now,
     });
     await withBotLock(id, () => processSignal(saved, { executor: sharedExecutor }));

@@ -55,6 +55,7 @@ function fixture(over: Partial<BotDetailData> = {}): BotDetailData {
       id: "spx_ema_bias",
       name: "SPX EMA 9/20 Bias",
       builtIn: true,
+      missingSettings: null,
       enabled: true,
       archived: false,
       needsAttention: false,

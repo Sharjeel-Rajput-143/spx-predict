@@ -13,6 +13,7 @@ export interface BotDetailData {
     needsAttention: boolean;
     needsAttentionReason: string | null;
     configError: string | null;
+    missingSettings: { key: string; why: string }[] | null;
     /** Name/account/allocation of a bot still waiting for its trading inputs. */
     draft: Partial<BotStaticConfig> | null;
     accountId: string | null;

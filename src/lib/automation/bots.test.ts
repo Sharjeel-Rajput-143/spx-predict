@@ -35,7 +35,7 @@ describe("validateInputs", () => {
     ["a width that isn't a multiple of the increment", { widthPoints: 7 }],
     ["a credit at or above the width", { openingCreditEstimate: 10 }],
     ["a fractional quantity", { quantity: 1.5 }],
-    ["a non-SPX underlying", { underlying: "NDX" as "SPX" }],
+    ["an unsupported underlying", { underlying: "RUT" as "SPX" }],
   ])("rejects %s - no hidden defaults", (_label, over) => {
     expect(validateInputs({ ...inputs(), ...over } as Partial<BotInputs>)).not.toBeNull();
   });

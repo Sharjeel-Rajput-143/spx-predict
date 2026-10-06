@@ -1,5 +1,5 @@
 import "server-only";
-import { ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, listBotIds } from "./bots";
+import { botDisplayName, ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, listBotIds, missingSettingsOf } from "./bots";
 import { ERROR_FAILSAFE_THRESHOLD } from "./config";
 import { countTodayErrors } from "./errors";
 import { computeStats } from "./pnl";
@@ -17,6 +17,8 @@ export interface BotSummary {
   needsAttention: boolean;
   needsAttentionReason: string | null;
   configError: string | null;
+  /** For a built-in bot: each required setting that is still unset, and why it matters. */
+  missingSettings: { key: string; why: string }[] | null;
   group: string | null;
   tags: string[];
   accountId: string | null;
@@ -40,17 +42,19 @@ export interface BotSummary {
 export function summarizeBot(id: string, now = Date.now()): BotSummary {
   let config: BotStaticConfig | null = null;
   let configError: string | null = null;
+  let missingSettings: { key: string; why: string }[] | null = null;
   try {
     config = getBotStaticConfig(id);
   } catch (err) {
     configError = err instanceof Error ? err.message : String(err);
+    missingSettings = missingSettingsOf(err);
   }
   const record = ensureBotRecord(id);
   const limits = getBotLimits(id);
   const stats = computeStats(positionsStore.query((p) => p.botId === id));
   return {
     id,
-    name: config?.name ?? record.name ?? record.draftInputs?.name ?? id,
+    name: config?.name ?? record.name ?? record.draftInputs?.name ?? botDisplayName(id),
     mode: "paper",
     builtIn: isBuiltInBot(id),
     enabled: record.enabled,
@@ -58,6 +62,7 @@ export function summarizeBot(id: string, now = Date.now()): BotSummary {
     needsAttention: record.needsAttention,
     needsAttentionReason: record.needsAttentionReason,
     configError,
+    missingSettings,
     group: record.group ?? null,
     tags: record.tags ?? [],
     accountId: config?.accountId ?? record.draftInputs?.accountId ?? null,

@@ -1,188 +1,138 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { cn, formatTime } from "@/lib/format";
 import { Card, SectionTitle, Stat } from "@/components/ui";
+import { Pill } from "./bot/primitives";
 
-interface BotSummary {
+export interface StatusBot {
   id: string;
   name: string;
+  underlying: string | null;
   enabled: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
   configError: string | null;
+  missingSettings: { key: string; why: string }[] | null;
   errorCountToday: number;
   errorFailsafeThreshold: number;
   newPositionsToday: number;
   dailyNewPositionLimit: number;
   activePositionCount: number;
+  closedPositionCount: number;
   totalPositionLimit: number;
+  suggestedPrice: number | null;
 }
 
-interface PositionRow {
+export interface StatusPosition {
   id: string;
   botId: string;
-  type: string;
+  underlying: string;
+  type: "short_put_spread" | "short_call_spread";
   status: string;
   shortStrike: number;
   longStrike: number;
   requestedQuantity: number;
   filledQuantity: number;
   expiry: string;
+  credit: number | null;
+  closePrice?: number | null;
+  openedAt: number | null;
+  closedAt: number | null;
+  venue?: "mock" | "tradier";
+  test?: boolean;
 }
 
-interface DecisionRow {
+export interface StatusOrder {
   id: string;
-  botId: string;
-  outcome: string;
-  reason: string;
+  botId: string | null;
+  kind: "open" | "close";
+  status: string;
+  limitPrice: number;
+  filledQuantity: number;
+  rejectReason?: string;
   createdAt: number;
+  positionType: StatusPosition["type"] | null;
+  shortStrike: number | null;
+  longStrike: number | null;
+  underlying: string | null;
+  venue: "mock" | "tradier";
 }
 
-interface SignalRow {
+export interface StatusSignal {
   id: string;
   botId: string;
   signal: string;
+  price: number;
   status: string;
-  rejectReason?: string;
+  rejectReason: string | null;
   receivedAt: number;
+  test: boolean;
+  symbol: unknown;
+  decisions: { id: string; outcome: string; reason: string; createdAt: number }[];
 }
 
-interface StatusResponse {
-  bots: BotSummary[];
-  activePositions: PositionRow[];
-  decisions: DecisionRow[];
-  signals: SignalRow[];
+export interface StatusExecutor {
+  kind: "mock" | "tradier" | null;
+  venue: "mock" | "tradier" | null;
+  error: string | null;
+  baseUrl?: string;
+  sandbox?: boolean;
+  dryRun: boolean;
+  testMode: boolean;
 }
 
-const POLL_MS = 5000;
-
-export function StatusDashboard() {
-  const [data, setData] = useState<StatusResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    fetch("/api/automation/status")
-      .then((r) => {
-        if (!r.ok) throw new Error(r.status === 401 ? "Session expired - refresh the page to sign in again." : "Failed to load.");
-        return r.json();
-      })
-      .then((json: StatusResponse) => {
-        setData(json);
-        setError(null);
-      })
-      .catch((err) => setError(err.message));
-  }, []);
-
-  useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
-
-  const toggleBot = (botId: string) => {
-    setPending(botId);
-    fetch(`/api/automation/bots/${botId}/toggle`, { method: "POST" })
-      .then(load)
-      .finally(() => setPending(null));
-  };
-
-  if (error) return <Card className="p-4 text-sm text-down">{error}</Card>;
-  if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {data.bots.map((bot) => (
-          <Card key={bot.id} className="space-y-3 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-semibold">{bot.name}</div>
-                <div className="text-xs text-faint">{bot.id}</div>
-              </div>
-              <button
-                onClick={() => toggleBot(bot.id)}
-                disabled={pending === bot.id}
-                className={cn(
-                  "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                  bot.enabled ? "bg-up-soft text-up" : "bg-surface-2 text-muted",
-                )}
-              >
-                {bot.enabled ? "On" : "Off"} - click to {bot.enabled ? "disable" : "enable"}
-              </button>
-            </div>
-
-            {bot.configError && (
-              <div className="rounded-lg bg-down-soft px-3 py-2 text-xs text-down">{bot.configError}</div>
-            )}
-            {bot.needsAttention && (
-              <div className="rounded-lg bg-down-soft px-3 py-2 text-xs text-down">
-                Needs attention{bot.needsAttentionReason ? `: ${bot.needsAttentionReason}` : ""}
-              </div>
-            )}
-
-            <div className="grid grid-cols-3 gap-2">
-              <Stat label="Positions" value={`${bot.activePositionCount}/${bot.totalPositionLimit}`} />
-              <Stat label="New today" value={`${bot.newPositionsToday}/${bot.dailyNewPositionLimit}`} />
-              <Stat label="Errors today" value={`${bot.errorCountToday}/${bot.errorFailsafeThreshold}`} />
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      <Card className="p-4">
-        <SectionTitle>Active positions</SectionTitle>
-        {data.activePositions.length === 0 ? (
-          <p className="text-sm text-muted">None.</p>
-        ) : (
-          <Table
-            headers={["Bot", "Type", "Status", "Strikes", "Qty", "Expiry"]}
-            rows={data.activePositions.map((p) => [
-              p.botId,
-              p.type,
-              p.status,
-              `${p.shortStrike}/${p.longStrike}`,
-              `${p.filledQuantity}/${p.requestedQuantity}`,
-              p.expiry,
-            ])}
-          />
-        )}
-      </Card>
-
-      <Card className="p-4">
-        <SectionTitle>Last 50 decisions</SectionTitle>
-        {data.decisions.length === 0 ? (
-          <p className="text-sm text-muted">None yet.</p>
-        ) : (
-          <Table
-            headers={["Time", "Bot", "Outcome", "Reason"]}
-            rows={data.decisions.map((d) => [formatTime(d.createdAt), d.botId, d.outcome, d.reason])}
-          />
-        )}
-      </Card>
-
-      <Card className="p-4">
-        <SectionTitle>Last 50 signals received</SectionTitle>
-        {data.signals.length === 0 ? (
-          <p className="text-sm text-muted">None yet.</p>
-        ) : (
-          <Table
-            headers={["Time", "Bot", "Signal", "Status"]}
-            rows={data.signals.map((s) => [
-              formatTime(s.receivedAt),
-              s.botId,
-              s.signal,
-              s.status === "rejected" ? `rejected (${s.rejectReason})` : s.status,
-            ])}
-          />
-        )}
-      </Card>
-    </div>
-  );
+export interface StatusResponse {
+  now: number;
+  executor: StatusExecutor;
+  bots: StatusBot[];
+  positions: StatusPosition[];
+  orders: StatusOrder[];
+  signals: StatusSignal[];
 }
 
-function Table({ headers, rows }: { headers: string[]; rows: (string | number)[][] }) {
+const POLL_MS = 3000;
+const ACTIVE = ["opening", "open", "closing"];
+const fmtNum = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+const typeName = (t: string) => (t === "short_put_spread" ? "Short put spread" : t === "short_call_spread" ? "Short call spread" : t);
+
+/** "-20,975 put / +20,965 put" - the short leg sold, the long leg bought. */
+export function legsText(p: { type: string | null; shortStrike: number | null; longStrike: number | null }): string {
+  if (p.shortStrike == null || p.longStrike == null) return "—";
+  const right = p.type === "short_call_spread" ? "call" : "put";
+  return `-${fmtNum(p.shortStrike)} ${right} / +${fmtNum(p.longStrike)} ${right}`;
+}
+
+const isTest = (venue?: string, test?: boolean) => test === true || (venue ?? "mock") === "mock";
+
+/** Marks a trade that never reached a broker. */
+export function TestTag() {
+  return <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-amber-500">TEST</span>;
+}
+
+const OUTCOME_TONE: Record<string, "ok" | "warn" | "error" | "skip"> = {
+  opened: "ok",
+  closed: "ok",
+  dry_run: "skip",
+};
+const outcomeTone = (o: string) => OUTCOME_TONE[o] ?? (/rejected|error|invalid|mismatch|out_of_range|timeout|partial/.test(o) ? "error" : "warn");
+
+const STATUS_TONE: Record<string, "ok" | "warn" | "error" | "skip" | "info"> = {
+  open: "ok",
+  filled: "ok",
+  opening: "info",
+  closing: "info",
+  working: "info",
+  partially_filled: "warn",
+  closed: "skip",
+  expired: "skip",
+  canceled: "skip",
+  rejected: "error",
+  accepted: "ok",
+};
+
+function Table({ headers, rows, empty }: { headers: string[]; rows: ReactNode[][]; empty: string }) {
+  if (rows.length === 0) return <p className="text-sm text-muted">{empty}</p>;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
@@ -209,4 +159,334 @@ function Table({ headers, rows }: { headers: string[]; rows: (string | number)[]
       </table>
     </div>
   );
+}
+
+function ExecutorBanner({ executor }: { executor: StatusExecutor }) {
+  if (executor.error) {
+    return (
+      <div className="rounded-xl bg-down-soft px-4 py-3 text-sm text-down">
+        <span className="font-semibold">Executor not usable — signals are refused until this is fixed.</span> {executor.error}
+      </div>
+    );
+  }
+  const mock = executor.venue === "mock";
+  return (
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm", mock ? "bg-amber-500/10 text-amber-500" : "bg-accent/10 text-accent")}>
+      <span className="font-semibold">
+        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : executor.sandbox ? "Tradier SANDBOX (paper money)" : "Tradier PRODUCTION"}
+      </span>
+      {!mock && executor.baseUrl && <span className="font-mono text-xs">{executor.baseUrl}</span>}
+      {executor.dryRun && <Pill tone="warn">Dry run: decisions only, no orders</Pill>}
+      {executor.testMode ? <Pill tone="info">Testing mode: test alerts ignore trading hours</Pill> : <Pill tone="neutral">Test alerts follow trading hours</Pill>}
+    </div>
+  );
+}
+
+function BotCard({
+  bot,
+  executor,
+  busy,
+  result,
+  onToggle,
+  onSend,
+}: {
+  bot: StatusBot;
+  executor: StatusExecutor;
+  busy: boolean;
+  result: string | null;
+  onToggle: (id: string) => void;
+  onSend: (bot: StatusBot, signal: "bullish" | "bearish", price: number) => void;
+}) {
+  const [price, setPrice] = useState<string>(bot.suggestedPrice != null ? String(bot.suggestedPrice) : "");
+  const [touched, setTouched] = useState(false);
+  // Follow the suggestion (the last signal's price) until the person types their own.
+  useEffect(() => {
+    if (!touched && bot.suggestedPrice != null) setPrice(String(bot.suggestedPrice));
+  }, [bot.suggestedPrice, touched]);
+
+  const parsed = Number(price.replace(/,/g, ""));
+  const priceOk = price.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
+  const canTest = executor.venue === "mock" && !executor.error && !bot.configError;
+  const why = !canTest ? (executor.venue !== "mock" ? "Test alerts need the mock executor." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
+
+  return (
+    <Card className="space-y-3 p-4" >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="font-semibold">{bot.name}</div>
+          <div className="text-xs text-faint">
+            {bot.id}
+            {bot.underlying ? ` · ${bot.underlying}` : ""}
+          </div>
+        </div>
+        <button
+          onClick={() => onToggle(bot.id)}
+          disabled={busy}
+          aria-label={`Bot ${bot.enabled ? "on" : "off"}`}
+          className={cn("rounded-lg px-3 py-1.5 text-xs font-medium transition-colors", bot.enabled ? "bg-up-soft text-up" : "bg-surface-2 text-muted")}
+        >
+          {bot.enabled ? "On" : "Off"} — click to {bot.enabled ? "turn off" : "turn on"}
+        </button>
+      </div>
+
+      {bot.configError && (
+        <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+          <div className="font-semibold">Setup needed — this bot can&apos;t trade yet</div>
+          {bot.missingSettings && bot.missingSettings.length > 0 ? (
+            <ul className="mt-1 space-y-0.5">
+              {bot.missingSettings.map((m) => (
+                <li key={m.key}>
+                  <span className="font-mono">{m.key.replace(/^BOT_[A-Z]+_EMA_BIAS_/, "")}</span> <span className="opacity-80">— {m.why}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 opacity-90">{bot.configError}</p>
+          )}
+        </div>
+      )}
+      {bot.needsAttention && (
+        <div className="rounded-lg bg-down-soft px-3 py-2 text-xs text-down">Needs attention{bot.needsAttentionReason ? `: ${bot.needsAttentionReason}` : ""}</div>
+      )}
+
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Positions" value={`${bot.activePositionCount}/${bot.totalPositionLimit}`} />
+        <Stat label="New today" value={`${bot.newPositionsToday}/${bot.dailyNewPositionLimit}`} />
+        <Stat label="Errors today" value={`${bot.errorCountToday}/${bot.errorFailsafeThreshold}`} />
+      </div>
+
+      <div className="space-y-2 border-t border-line pt-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wide text-faint">Send test alert</span>
+          <TestTag />
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted">
+          {bot.underlying ?? "Index"} price in the alert
+          <input
+            inputMode="decimal"
+            value={price}
+            onChange={(e) => {
+              setTouched(true);
+              setPrice(e.target.value);
+            }}
+            aria-label={`Test price for ${bot.name}`}
+            className="w-28 rounded-lg border border-line bg-surface px-2 py-1 text-right text-sm text-fg outline-none focus:border-fg"
+          />
+        </label>
+        <div className="flex gap-2">
+          <button
+            disabled={busy || !canTest || !priceOk}
+            title={why}
+            onClick={() => onSend(bot, "bullish", parsed)}
+            className="flex-1 rounded-lg bg-up-soft px-3 py-2 text-sm font-medium text-up transition-colors hover:brightness-110 disabled:opacity-40"
+          >
+            Bullish → short put spread
+          </button>
+          <button
+            disabled={busy || !canTest || !priceOk}
+            title={why}
+            onClick={() => onSend(bot, "bearish", parsed)}
+            className="flex-1 rounded-lg bg-down-soft px-3 py-2 text-sm font-medium text-down transition-colors hover:brightness-110 disabled:opacity-40"
+          >
+            Bearish → short call spread
+          </button>
+        </div>
+        {why && <p className="text-xs text-faint">{why}</p>}
+        {result && <p className="text-xs text-muted">{result}</p>}
+      </div>
+    </Card>
+  );
+}
+
+/** The whole page, given data. Kept free of fetching so it can be rendered on its own. */
+export function StatusView({
+  data,
+  busyBot,
+  results,
+  onToggle,
+  onSend,
+  onReset,
+}: {
+  data: StatusResponse;
+  busyBot: string | null;
+  results: Record<string, string>;
+  onToggle: (id: string) => void;
+  onSend: (bot: StatusBot, signal: "bullish" | "bearish", price: number) => void;
+  onReset: () => void;
+}) {
+  const botName = (id: string | null) => data.bots.find((b) => b.id === id)?.name ?? id ?? "—";
+  const active = data.positions.filter((p) => ACTIVE.includes(p.status));
+  const closed = data.positions.filter((p) => !ACTIVE.includes(p.status));
+  const mock = data.executor.venue === "mock";
+
+  const positionRow = (p: StatusPosition): ReactNode[] => [
+    formatTime(p.openedAt ?? 0),
+    <span key="bot">
+      {botName(p.botId)} {isTest(p.venue, p.test) && <TestTag />}
+    </span>,
+    typeName(p.type),
+    <span key="legs" className="font-mono text-xs">
+      {legsText(p)}
+    </span>,
+    `${p.filledQuantity}/${p.requestedQuantity}`,
+    p.credit != null ? `$${p.credit.toFixed(2)}` : "—",
+    p.closePrice != null ? `$${p.closePrice.toFixed(2)}` : "—",
+    <Pill key="s" tone={STATUS_TONE[p.status] ?? "neutral"}>
+      {p.status}
+    </Pill>,
+    p.expiry,
+  ];
+  const posHeaders = ["Opened", "Bot", "Type", "Legs (short / long)", "Qty", "Credit", "Closed at", "Status", "Expiry"];
+
+  return (
+    <div className="space-y-4">
+      <ExecutorBanner executor={data.executor} />
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {data.bots.map((bot) => (
+          <BotCard key={bot.id} bot={bot} executor={data.executor} busy={busyBot === bot.id} result={results[bot.id] ?? null} onToggle={onToggle} onSend={onSend} />
+        ))}
+      </div>
+
+      <Card className="p-4">
+        <SectionTitle>Active positions</SectionTitle>
+        <Table headers={posHeaders} rows={active.map(positionRow)} empty="None open. Send a test alert above and one appears here." />
+      </Card>
+
+      <Card className="p-4">
+        <SectionTitle>Closed and expired positions</SectionTitle>
+        <Table headers={posHeaders} rows={closed.map(positionRow)} empty="None yet. A flip closes the opposite position — it lands here." />
+      </Card>
+
+      <Card className="p-4">
+        <SectionTitle>Orders</SectionTitle>
+        <Table
+          headers={["Time", "Bot", "Order", "Legs (short / long)", "Limit", "Filled", "State"]}
+          rows={data.orders.map((o) => [
+            formatTime(o.createdAt),
+            <span key="b">
+              {botName(o.botId)} {o.venue === "mock" && <TestTag />}
+            </span>,
+            o.kind === "open" ? "Open (sell the spread)" : "Close (buy it back)",
+            <span key="l" className="font-mono text-xs">
+              {legsText({ type: o.positionType, shortStrike: o.shortStrike, longStrike: o.longStrike })}
+            </span>,
+            o.kind === "open" ? `$${o.limitPrice.toFixed(2)} credit` : "no limit",
+            String(o.filledQuantity),
+            <span key="s" title={o.rejectReason}>
+              <Pill tone={STATUS_TONE[o.status] ?? "neutral"}>{o.status}</Pill>
+            </span>,
+          ])}
+          empty="None yet."
+        />
+      </Card>
+
+      <Card className="p-4">
+        <SectionTitle
+          action={
+            mock ? (
+              <button onClick={onReset} className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg">
+                Reset test data
+              </button>
+            ) : undefined
+          }
+        >
+          Alerts and the decision for each
+        </SectionTitle>
+        {data.signals.length === 0 ? (
+          <p className="text-sm text-muted">No alerts yet.</p>
+        ) : (
+          <ul className="space-y-3">
+            {data.signals.map((s) => (
+              <li key={s.id} className="rounded-xl border border-line px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="text-xs text-faint">{formatTime(s.receivedAt)}</span>
+                  <span className="font-medium">{botName(s.botId)}</span>
+                  <Pill tone={s.signal === "bullish" ? "ok" : s.signal === "bearish" ? "error" : "neutral"}>{s.signal || "unknown"}</Pill>
+                  <span className="text-muted">{s.price > 0 ? `@ ${fmtNum(s.price)}` : ""}</span>
+                  {s.test && <TestTag />}
+                  {s.status === "rejected" && <Pill tone="error">rejected: {s.rejectReason}</Pill>}
+                </div>
+                {s.decisions.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {s.decisions.map((d) => (
+                      <li key={d.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                        <Pill tone={outcomeTone(d.outcome)}>{d.outcome}</Pill>
+                        <span className="text-muted">{d.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+export function StatusDashboard() {
+  const [data, setData] = useState<StatusResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busyBot, setBusyBot] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, string>>({});
+
+  const load = useCallback(() => {
+    fetch("/api/automation/status")
+      .then((r) => {
+        if (!r.ok) throw new Error(r.status === 401 ? "Session expired - refresh the page to sign in again." : "Failed to load.");
+        return r.json();
+      })
+      .then((json: StatusResponse) => {
+        setData(json);
+        setError(null);
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const toggleBot = (botId: string) => {
+    setBusyBot(botId);
+    fetch(`/api/automation/bots/${botId}/toggle`, { method: "POST" })
+      .then(async (r) => {
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setResults((x) => ({ ...x, [botId]: j.error ?? "Couldn't switch it." }));
+        }
+      })
+      .then(load)
+      .finally(() => setBusyBot(null));
+  };
+
+  const sendAlert = (bot: StatusBot, signal: "bullish" | "bearish", price: number) => {
+    setBusyBot(bot.id);
+    setResults((x) => ({ ...x, [bot.id]: "Sending…" }));
+    fetch("/api/automation/test/alert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bot: bot.id, signal, price }) })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) return setResults((x) => ({ ...x, [bot.id]: `Not sent: ${j.error ?? r.status}` }));
+        const outcomes = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
+        setResults((x) => ({ ...x, [bot.id]: `${signal} test alert at ${price.toLocaleString("en-US")} → ${outcomes}${j.finished ? "" : " (still working…)"}` }));
+      })
+      .catch(() => setResults((x) => ({ ...x, [bot.id]: "Couldn't reach the server." })))
+      .then(load)
+      .finally(() => setBusyBot(null));
+  };
+
+  const reset = () => {
+    if (!window.confirm("Reset the test data? This clears every recorded alert, position, order and decision. Bots and their settings stay.")) return;
+    fetch("/api/automation/test/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }) })
+      .then(() => setResults({}))
+      .then(load);
+  };
+
+  if (error) return <Card className="p-4 text-sm text-down">{error}</Card>;
+  if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
+  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} />;
 }

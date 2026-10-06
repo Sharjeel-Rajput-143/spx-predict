@@ -117,30 +117,23 @@ describe("concurrency", () => {
 });
 
 describe("strike invariants through the engine", () => {
-  it("#8 sends nothing, logs invalid_strikes with the numbers, and sets needs_attention", async () => {
+  it("#8 refuses a width that is not a multiple of the increment: config_error, nothing sent, needs_attention", async () => {
     // Width 3 against an increment of 5 can never produce a long strike on the grid.
     vi.stubEnv("BOT_SPX_EMA_BIAS_WIDTH_POINTS", "3");
     await emit("bullish", { price: 7720 });
 
     expect(executor.placedOrders).toHaveLength(0);
     expect(positionsStore.all()).toHaveLength(0);
-    const decision = decisionsStore.query((d) => d.outcome === "invalid_strikes")[0];
-    expect(decision.detail).toMatchObject({ strikes: { shortStrike: 7700, longStrike: 7697 } });
+    const decision = decisionsStore.query((d) => d.outcome === "config_error")[0];
+    expect(decision.reason).toMatch(/width_not_multiple_of_increment/);
     expect(bot()?.needsAttention).toBe(true);
   });
 
-  it("#8 rejects equal strikes (width 0) without sending an order", async () => {
-    vi.stubEnv("BOT_SPX_EMA_BIAS_WIDTH_POINTS", "0");
+  it.each([["0", "equal strikes"], ["-5", "a reversed put spread"]])("#8 refuses width %s (%s) without sending an order", async (width) => {
+    vi.stubEnv("BOT_SPX_EMA_BIAS_WIDTH_POINTS", width);
     await emit("bearish");
     expect(executor.placedOrders).toHaveLength(0);
-    expect(outcomes()).toEqual(["invalid_strikes"]);
-  });
-
-  it("#8 rejects a reversed put spread (negative width)", async () => {
-    vi.stubEnv("BOT_SPX_EMA_BIAS_WIDTH_POINTS", "-5");
-    await emit("bullish");
-    expect(executor.placedOrders).toHaveLength(0);
-    expect(outcomes()).toEqual(["invalid_strikes"]);
+    expect(outcomes()).toEqual(["config_error"]);
   });
 
   it("opens with the long strike derived from the short strike, not the price", async () => {

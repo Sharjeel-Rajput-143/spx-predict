@@ -23,6 +23,8 @@ export type DecisionOutcome =
   | "daily_limit_reached"
   | "allocation_limit_reached"
   | "invalid_strikes"
+  | "symbol_mismatch"
+  | "price_out_of_range"
   | "overlapping_strikes"
   | "close_rejected"
   | "close_timeout"
@@ -58,6 +60,18 @@ export interface BotStaticConfig {
    * expected credit per spread, used both as the opening order's limit price
    * and as the pre-trade estimate for the allocation-limit check. */
   openingCreditEstimate: number;
+  /** The option series root ("NDXP" for NDX dailies). Informational until a
+   * real broker executor needs it to build option symbols. */
+  optionRoot?: string;
+  /** "HH:MM" America/New_York: when this bot's positions are swept to expired.
+   * Unset = 4:05pm ET. Index options can trade later than equities, so a
+   * bot on such a series sets its own. */
+  eodSweepTime?: string;
+  /** Sanity bounds for the signal's price. A price outside is refused, so a
+   * signal from the wrong chart can't produce strikes for this underlying. */
+  priceRange?: { min: number; max: number };
+  /** This bot's own signal window ("HH:MM" ET, inclusive). Unset = the global one. */
+  hours?: { start: string; end: string };
 }
 
 /** The inputs a bot trades with - everything in BotStaticConfig except its id. */
@@ -172,6 +186,12 @@ export interface Position {
   /** Labels and a free-form note a person added to this position. */
   tags?: string[];
   notes?: string;
+  /** Which executor placed it. "mock" = a test trade: nothing reached a broker. Unset on rows from before this existed (all mock). */
+  venue?: ExecutorVenue;
+  /** The option series root it trades ("NDXP", "SPXW"), kept so a broker executor can build option symbols for the close. */
+  optionRoot?: string;
+  /** Placed by the admin page's Send test alert (the real webhook path, flagged internally). */
+  test?: boolean;
 }
 
 export interface Order {
@@ -217,8 +237,14 @@ export interface OrderState {
   rejectReason?: string;
 }
 
+export type ExecutorVenue = "mock" | "tradier";
+
 export interface OpenSpreadRequest {
   botId: string;
+  /** "NDX" / "SPX" - the underlying symbol. Optional: the mock ignores it. */
+  underlying?: string;
+  /** Option series root ("NDXP"). A broker executor refuses to guess it when unset. */
+  optionRoot?: string;
   positionType: PositionType;
   shortStrike: number;
   longStrike: number;
@@ -229,6 +255,8 @@ export interface OpenSpreadRequest {
 }
 
 export interface BrokerExecutor {
+  /** What kind of executor this is; unset is treated as "mock". */
+  readonly venue?: ExecutorVenue;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
   placeCloseOrder(position: Position): Promise<{ ref: string }>;
   getOrder(ref: string): Promise<OrderState>;

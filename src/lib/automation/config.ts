@@ -47,14 +47,17 @@ export function getFlipCooldownSeconds(): number {
   return envNumber("FLIP_COOLDOWN_SECONDS", 0);
 }
 
-/** "HH:MM" -> minutes since midnight. */
-function envClockMinutes(name: string, fallback: string): number {
-  const raw = envString(name, fallback);
+/** "HH:MM" (24h) -> minutes since midnight. `label` names the setting in the error. */
+export function parseClockMinutes(raw: string, label: string): number {
   const match = /^(\d{1,2}):(\d{2})$/.exec(raw);
   if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) {
-    throw new Error(`${name} must be HH:MM (24h, America/New_York), got "${raw}".`);
+    throw new Error(`${label} must be HH:MM (24h, America/New_York), got "${raw}".`);
   }
   return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function envClockMinutes(name: string, fallback: string): number {
+  return parseClockMinutes(envString(name, fallback), name);
 }
 
 /** Weekdays only; the window is inclusive at both ends and read in
@@ -67,6 +70,8 @@ export const TRADING_HOURS = {
 
 export const EOD_SWEEP_HOUR_ET = 16;
 export const EOD_SWEEP_MINUTE_ET = 5;
+/** The sweep time a bot gets when it doesn't set its own (4:05pm ET). */
+export const DEFAULT_EOD_SWEEP_MINUTES = EOD_SWEEP_HOUR_ET * 60 + EOD_SWEEP_MINUTE_ET;
 
 export function getWebhookSecret(): string {
   return requiredEnvString("WEBHOOK_SECRET", "Set it in .env.local before any TradingView alert can reach the webhook.");
@@ -85,4 +90,11 @@ export function getStatusPagePassword(): string {
 
 export function isDryRun(): boolean {
   return envString("AUTOMATION_DRY_RUN", "false") === "true";
+}
+
+/** Testing mode lets the admin page's Send test alert run outside trading hours
+ * (the clock check is skipped and says so in the trace). Real webhook alerts
+ * are never affected. Off unless AUTOMATION_TEST_MODE=true. */
+export function isTestMode(): boolean {
+  return envString("AUTOMATION_TEST_MODE", "false") === "true";
 }

@@ -38,6 +38,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
     expect(run.nodes.map((n) => (n.kind === "decision" ? `? ${n.text}` : `> ${n.title}`))).toEqual([
       "? Bot is switched on",
       "? Current market time is between 9:35am - 3:55pm",
+      "? Price is a positive number",
       "? Signal isn't a duplicate",
       "? Bot has exactly or more than 1 position with Short Call Spread type and any status",
       "? No close order is already in flight for it",
@@ -116,13 +117,13 @@ describe("a run that stops early records exactly the steps it reached", () => {
   });
 
   it("invalid strikes: the strike check fails with the reason and the numbers, and no open card is made", async () => {
-    vi.stubEnv("BOT_SPX_EMA_BIAS_WIDTH_POINTS", "3");
-    const signal = await emit("bullish");
-    vi.unstubAllEnvs();
-    const strikes = decisions(signal.id).find((d) => d.text.startsWith("Strikes pass"))!;
+    // A strike typed by hand that is off the 5-point grid is the one way bad strikes still reach the check.
+    await manualOpen(TEST_BOT_ID, { type: "short_put_spread", shortStrike: 7702 }, { executor, now: BASE_NOW, ...fast });
+    const run = runsStore.query((r) => r.source === "ui")[0];
+    const strikes = run.nodes.find((n): n is TraceDecision => n.kind === "decision" && n.text.startsWith("Strikes pass"))!;
     expect(strikes.result).toBe(false);
-    expect(strikes.measured).toMatch(/short 7700, long 7697/);
-    expect(actions(signal.id)).toHaveLength(0);
+    expect(strikes.measured).toMatch(/short 7702, long 7697/);
+    expect(run.nodes.some((n) => n.kind === "action")).toBe(false);
   });
 
   it("a position limit shows the count that blocked it", async () => {

@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
-import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, requiredEnvNumber } from "./config";
+import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes, requiredEnvNumber } from "./config";
 import {
   botsStore,
   decisionsStore,
@@ -30,15 +30,106 @@ const CREDIT_TODO =
   "credit per spread (used for the allocation-limit check and the order's limit price). " +
   "See .env.example's TODO - the spec's $2.20 is an example, not a confirmed live value.";
 
-/** The built-in bot: its inputs come from env. Each factory re-reads env on
+/** Env vars the NDX bot cannot start without. Each is a real trading or safety
+ * parameter that must come from Blue or the broker's option chain - never a guess. */
+const NDX_REQUIRED: { key: string; why: string }[] = [
+  { key: "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", why: "confirm the real strike increment near the money from the NDX option chain" },
+  { key: "BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", why: "signed points from the signal price - ask Blue" },
+  { key: "BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", why: "signed points from the signal price - ask Blue" },
+  { key: "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", why: "expected credit per spread, must be below the 10 point width" },
+  { key: "BOT_NDX_EMA_BIAS_PRICE_MIN", why: "lowest NDX level a real signal can carry (sanity range)" },
+  { key: "BOT_NDX_EMA_BIAS_PRICE_MAX", why: "highest NDX level a real signal can carry (sanity range)" },
+  { key: "BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", why: "HH:MM ET after the confirmed final trading time of the NDX series" },
+];
+
+/** A built-in bot is missing required settings: carries the list so the UI can
+ * show it as a checklist rather than one long sentence. */
+export class MissingSettingsError extends Error {
+  constructor(readonly missing: { key: string; why: string }[], message: string) {
+    super(message);
+    this.name = "MissingSettingsError";
+  }
+}
+
+export const missingSettingsOf = (err: unknown): { key: string; why: string }[] | null =>
+  err instanceof MissingSettingsError ? err.missing : null;
+
+/** Names of the built-in bots, known even while their settings are incomplete. */
+const BUILT_IN_NAMES: Record<string, string> = {
+  spx_ema_bias: "SPX EMA 9/20 Bias",
+  ndx_ema_bias: "NDX EMA 9/20 Bias",
+};
+
+export const botDisplayName = (botId: string): string => botsStore.get(botId)?.name ?? BUILT_IN_NAMES[botId] ?? botId;
+
+/** NDX is a second bot row driven by config, not forked code. Names every
+ * missing required value at once so one look at the error is enough. */
+function ndxConfig(): BotStaticConfig {
+  const missing = NDX_REQUIRED.filter(({ key }) => !process.env[key]);
+  if (missing.length > 0) {
+    throw new MissingSettingsError(
+      missing,
+      `NDX bot cannot start - required setting${missing.length === 1 ? "" : "s"} not set: ` +
+        missing.map((m) => `${m.key} (${m.why})`).join("; ") +
+        ". These have no defaults on purpose - see .env.example.",
+    );
+  }
+  const need = (key: string) => requiredEnvNumber(key, "");
+  const hoursStart = process.env.BOT_NDX_EMA_BIAS_HOURS_START;
+  const hoursEnd = process.env.BOT_NDX_EMA_BIAS_HOURS_END;
+  return {
+    id: "ndx_ema_bias",
+    name: BUILT_IN_NAMES.ndx_ema_bias,
+    accountId: envString("BOT_NDX_EMA_BIAS_ACCOUNT_ID", "paper-ndx"),
+    underlying: "NDX",
+    // TODO(verify): NDXP is the root for daily NDX expirations - confirm it, and that a 0DTE exists every weekday.
+    optionRoot: envString("BOT_NDX_EMA_BIAS_OPTION_ROOT", "NDXP"),
+    quantity: envNumber("BOT_NDX_EMA_BIAS_QUANTITY", 1),
+    widthPoints: envNumber("BOT_NDX_EMA_BIAS_WIDTH_POINTS", 10),
+    strikeIncrement: need("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"),
+    putShortOffset: need("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET"),
+    callShortOffset: need("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET"),
+    allocationLimit: envNumber("BOT_NDX_EMA_BIAS_ALLOCATION_LIMIT", 2000),
+    openingCreditEstimate: need("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"),
+    eodSweepTime: process.env.BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME,
+    priceRange: { min: need("BOT_NDX_EMA_BIAS_PRICE_MIN"), max: need("BOT_NDX_EMA_BIAS_PRICE_MAX") },
+    ...(hoursStart && hoursEnd ? { hours: { start: hoursStart, end: hoursEnd } } : {}),
+  };
+}
+
+/** Startup checks that apply to every bot, whatever its source. The first
+ * problem is thrown with a stable token in front so the decision log can be
+ * searched for it. */
+export function checkBotConfig(c: BotStaticConfig): void {
+  if (c.strikeIncrement <= 0) throw new Error(`invalid_config: strike increment must be greater than 0 (got ${c.strikeIncrement}).`);
+  if (c.widthPoints % c.strikeIncrement !== 0) {
+    throw new Error(`width_not_multiple_of_increment: spread width ${c.widthPoints} is not a multiple of the strike increment ${c.strikeIncrement}, so the long strike could never land on a real strike.`);
+  }
+  if (c.openingCreditEstimate >= c.widthPoints) {
+    throw new Error(`invalid_config: the expected credit ${c.openingCreditEstimate} must be less than the spread width ${c.widthPoints}.`);
+  }
+  if (c.priceRange && !(c.priceRange.min > 0 && c.priceRange.min < c.priceRange.max)) {
+    throw new Error(`invalid_config: the price range must have 0 < min < max (got ${c.priceRange.min} to ${c.priceRange.max}).`);
+  }
+  if (c.eodSweepTime) parseClockMinutes(c.eodSweepTime, "End-of-day sweep time");
+  if (c.hours) {
+    if (parseClockMinutes(c.hours.start, "Trading hours start") >= parseClockMinutes(c.hours.end, "Trading hours end")) {
+      throw new Error("invalid_config: the trading hours must start before they end.");
+    }
+  }
+}
+
+/** The built-in bots: their inputs come from env. Each factory re-reads env on
  * every call so a required-but-missing var only throws when the bot is
  * actually used, not at module import time. */
 const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
   spx_ema_bias: () => ({
     id: "spx_ema_bias",
-    name: "SPX EMA 9/20 Bias",
+    name: BUILT_IN_NAMES.spx_ema_bias,
     accountId: envString("BOT_SPX_EMA_BIAS_ACCOUNT_ID", "paper-1"),
     underlying: "SPX",
+    // TODO(verify): SPXW is the root for SPX daily (0DTE) expirations - confirm against the real option chain.
+    optionRoot: envString("BOT_SPX_EMA_BIAS_OPTION_ROOT", "SPXW"),
     quantity: envNumber("BOT_SPX_EMA_BIAS_QUANTITY", 3),
     widthPoints: envNumber("BOT_SPX_EMA_BIAS_WIDTH_POINTS", 5),
     strikeIncrement: envNumber("BOT_SPX_EMA_BIAS_STRIKE_INCREMENT", 5),
@@ -47,6 +138,7 @@ const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
     allocationLimit: envNumber("BOT_SPX_EMA_BIAS_ALLOCATION_LIMIT", 20000),
     openingCreditEstimate: requiredEnvNumber("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", CREDIT_TODO),
   }),
+  ndx_ema_bias: ndxConfig,
 };
 
 export function isBuiltInBot(botId: string): boolean {
@@ -93,6 +185,7 @@ export function getBotStaticConfig(botId: string): BotStaticConfig {
   }
   if (record?.name) config = { ...config, name: record.name };
   if (record?.safeguards?.allocationLimit != null) config = { ...config, allocationLimit: record.safeguards.allocationLimit };
+  checkBotConfig(config);
   return config;
 }
 
@@ -125,7 +218,16 @@ export function __registerBotForTests(id: string, factory: () => BotStaticConfig
 export function ensureBotRecord(botId: string): Bot {
   const existing = botsStore.get(botId);
   if (existing) return existing;
-  const record: Bot = { id: botId, enabled: true, needsAttention: false, needsAttentionReason: null, createdAt: Date.now() };
+  // A bot that can't trade yet starts switched off, so it never shows "ON" while unable to run.
+  let ready = true;
+  if (isBuiltInBot(botId)) {
+    try {
+      getBotStaticConfig(botId);
+    } catch {
+      ready = false;
+    }
+  }
+  const record: Bot = { id: botId, enabled: ready, needsAttention: false, needsAttentionReason: null, createdAt: Date.now() };
   return botsStore.insert(record);
 }
 
@@ -140,7 +242,7 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 export function validateInputs(i: Partial<BotInputs>): string | null {
   if (typeof i.name !== "string" || !i.name.trim()) return "Name is required.";
   if (typeof i.accountId !== "string" || !i.accountId.trim()) return "Account is required.";
-  if (i.underlying !== "SPX") return "Only SPX is supported.";
+  if (i.underlying !== "SPX" && i.underlying !== "NDX") return "Only SPX and NDX are supported.";
   if (!isNum(i.quantity) || !Number.isInteger(i.quantity) || i.quantity < 1) return "Quantity must be a whole number of at least 1.";
   if (!isNum(i.strikeIncrement) || i.strikeIncrement <= 0) return "Strike increment must be greater than 0.";
   if (!isNum(i.widthPoints) || i.widthPoints <= 0) return "Spread width must be greater than 0.";
@@ -150,6 +252,11 @@ export function validateInputs(i: Partial<BotInputs>): string | null {
   if (!isNum(i.allocationLimit) || i.allocationLimit <= 0) return "Allocation must be greater than 0.";
   if (!isNum(i.openingCreditEstimate) || i.openingCreditEstimate <= 0) return "Expected credit must be greater than 0.";
   if (i.openingCreditEstimate >= i.widthPoints) return "Expected credit must be less than the spread width.";
+  try {
+    checkBotConfig({ id: "check", ...(i as BotInputs) });
+  } catch (err) {
+    return err instanceof Error ? err.message : "Invalid inputs.";
+  }
   return null;
 }
 
@@ -389,6 +496,6 @@ export function deleteBot(botId: string): void {
   decisionsStore.removeWhere((d) => d.botId === botId);
   signalsStore.removeWhere((s) => s.botId === botId);
   errorsStore.removeWhere((e) => e.botId === botId);
-  botsStore.remove(botId);
   runsStore.removeWhere((r) => r.botId === botId);
+  botsStore.remove(botId);
 }

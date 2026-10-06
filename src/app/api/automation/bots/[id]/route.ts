@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deleteBot, ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, isKnownBot, listBotIds, updateBot, type BotPatch } from "@/lib/automation/bots";
+import { botDisplayName, deleteBot, ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, isKnownBot, listBotIds, missingSettingsOf, updateBot, type BotPatch } from "@/lib/automation/bots";
 import {
   CLOSE_CONFIRM_TIMEOUT_SECONDS,
   DEDUPE_WINDOW_SECONDS,
@@ -35,10 +35,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   let config: BotStaticConfig | null = null;
   let configError: string | null = null;
+  let missingSettings: { key: string; why: string }[] | null = null;
   try {
     config = getBotStaticConfig(id);
   } catch (err) {
     configError = err instanceof Error ? err.message : String(err);
+    missingSettings = missingSettingsOf(err);
   }
 
   const positions = positionsStore.query((p) => p.botId === id).sort((a, b) => (b.openedAt ?? 0) - (a.openedAt ?? 0));
@@ -66,13 +68,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     now,
     bot: {
       id,
-      name: config?.name ?? record.name ?? id,
+      name: config?.name ?? record.name ?? botDisplayName(id),
       builtIn: isBuiltInBot(id),
       enabled: record.enabled,
       archived: !!record.archived,
       needsAttention: record.needsAttention,
       needsAttentionReason: record.needsAttentionReason,
       configError,
+      missingSettings,
       /** Present only while the bot is waiting for its trading inputs. */
       draft: record.config ? null : (record.draftInputs ?? null),
       accountId: config?.accountId ?? record.draftInputs?.accountId ?? null,

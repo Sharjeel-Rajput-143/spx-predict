@@ -48,3 +48,21 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 - **An empty bot can't trade until its inputs are set.** Name, account and allocation are all it needs to exist, but the strike offsets and expected credit have no defaults, so it shows *Setup needed* and refuses to switch on until they're entered.
 - **Day trading "Not allowed"** holds a same-day position to expiry instead of flipping it; manual closes still work.
 - **Sign-in** is skipped in development when `AUTOMATION_STATUS_PASSWORD` is unset, and a production build refuses all access without one.
+
+## NDX bot (ndx_ema_bias)
+
+- It is the same engine and webhook as SPX, configured by `BOT_NDX_EMA_BIAS_*` env values. Until the required ones are set (strike increment, both offsets, expected credit, price range, sweep time) it shows "Setup needed" and every signal for it logs `config_error` naming what is missing. They have no defaults on purpose; the real numbers come from Blue and the option chain.
+- Still to verify before live use (marked TODO in `.env.example`): the NDXP root and a 0DTE series every weekday, the real strike increment, the series' final trading time, and the broker. Mock executor only.
+- `symbol_mismatch` is checked only when the alert sends a `symbol`. A body with no symbol is protected by the price range alone, so keep the alert body from the addendum.
+- Bots are only ever created in the UI as SPX; NDX is the env-configured built-in. Extra NDX bots from the New Bot form are accepted by validation but the form has no NDX option yet.
+- The allocation check keeps its existing outcome name, `allocation_limit_reached` (the addendum calls it `allocation_exceeded`).
+- Broker research (Tradier) and the disabled executor are in `docs/tradier-executor-research.md`.
+
+## Testing mode and the Tradier executor
+
+- The admin page (Automation > Testing, `/automation/status`) is the demo surface: positions with legs and credit, orders and their states, the decisions under each alert, bot on/off, **Send test alert**, **Reset test data**. Every trade on the mock executor is labelled TEST.
+- Send test alert is mock-only. It builds the TradingView body on the server (the secret never reaches the browser) and calls the same ingest function as the webhook. It only differs by an internal `test` flag, which a webhook body cannot set.
+- A test alert runs outside trading hours only with `AUTOMATION_TEST_MODE=true`; the trace then says "Testing mode: clock check skipped". Real alerts always obey the clock.
+- The mock fills at the configured expected credit and reports no close price, so credit shows the configured number and P/L stays blank. Nothing here says anything about real fills.
+- Reset test data wipes every recorded alert, position, order, decision and run (bots and settings stay) and is refused unless the mock executor is selected.
+- `EXECUTOR=tradier` is implemented but disabled and unverified against any real account - see the TODO list in `docs/tradier-executor-research.md`. `symbol_mismatch` and `price_out_of_range` leave the signal row as "accepted" (the route answers 200); the decision log carries the outcome.

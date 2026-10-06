@@ -8,6 +8,7 @@ const noop = () => undefined;
 
 const bot = (over: Partial<BotSummary> & { id: string; name: string }): BotSummary => ({
   mode: "paper",
+  missingSettings: null,
   builtIn: false,
   enabled: false,
   archived: false,
