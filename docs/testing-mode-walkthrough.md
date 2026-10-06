@@ -11,7 +11,8 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
 ## What he sees on arrival
 
 - A yellow banner: **Mock executor - test trades only. Nothing reaches a broker.**
-- One card per bot (SPX and NDX) with an **On/Off** switch (the kill switch), position counters, and **Send test alert** with a price box and two buttons.
+- One card per bot (SPX and NDX) with an **On/Off** switch (the kill switch), the numbers he knows from Option Alpha - **Allocation, Capital at risk, Available, Positions today (of the daily limit), Active positions (of the position limit)** - a line saying how strikes are chosen, and **Send test alert** with a price box and two buttons.
+- An **Activity alerts** list (opened, closed, warning, error). Email is off.
 - Empty tables: Active positions, Closed and expired positions, Orders, and Alerts and the decision for each.
 
 ## The script
@@ -20,7 +21,8 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
    - Within a second the card says `bullish test alert at ... -> opened`.
    - **Active positions**: one *Short put spread*, legs like `-20,805 put / +20,795 put`, credit, status `open`, tagged TEST.
    - **Orders**: one *Open (sell the spread)* order, state `filled`.
-   - **Alerts**: the bullish alert with its decision `opened`.
+   - **Alerts**: the bullish alert with its decision `opened`, and under it the target price, rounding and strikes (`Target 21,003.69 (21,003.7 - 0.01), rounded down to 5 -> short 21,000, long 20,990`).
+   - **Activity alerts** gains an *Opened* line; the card's Capital at risk and Positions today move.
    - Say: "A TradingView alert arrived, the engine ran its checks, and opened a put spread. The long strike is always the short strike minus the width - never the price."
 2. **The flip.** Click **Bearish - short call spread** on the same card.
    - The card says `... -> closed -> opened`.

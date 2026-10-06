@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes, requiredEnvNumber } from "./config";
 import {
+  alertsStore,
   botsStore,
   decisionsStore,
   errorsStore,
@@ -21,9 +22,21 @@ import {
   type BotTemplate,
 } from "./types";
 
-const OFFSET_TODO =
-  "This is a required trading parameter with no safe default - see .env.example's TODO " +
-  "asking Sharjeel for the real value used by the live Option Alpha bot. Do not guess it.";
+/** Settings both built-in bots share, read from `<PREFIX>_...` env vars:
+ * strike rounding, the order price as a percent of bid/ask, and the bot's
+ * total-position limit (the live SPX bot holds up to 3; NDX stays at 1). */
+function pricingAndLimits(prefix: string, defaultTotalPositionLimit: number): Pick<BotStaticConfig, "strikeRounding" | "openPricePercent" | "closePricePercent" | "totalPositionLimit"> {
+  const rounding = envString(`${prefix}_STRIKE_ROUNDING`, "outward");
+  if (rounding !== "outward" && rounding !== "nearest") throw new Error(`${prefix}_STRIKE_ROUNDING must be "outward" or "nearest", got "${rounding}".`);
+  return {
+    // TODO(unconfirmed): verify "outward" against Option Alpha's real behavior.
+    strikeRounding: rounding,
+    // TODO(unconfirmed): what "100% of bid/ask" means exactly - confirm with the owner.
+    openPricePercent: envNumber(`${prefix}_OPEN_PRICE_PERCENT`, 100),
+    closePricePercent: envNumber(`${prefix}_CLOSE_PRICE_PERCENT`, 100),
+    totalPositionLimit: envNumber(`${prefix}_TOTAL_POSITION_LIMIT`, defaultTotalPositionLimit),
+  };
+}
 
 const CREDIT_TODO =
   "Phase 1 has no real option chain, so the engine needs a configured expected opening " +
@@ -34,8 +47,6 @@ const CREDIT_TODO =
  * parameter that must come from Blue or the broker's option chain - never a guess. */
 const NDX_REQUIRED: { key: string; why: string }[] = [
   { key: "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", why: "confirm the real strike increment near the money from the NDX option chain" },
-  { key: "BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", why: "signed points from the signal price - ask Blue" },
-  { key: "BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", why: "signed points from the signal price - ask Blue" },
   { key: "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", why: "expected credit per spread, must be below the 10 point width" },
   { key: "BOT_NDX_EMA_BIAS_PRICE_MIN", why: "lowest NDX level a real signal can carry (sanity range)" },
   { key: "BOT_NDX_EMA_BIAS_PRICE_MAX", why: "highest NDX level a real signal can carry (sanity range)" },
@@ -87,8 +98,11 @@ function ndxConfig(): BotStaticConfig {
     quantity: envNumber("BOT_NDX_EMA_BIAS_QUANTITY", 1),
     widthPoints: envNumber("BOT_NDX_EMA_BIAS_WIDTH_POINTS", 10),
     strikeIncrement: need("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"),
-    putShortOffset: need("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET"),
-    callShortOffset: need("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET"),
+    // Mirrors the live SPX bot (short strike 0.01 beyond the price, i.e. the first strike at or beyond it).
+    // TODO(owner to confirm for NDX): these defaults are the SPX bot's, not a value anyone chose for NDX.
+    putShortOffset: envNumber("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", -0.01),
+    callShortOffset: envNumber("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", 0.01),
+    ...pricingAndLimits("BOT_NDX_EMA_BIAS", 1),
     allocationLimit: envNumber("BOT_NDX_EMA_BIAS_ALLOCATION_LIMIT", 2000),
     openingCreditEstimate: need("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"),
     eodSweepTime: process.env.BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME,
@@ -110,6 +124,16 @@ export function checkBotConfig(c: BotStaticConfig): void {
   }
   if (c.priceRange && !(c.priceRange.min > 0 && c.priceRange.min < c.priceRange.max)) {
     throw new Error(`invalid_config: the price range must have 0 < min < max (got ${c.priceRange.min} to ${c.priceRange.max}).`);
+  }
+  if (![c.putShortOffset, c.callShortOffset].every(Number.isFinite)) throw new Error("invalid_config: the short strike offsets must be numbers (decimals are fine, e.g. -0.01).");
+  if (c.strikeRounding !== undefined && c.strikeRounding !== "outward" && c.strikeRounding !== "nearest") {
+    throw new Error(`invalid_config: strike rounding must be "outward" or "nearest", got "${String(c.strikeRounding)}".`);
+  }
+  for (const [label, v] of [["Open price", c.openPricePercent], ["Close price", c.closePricePercent]] as const) {
+    if (v !== undefined && !(Number.isFinite(v) && v > 0 && v <= 100)) throw new Error(`invalid_config: ${label.toLowerCase()} must be a percent of bid/ask above 0 and at most 100 (got ${String(v)}).`);
+  }
+  if (c.totalPositionLimit !== undefined && !(Number.isInteger(c.totalPositionLimit) && c.totalPositionLimit >= 1)) {
+    throw new Error(`invalid_config: the total position limit must be a whole number of at least 1 (got ${String(c.totalPositionLimit)}).`);
   }
   if (c.eodSweepTime) parseClockMinutes(c.eodSweepTime, "End-of-day sweep time");
   if (c.hours) {
@@ -133,8 +157,10 @@ const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
     quantity: envNumber("BOT_SPX_EMA_BIAS_QUANTITY", 3),
     widthPoints: envNumber("BOT_SPX_EMA_BIAS_WIDTH_POINTS", 5),
     strikeIncrement: envNumber("BOT_SPX_EMA_BIAS_STRIKE_INCREMENT", 5),
-    putShortOffset: requiredEnvNumber("BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", OFFSET_TODO),
-    callShortOffset: requiredEnvNumber("BOT_SPX_EMA_BIAS_CALL_SHORT_OFFSET", OFFSET_TODO),
+    // The live Option Alpha SPX bot: short strike 0.01 beyond the underlying price.
+    putShortOffset: envNumber("BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", -0.01),
+    callShortOffset: envNumber("BOT_SPX_EMA_BIAS_CALL_SHORT_OFFSET", 0.01),
+    ...pricingAndLimits("BOT_SPX_EMA_BIAS", 3),
     allocationLimit: envNumber("BOT_SPX_EMA_BIAS_ALLOCATION_LIMIT", 20000),
     openingCreditEstimate: requiredEnvNumber("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", CREDIT_TODO),
   }),
@@ -199,9 +225,16 @@ export interface BotLimits {
 /** Position limits, per bot, falling back to the global env defaults. */
 export function getBotLimits(botId: string): BotLimits {
   const sg = botsStore.get(botId)?.safeguards ?? {};
+  // The bot's own default (SPX 3, NDX 1) sits between a safeguard set on it and the global default.
+  let own: number | undefined;
+  try {
+    own = getBotStaticConfig(botId).totalPositionLimit;
+  } catch {
+    /* a bot still waiting for its inputs has no limit of its own */
+  }
   return {
     dailyNewPositionLimit: sg.dailyNewPositionLimit ?? DAILY_NEW_POSITION_LIMIT,
-    totalPositionLimit: sg.totalPositionLimit ?? TOTAL_POSITION_LIMIT,
+    totalPositionLimit: sg.totalPositionLimit ?? own ?? TOTAL_POSITION_LIMIT,
     maxPositionsPerType: sg.maxPositionsPerType ?? MAX_POSITIONS_PER_TYPE,
     dayTradingAllowed: sg.dayTrading ?? true,
   };
@@ -497,5 +530,6 @@ export function deleteBot(botId: string): void {
   signalsStore.removeWhere((s) => s.botId === botId);
   errorsStore.removeWhere((e) => e.botId === botId);
   runsStore.removeWhere((r) => r.botId === botId);
+  alertsStore.removeWhere((a) => a.botId === botId);
   botsStore.remove(botId);
 }

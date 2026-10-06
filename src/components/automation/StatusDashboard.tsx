@@ -22,6 +22,31 @@ export interface StatusBot {
   closedPositionCount: number;
   totalPositionLimit: number;
   suggestedPrice: number | null;
+  allocation: number | null;
+  atRisk: number;
+  available: number | null;
+  settings: {
+    quantity: number;
+    widthPoints: number;
+    strikeIncrement: number;
+    putShortOffset: number;
+    callShortOffset: number;
+    strikeRounding: "outward" | "nearest";
+    openPricePercent: number;
+    closePricePercent: number;
+    window: string;
+    alerts: { open: boolean; close: boolean; warning: boolean; error: boolean };
+  } | null;
+}
+
+export interface StatusAlert {
+  id: string;
+  botId: string;
+  kind: "open" | "close" | "warning" | "error";
+  outcome: string;
+  message: string;
+  createdAt: number;
+  email: "off" | "queued";
 }
 
 export interface StatusPosition {
@@ -69,7 +94,7 @@ export interface StatusSignal {
   receivedAt: number;
   test: boolean;
   symbol: unknown;
-  decisions: { id: string; outcome: string; reason: string; createdAt: number }[];
+  decisions: { id: string; outcome: string; reason: string; createdAt: number; strikePlan?: string | null }[];
 }
 
 export interface StatusExecutor {
@@ -89,6 +114,8 @@ export interface StatusResponse {
   positions: StatusPosition[];
   orders: StatusOrder[];
   signals: StatusSignal[];
+  alerts: StatusAlert[];
+  alertEmail: { enabled: boolean; to: string | null };
 }
 
 const POLL_MS = 3000;
@@ -102,6 +129,11 @@ export function legsText(p: { type: string | null; shortStrike: number | null; l
   const right = p.type === "short_call_spread" ? "call" : "put";
   return `-${fmtNum(p.shortStrike)} ${right} / +${fmtNum(p.longStrike)} ${right}`;
 }
+
+const usd = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+const signedPts = (n: number) => `${n > 0 ? "+" : n < 0 ? "-" : ""}${Math.abs(n).toLocaleString("en-US", { maximumFractionDigits: 4 })}`;
+const ALERT_LABEL: Record<StatusAlert["kind"], string> = { open: "Opened", close: "Closed", warning: "Warning", error: "Error" };
+const ALERT_TONE: Record<StatusAlert["kind"], "ok" | "info" | "warn" | "error"> = { open: "ok", close: "info", warning: "warn", error: "error" };
 
 const isTest = (venue?: string, test?: boolean) => test === true || (venue ?? "mock") === "mock";
 
@@ -249,11 +281,21 @@ function BotCard({
         <div className="rounded-lg bg-down-soft px-3 py-2 text-xs text-down">Needs attention{bot.needsAttentionReason ? `: ${bot.needsAttentionReason}` : ""}</div>
       )}
 
+      {/* The same numbers the owner reads in Option Alpha. */}
       <div className="grid grid-cols-3 gap-2">
-        <Stat label="Positions" value={`${bot.activePositionCount}/${bot.totalPositionLimit}`} />
-        <Stat label="New today" value={`${bot.newPositionsToday}/${bot.dailyNewPositionLimit}`} />
+        <Stat label="Allocation" value={bot.allocation != null ? usd(bot.allocation) : "—"} />
+        <Stat label="Capital at risk" value={usd(bot.atRisk)} />
+        <Stat label="Available" value={bot.available != null ? usd(bot.available) : "—"} />
+        <Stat label="Positions today" value={`${bot.newPositionsToday}/${bot.dailyNewPositionLimit}`} />
+        <Stat label="Active positions" value={`${bot.activePositionCount}/${bot.totalPositionLimit}`} />
         <Stat label="Errors today" value={`${bot.errorCountToday}/${bot.errorFailsafeThreshold}`} />
       </div>
+      {bot.settings && (
+        <p className="text-xs text-muted">
+          {bot.settings.quantity} × {bot.settings.widthPoints}-pt spreads, window {bot.settings.window}. Short put {signedPts(bot.settings.putShortOffset)} / short call {signedPts(bot.settings.callShortOffset)} from the price, rounded{" "}
+          {bot.settings.strikeRounding === "outward" ? "out of the money (put down, call up)" : "to the nearest"} to {bot.settings.strikeIncrement}. Orders at {bot.settings.openPricePercent}% (open) / {bot.settings.closePricePercent}% (close) of bid/ask.
+        </p>
+      )}
 
       <div className="space-y-2 border-t border-line pt-3">
         <div className="flex items-center justify-between">
@@ -349,6 +391,31 @@ export function StatusView({
       </div>
 
       <Card className="p-4">
+        <SectionTitle
+          action={
+            <span className="text-xs text-faint">
+              {data.alertEmail.enabled ? `Email on → ${data.alertEmail.to} (queued only - no mail sender is wired yet)` : "Email off"}
+            </span>
+          }
+        >
+          Activity alerts
+        </SectionTitle>
+        {data.alerts.length === 0 ? (
+          <p className="text-sm text-muted">Nothing yet. Opened and closed positions, warnings and errors show up here.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {data.alerts.slice(0, 12).map((a) => (
+              <li key={a.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                <span className="text-xs text-faint">{formatTime(a.createdAt)}</span>
+                <Pill tone={ALERT_TONE[a.kind]}>{ALERT_LABEL[a.kind]}</Pill>
+                <span className="text-muted">{a.message}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
+      <Card className="p-4">
         <SectionTitle>Active positions</SectionTitle>
         <Table headers={posHeaders} rows={active.map(positionRow)} empty="None open. Send a test alert above and one appears here." />
       </Card>
@@ -410,9 +477,12 @@ export function StatusView({
                 {s.decisions.length > 0 && (
                   <ul className="mt-2 space-y-1">
                     {s.decisions.map((d) => (
-                      <li key={d.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                        <Pill tone={outcomeTone(d.outcome)}>{d.outcome}</Pill>
-                        <span className="text-muted">{d.reason}</span>
+                      <li key={d.id} className="text-sm">
+                        <div className="flex flex-wrap items-baseline gap-x-2">
+                          <Pill tone={outcomeTone(d.outcome)}>{d.outcome}</Pill>
+                          <span className="text-muted">{d.reason}</span>
+                        </div>
+                        {d.strikePlan && <div className="mt-0.5 pl-1 font-mono text-[11px] text-faint">{d.strikePlan}</div>}
                       </li>
                     ))}
                   </ul>

@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { APP_NAME } from "@/lib/config";
 import { cn } from "@/lib/format";
 import { useGame } from "./GameProvider";
+import { TEXT_SIZES, TEXT_SIZE_KEY, type TextSize } from "./automation/settings/sections";
 import { IconAutomation, IconCalendar, IconHistory, IconLogout, IconMoon, IconPanelLeft, IconPositions, IconPredict, IconSettings, IconSun, IconUser } from "./icons";
 
 /** Automation leads; the rest follow. Predict and Leaderboard are hidden for
@@ -56,6 +57,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+      // The text size chosen under Settings > General.
+      const size = localStorage.getItem(TEXT_SIZE_KEY) as TextSize | null;
+      if (size && size in TEXT_SIZES) document.documentElement.style.fontSize = `${TEXT_SIZES[size]}px`;
     } catch {
       /* storage unavailable: stay expanded */
     }

@@ -10,12 +10,15 @@ import { outcomeInfo } from "./model";
  * TradingView had sent it - same lock, same guards, same decision log. */
 export function RunModal({
   botId,
+  underlying = "SPX",
   initialSignal,
   lastPrice,
   onClose,
   onDone,
 }: {
   botId: string;
+  /** The bot's own underlying: labels the price and picks the live quote to default to. */
+  underlying?: string;
   initialSignal?: "bullish" | "bearish";
   lastPrice?: number | null;
   onClose: () => void;
@@ -27,14 +30,14 @@ export function RunModal({
   const [error, setError] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<Decision[] | null>(null);
 
-  // Default the price to the live SPX quote when there is one.
+  // Default the price to the live quote of the bot's underlying when there is one.
   useEffect(() => {
     if (price) return;
-    fetch("/api/quote?symbol=SPX")
+    fetch(`/api/quote?symbol=${encodeURIComponent(underlying)}`)
       .then((r) => r.json())
       .then((q) => q?.tick?.price && setPrice(String(q.tick.price)))
       .catch(() => undefined);
-  }, [price]);
+  }, [price, underlying]);
 
   const run = async () => {
     setBusy(true);
@@ -110,7 +113,7 @@ export function RunModal({
               </button>
             ))}
           </div>
-          <Field label="SPX price" hint="Defaults to the live quote when available. Strikes are built from this.">
+          <Field label={`${underlying} price`} hint="Defaults to the live quote when available. Strikes are built from this.">
             <input className={inputClass} inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="e.g. 7720.5" />
           </Field>
           {error && <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">{error}</p>}

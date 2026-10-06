@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { recordActivityAlert } from "./alerts";
 import { decisionsStore } from "./store";
 import type { DecisionOutcome } from "./types";
 
@@ -12,7 +13,7 @@ export function logDecision(params: {
   now?: number;
 }): void {
   const now = params.now ?? Date.now();
-  decisionsStore.insert({
+  const decision = decisionsStore.insert({
     id: `dec-${now}-${crypto.randomUUID()}`,
     signalId: params.signalId,
     botId: params.botId,
@@ -21,4 +22,5 @@ export function logDecision(params: {
     detail: params.detail ?? {},
     createdAt: now,
   });
+  recordActivityAlert(decision);
 }

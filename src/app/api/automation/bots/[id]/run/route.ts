@@ -29,7 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       /* no complete inputs yet: the engine logs config_error for it */
     }
     const lastSignalPrice = signalsStore.query((s) => s.botId === id && s.status === "accepted").at(-1)?.price;
-    const price = typeof body.price === "number" && Number.isFinite(body.price) ? body.price : ((underlying === "SPX" ? getLastTick("SPX")?.price : undefined) ?? lastSignalPrice);
+    const price = typeof body.price === "number" && Number.isFinite(body.price) ? body.price : (getLastTick(underlying)?.price ?? lastSignalPrice);
     if (price === undefined || !Number.isFinite(price)) return badRequest("Enter a price - there's no live quote or earlier signal to default to.");
 
     const now = Date.now();

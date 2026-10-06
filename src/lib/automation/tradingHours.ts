@@ -1,5 +1,6 @@
 import "server-only";
 import { nyseCalendarDay } from "@/lib/nyseCalendar";
+import { getGlobalWindow } from "./appSettings";
 import { TRADING_HOURS, parseClockMinutes } from "./config";
 
 export interface TradingHoursConfig {
@@ -26,8 +27,11 @@ const NYSE_CALENDAR: Pick<TradingHoursConfig, "isHoliday" | "earlyCloseMinutes">
 /** The hours guard for one bot: its own window when it sets one, else the
  * global window - both on the NYSE calendar. */
 export function hoursConfigFor(hours?: { start: string; end: string }): TradingHoursConfig {
+  const { startMinutes, endMinutes } = getGlobalWindow();
   return {
     ...TRADING_HOURS,
+    startMinutes,
+    endMinutes,
     ...(hours ? { startMinutes: parseClockMinutes(hours.start, "hours.start"), endMinutes: parseClockMinutes(hours.end, "hours.end") } : {}),
     ...NYSE_CALENDAR,
   };
@@ -45,7 +49,7 @@ function easternParts(ms: number, timezone: string) {
   return { weekday: get("weekday"), hour: Number(get("hour")) % 24, minute: Number(get("minute")) };
 }
 
-export function isWithinTradingHours(ms: number, config: TradingHoursConfig = { ...TRADING_HOURS, ...NYSE_CALENDAR }): boolean {
+export function isWithinTradingHours(ms: number, config: TradingHoursConfig = hoursConfigFor()): boolean {
   if (config.isHoliday?.(ms)) return false;
   const { weekday, hour, minute } = easternParts(ms, config.timezone);
   if (weekday === "Sat" || weekday === "Sun") return false;
@@ -76,13 +80,13 @@ const clock12 = (minutes: number) => {
 };
 
 /** "9:35am - 3:55pm" */
-export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" | "endMinutes"> = TRADING_HOURS): string {
+export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" | "endMinutes"> = getGlobalWindow()): string {
   return `${clock12(config.startMinutes)} - ${clock12(config.endMinutes)}`;
 }
 
 /** The time of day the engine saw, and - when it's outside the window - why:
  * "Current time is 9:40am" / "Saturday 3:10pm - the market is closed on weekends". */
-export function describeTradingTime(ms: number, config: TradingHoursConfig = { ...TRADING_HOURS, ...NYSE_CALENDAR }): string {
+export function describeTradingTime(ms: number, config: TradingHoursConfig = hoursConfigFor()): string {
   const { weekday, hour, minute } = easternParts(ms, config.timezone);
   const minutes = hour * 60 + minute;
   const now = clock12(minutes);

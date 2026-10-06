@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BotStaticConfig } from "@/lib/automation/types";
-import { builtInFlow } from "./builtin";
+import { builtInFlow, clock12 } from "./builtin";
 import { ENTRY_CRITERIA, POSITION_CRITERIA, critKey, enabledCriteria } from "./criteria";
 import { checkFlow, describeStep, previewTrace, walk } from "./model";
 
@@ -40,13 +40,34 @@ describe("built-in flow", () => {
       if (s.kind === "open_position") opens.push(JSON.stringify(s.config));
     });
     const cfgOpen = JSON.parse(opens[0]);
-    expect(cfgOpen).toMatchObject({ type: "short_put_spread", short_off: "20.00", short_dir: "below", long_off: "5.00", long_dir: "below", size: "3", price: "Limit credit $2.20" });
+    expect(cfgOpen).toMatchObject({ type: "short_put_spread", short_off: "20.00", short_dir: "below", long_off: "5.00", long_dir: "below", size: "3", price: "Limit credit $2.20 (100% of bid/ask)" });
     expect(check(cfg).opportunities[0].summary).toBe("SPX, exactly 0d, $20.00 below underlying price, $5.00 below short put leg");
   });
 
   it("every step has a description, and each open is guarded by the market-time check", () => {
     walk(builtInFlow("bullish", cfg), (s) => expect(describeStep(s).length).toBeGreaterThan(3));
     expect(check(cfg).warnings.join(" ")).not.toMatch(/outside trading hours/);
+  });
+
+  it("draws the bot's own trading window on the time check, not a made-up one", () => {
+    const lines = previewTrace(builtInFlow("bullish", cfg, { start: "10:00", end: "15:30" })).map((l) => l.text);
+    expect(lines[0]).toBe("Decision: Current market time is between 10:00am and 3:30pm");
+    expect(previewTrace(builtInFlow("bullish", cfg, { start: "09:35", end: "12:05" })).map((l) => l.text)[0]).toBe("Decision: Current market time is between 9:35am and 12:05pm");
+  });
+
+  it("shows the order price as a percent of bid/ask on the open and close steps", () => {
+    const prices: string[] = [];
+    walk(builtInFlow("bullish", { ...cfg, openPricePercent: 90, closePricePercent: 80 }), (s) => {
+      if (s.kind === "open_position" || s.kind === "close_position") prices.push(s.config.price);
+    });
+    expect(prices).toContain("Limit credit $2.20 (90% of bid/ask)");
+    expect(prices).toContain("80% of bid/ask, waits for the fill");
+  });
+
+  it("names the bot's own underlying on the close step, not SPX", () => {
+    const lines = previewTrace(builtInFlow("bullish", { ...cfg, underlying: "NDX" })).map((l) => l.text);
+    expect(lines).toContain("Close Position: Close Position (NDX, Short Call Spread)");
+    expect(lines).toContain("Open Position: Open NDX Short Put Spread");
   });
 
   it("copes with a bot whose inputs aren't set", () => {
@@ -67,5 +88,14 @@ describe("criteria", () => {
   it("starts with every filter off, and counts the ones switched on", () => {
     expect(enabledCriteria({}, ENTRY_CRITERIA)).toEqual([]);
     expect(enabledCriteria({ [critKey("capital")]: "1", [critKey("vix")]: "0" }, ENTRY_CRITERIA).map((c) => c.id)).toEqual(["capital"]);
+  });
+});
+
+describe("clock12", () => {
+  it("writes 24h times the way the condition does", () => {
+    expect(clock12("09:35")).toBe("9:35am");
+    expect(clock12("12:00")).toBe("12:00pm");
+    expect(clock12("15:55")).toBe("3:55pm");
+    expect(clock12("00:05")).toBe("12:05am");
   });
 });

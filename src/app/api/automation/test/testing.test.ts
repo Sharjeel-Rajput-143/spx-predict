@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
-import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
+import { alertsStore, botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
 import { NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
 import { GET as status } from "../status/route";
 import { POST as alert } from "./alert/route";
@@ -60,7 +60,7 @@ describe("Send test alert goes through the real webhook path", () => {
     expect((await res.json()).decisions.map((d: { outcome: string }) => d.outcome)).toEqual(["closed", "opened"]);
 
     const byType = Object.fromEntries(positionsStore.all().map((p) => [p.type, p]));
-    expect(byType.short_put_spread).toMatchObject({ status: "closed", shortStrike: 20_975, longStrike: 20_965 });
+    expect(byType.short_put_spread).toMatchObject({ status: "closed", shortStrike: 20_970, longStrike: 20_960 });
     expect(byType.short_call_spread).toMatchObject({ status: "open", shortStrike: 21_035, longStrike: 21_045 });
     expect(ordersStore.all().map((o) => `${o.kind}:${o.status}`)).toEqual(["open:filled", "close:filled", "open:filled"]);
   });
@@ -117,10 +117,10 @@ describe("Send test alert goes through the real webhook path", () => {
     expect((await alert(post("alert", { bot: NDX_BOT_ID, signal: "bullish" }))).status).toBe(400);
     expect((await alert(post("alert", { bot: NDX_BOT_ID, signal: "bullish", price: -1 }))).status).toBe(400);
 
-    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
     const res = await send(NDX_BOT_ID, "bullish", 21_003.7);
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toMatch(/PUT_SHORT_OFFSET/);
+    expect((await res.json()).error).toMatch(/STRIKE_INCREMENT/);
     expect(signalsStore.all()).toHaveLength(0);
   });
 
@@ -160,6 +160,33 @@ describe("status page data", () => {
     expect(ndx).toMatchObject({ underlying: "NDX", enabled: true, activePositionCount: 1, closedPositionCount: 1, suggestedPrice: 21_003.7 });
   });
 
+  it("shows the numbers the owner reads in Option Alpha: allocation, capital at risk, available, positions today, active positions", async () => {
+    vi.stubEnv("AUTOMATION_TEST_MODE", "true");
+    await send(NDX_BOT_ID, "bullish", 21_003.7);
+    await send(TEST_BOT_ID, "bullish", 7720);
+    const data = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
+    const ndx = data.bots.find((b: { id: string }) => b.id === NDX_BOT_ID);
+    // One 10-wide, 1-lot spread at a $3.50 credit: 10 x 100 x 1 - 350 = $650 at risk, of a $2,000 allocation.
+    expect(ndx).toMatchObject({ allocation: 2000, atRisk: 650, available: 1350, newPositionsToday: 1, dailyNewPositionLimit: 10, activePositionCount: 1, totalPositionLimit: 1 });
+    expect(ndx.settings).toMatchObject({ quantity: 1, widthPoints: 10, strikeIncrement: 5, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100, window: "9:35am - 3:55pm", alerts: { open: true, close: true, warning: true, error: true } });
+    // 3 x 5-wide at $2.20: 3 x (500 - 220) = $840 of a $20,000 allocation.
+    const spx = data.bots.find((b: { id: string }) => b.id === TEST_BOT_ID);
+    expect(spx).toMatchObject({ allocation: 20_000, atRisk: 840, available: 19_160, newPositionsToday: 1, dailyNewPositionLimit: 10, activePositionCount: 1, totalPositionLimit: 1 });
+  });
+
+  it("lists the activity alerts, and each decision's strike plan", async () => {
+    vi.stubEnv("AUTOMATION_TEST_MODE", "true");
+    await send(NDX_BOT_ID, "bullish", 21_003.7);
+    await send(NDX_BOT_ID, "bullish", 7720); // out of range: a warning
+    const data = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
+    expect(data.alerts.map((a: { kind: string }) => a.kind)).toEqual(["warning", "open"]); // newest first
+    expect(data.alertEmail).toEqual({ enabled: false, to: null });
+    const [latest, earlier] = data.signals;
+    expect(earlier.decisions[0].strikePlan).toBe("Target 20,973.7 (21,003.7 - 30), rounded down to 5 -> short 20,970, long 20,960");
+    expect(latest.decisions[0].outcome).toBe("price_out_of_range");
+    expect(latest.decisions[0].strikePlan).toMatch(/^Target 7,690/);
+  });
+
   it("suggests the middle of the price range for a bot that has had no alert, and lists missing settings for one that can't run", async () => {
     const data = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
     expect(data.bots.find((b: { id: string }) => b.id === NDX_BOT_ID).suggestedPrice).toBe(22_500); // (15,000 + 30,000) / 2, on the increment
@@ -188,7 +215,7 @@ describe("Reset test data", () => {
     const res = await reset(post("reset", { confirm: true }));
     expect(res.status).toBe(200);
     expect((await res.json()).cleared).toMatchObject({ signals: 1, positions: 1, orders: 1, decisions: 1, runs: 1 });
-    expect([signalsStore.all(), positionsStore.all(), ordersStore.all(), decisionsStore.all(), runsStore.all()].map((r) => r.length)).toEqual([0, 0, 0, 0, 0]);
+    expect([signalsStore.all(), positionsStore.all(), ordersStore.all(), decisionsStore.all(), runsStore.all(), alertsStore.all()].map((r) => r.length)).toEqual([0, 0, 0, 0, 0, 0]);
     // The bot is still there, still off (the kill switch is the person's call), and no longer flagged.
     expect(botsStore.get(NDX_BOT_ID)).toMatchObject({ enabled: false, needsAttention: false, needsAttentionReason: null });
   });

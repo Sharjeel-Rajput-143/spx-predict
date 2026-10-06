@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { InputFields, toInputs, type BotFormValues } from "@/components/automation/BotForm";
+import { InputFields, pricingFields, toInputs, type BotFormValues } from "@/components/automation/BotForm";
 import { IconChevronRight, IconEdit, IconGear, IconLink, IconMore, IconPlus } from "@/components/icons";
 import { Card } from "@/components/ui";
 import { AddAutomationDrawer } from "../builder/AddAutomationDrawer";
 import { AutomationBuilder } from "../builder/AutomationBuilder";
 import { builtInFlow } from "../builder/builtin";
+import { liveNodeEditor } from "../builder/LiveNodeEditors";
 import type { AutomationDraft } from "../builder/model";
 import { DEFAULT_FOLDER, blankDraft, detach, loadAttached, loadLibrary, loadSymbolSettings, setAttachmentEnabled, type Attachment, type SymbolSettings } from "../builder/store";
 import { SymbolsPanel } from "./SymbolsPanel";
@@ -83,7 +84,7 @@ export function SettingsTab({ ctx }: { ctx: BotContext }) {
       <div className="space-y-4">
         <SafeguardsCard ctx={ctx} />
         <TimingCard data={data} />
-        <SymbolsCard botId={data.bot.id} />
+        <SymbolsCard botId={data.bot.id} underlying={data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX"} />
         <AlertsCard ctx={ctx} />
       </div>
     </div>
@@ -97,6 +98,8 @@ export function SettingsTab({ ctx }: { ctx: BotContext }) {
 interface BuilderState {
   draft: AutomationDraft;
   readOnly?: boolean;
+  /** A built-in flow: its steps are redrawn from the bot's real settings each time they change. */
+  builtIn?: "bullish" | "bearish";
   note?: string;
   /** Opened from the Add Automation panel: reopen it with the new flow selected afterwards. */
   fromAdd?: boolean;
@@ -123,9 +126,20 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
   const openBuiltIn = (dir: "bullish" | "bearish") =>
     setBuilder({
       readOnly: true,
-      note: "This is what the engine does for this signal, drawn as a flow. It is a reference view and can't be edited here. Duplicate protection, the position, daily and allocation limits, the strike checks and the error failsafe also apply and aren't drawn.",
-      draft: { id: `builtin-${dir}`, name: `${dir === "bullish" ? "Bullish" : "Bearish"} signal`, folder: "Built-in", steps: builtInFlow(dir, data.config), inputs: [], updatedAt: 0 },
+      builtIn: dir,
+      note: "Live: this is what the engine does for this signal. Click a node to edit its values - they save straight to this bot's settings and apply to the next signal. The shape of the flow is the engine's logic, so steps can't be added or removed here. Duplicate protection, the position, daily and allocation limits, the strike checks and the error failsafe also apply and aren't drawn.",
+      draft: builtInDraft(dir),
     });
+
+  /** The built-in flow drawn from the bot's current settings (window, offsets, size, prices). */
+  const builtInDraft = (dir: "bullish" | "bearish"): AutomationDraft => ({
+    id: `builtin-${dir}`,
+    name: `${dir === "bullish" ? "Bullish" : "Bearish"} signal`,
+    folder: "Built-in",
+    steps: builtInFlow(dir, data.config, data.config?.hours ?? data.limits.hours),
+    inputs: [],
+    updatedAt: 0,
+  });
 
   const row = (opts: { key: string; name: string; sub: string; right: React.ReactNode; onName?: () => void; gear?: () => void; menu?: React.ReactNode; badge?: string }) => (
     <div key={opts.key} className="flex items-center gap-3 py-3">
@@ -169,7 +183,7 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
         <>
           <MenuItem onClick={() => { close(); openBuiltIn(dir); }}>View flow</MenuItem>
           <MenuItem onClick={() => { close(); openRun(dir); }}>Run now...</MenuItem>
-          <MenuItem onClick={() => { close(); navigator.clipboard?.writeText(payloadFor(dir, bot.id)).then(() => notify("ok", "Webhook message copied.")); }}>Copy webhook message</MenuItem>
+          <MenuItem onClick={() => { close(); navigator.clipboard?.writeText(payloadFor(dir, bot.id, data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX")).then(() => notify("ok", "Webhook message copied.")); }}>Copy webhook message</MenuItem>
           <MenuItem onClick={() => { close(); setDrawer(dir); }}>Details</MenuItem>
         </>
       )}
@@ -266,12 +280,14 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
       )}
       {builder && (
         <AutomationBuilder
-          key={builder.draft.id}
-          draft={builder.draft}
+          // A built-in flow is redrawn whenever the settings behind it change (after a live save).
+          key={builder.builtIn ? `${builder.draft.id}:${JSON.stringify(data.config)}` : builder.draft.id}
+          draft={builder.builtIn ? builtInDraft(builder.builtIn) : builder.draft}
           botId={bot.id}
           botName={bot.name}
           readOnly={builder.readOnly}
           note={builder.note}
+          liveEditor={builder.builtIn ? (step, close) => liveNodeEditor({ step, direction: builder.builtIn!, ctx, onClose: close }) : undefined}
           onSaved={(d) => {
             setLibrary(loadLibrary());
             setLastSavedId(d.id);
@@ -288,8 +304,8 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
   );
 }
 
-const payloadFor = (dir: "bullish" | "bearish", botId: string) =>
-  JSON.stringify({ secret: "<WEBHOOK_SECRET>", bot: botId, signal: dir, symbol: "SPX", price: "{{close}}", bar_time: "{{timenow}}", interval: "{{interval}}" }, null, 2).replace('"{{close}}"', "{{close}}");
+export const payloadFor = (dir: "bullish" | "bearish", botId: string, symbol: string) =>
+  JSON.stringify({ secret: "<WEBHOOK_SECRET>", bot: botId, signal: dir, symbol, price: "{{close}}", bar_time: "{{timenow}}", interval: "{{interval}}" }, null, 2).replace('"{{close}}"', "{{close}}");
 
 function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx: BotContext; onClose: () => void }) {
   const { data, patch, notify, openRun } = ctx;
@@ -325,11 +341,11 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
         <div>
           <div className="flex items-center justify-between">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">TradingView alert message</div>
-            <button className="text-xs font-medium text-accent hover:underline" onClick={() => navigator.clipboard?.writeText(payloadFor(dir, data.bot.id)).then(() => notify("ok", "Copied."))}>
+            <button className="text-xs font-medium text-accent hover:underline" onClick={() => navigator.clipboard?.writeText(payloadFor(dir, data.bot.id, data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX")).then(() => notify("ok", "Copied."))}>
               Copy
             </button>
           </div>
-          <pre className="mt-1 overflow-x-auto rounded-lg bg-surface-2 p-3 text-xs leading-relaxed">{payloadFor(dir, data.bot.id)}</pre>
+          <pre className="mt-1 overflow-x-auto rounded-lg bg-surface-2 p-3 text-xs leading-relaxed">{payloadFor(dir, data.bot.id, data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX")}</pre>
           <p className="mt-2 text-xs text-muted">Wire only the confirmed alerts to this URL - never the raw EMA cross alerts.</p>
         </div>
 
@@ -371,6 +387,8 @@ function InputsCard({ ctx }: { ctx: BotContext }) {
             ["Short put offset", signed(config.putShortOffset)],
             ["Short call offset", signed(config.callShortOffset)],
             ["Expected credit", usd2(config.openingCreditEstimate)],
+            ["Strike rounding", (config.strikeRounding ?? "outward") === "outward" ? "Out of the money (put down, call up)" : "Nearest strike"],
+            ["Order price", `${config.openPricePercent ?? 100}% of bid/ask to open, ${config.closePricePercent ?? 100}% to close`],
           ]}
         />
       ) : (
@@ -401,17 +419,18 @@ export function InputsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: () =>
     callShortOffset: c ? String(c.callShortOffset) : "",
     allocationLimit: c ? String(c.allocationLimit) : String(draft?.allocationLimit ?? data.bot.allocation ?? "20000"),
     openingCreditEstimate: c ? String(c.openingCreditEstimate) : "",
+    ...pricingFields(c),
     group: "",
     tags: "",
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const set = (key: keyof BotFormValues) => (e: React.ChangeEvent<HTMLInputElement>) => setF((p) => ({ ...p, [key]: e.target.value }));
+  const set = (key: keyof BotFormValues) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((p) => ({ ...p, [key]: e.target.value }));
 
   const save = async () => {
     setBusy(true);
     setError(null);
-    const res = await fetch(`/api/automation/bots/${data.bot.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputs: toInputs(f) }) });
+    const res = await fetch(`/api/automation/bots/${data.bot.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ inputs: toInputs(f, c) }) });
     const json = await res.json().catch(() => ({}));
     setBusy(false);
     if (!res.ok) return setError(json.error ?? "Could not save.");
@@ -666,7 +685,7 @@ function AlertsCard({ ctx }: { ctx: BotContext }) {
   );
 }
 
-function SymbolsCard({ botId }: { botId: string }) {
+function SymbolsCard({ botId, underlying }: { botId: string; underlying: string }) {
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState<SymbolSettings | null>(null);
   useEffect(() => setSaved(loadSymbolSettings(botId)), [botId]);
@@ -675,7 +694,7 @@ function SymbolsCard({ botId }: { botId: string }) {
     <Card className="p-5">
       <CardHeader title="Symbols" action={<EditButton onClick={() => setOpen(true)} label="Edit bot symbols" />} />
       <div className="flex flex-wrap gap-1.5">
-        <span className="rounded-md bg-accent/10 px-2.5 py-1 text-sm text-accent">SPX</span>
+        <span className="rounded-md bg-accent/10 px-2.5 py-1 text-sm text-accent">{underlying}</span>
         {saved?.watchlist && <span className="rounded-md bg-surface-2 px-2.5 py-1 text-sm text-muted" title="Saved scan settings (preview)">{saved.watchlist}</span>}
         {saved?.excluded.map((x) => (
           <span key={x} className="rounded-md bg-down-soft px-2 py-1 text-xs text-down" title="Excluded (preview)">
@@ -683,8 +702,8 @@ function SymbolsCard({ botId }: { botId: string }) {
           </span>
         ))}
       </div>
-      <p className="mt-2 text-xs text-faint">The signal engine trades SPX 0DTE only. Scan settings are a saved preview.</p>
-      {open && <SymbolsPanel botId={botId} onSaved={setSaved} onClose={() => setOpen(false)} />}
+      <p className="mt-2 text-xs text-faint">The signal engine trades {underlying} 0DTE only. Scan settings are a saved preview.</p>
+      {open && <SymbolsPanel botId={botId} underlying={underlying} onSaved={setSaved} onClose={() => setOpen(false)} />}
     </Card>
   );
 }

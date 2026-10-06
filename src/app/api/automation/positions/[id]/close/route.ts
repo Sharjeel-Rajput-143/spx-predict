@@ -16,7 +16,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   return guarded(async () => {
     const result = await withBotLock(position.botId, () =>
-      manualClose(id, { executor: sharedExecutor, underlyingPrice: getLastTick("SPX")?.price ?? null }),
+      manualClose(id, { executor: sharedExecutor, underlyingPrice: getLastTick(position.underlying)?.price ?? null }),
     );
     return NextResponse.json({ result }, { status: result.ok ? 200 : 409 });
   });

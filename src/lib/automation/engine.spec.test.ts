@@ -136,12 +136,21 @@ describe("strike invariants through the engine", () => {
     expect(outcomes()).toEqual(["config_error"]);
   });
 
-  it("opens with the long strike derived from the short strike, not the price", async () => {
+  it("opens with the long strike derived from the short strike, not the price (default rounding: out of the money)", async () => {
     await emit("bullish", { price: 7720.5 });
     await emit("bearish", { price: 7720.5, barTime: "bar-2", now: BASE_NOW + 130_000 });
     const [open1, , open2] = executor.placedOrders;
-    expect([open1.shortStrike, open1.longStrike]).toEqual([7700, 7695]); // price - 20, then width below
-    expect([open2.shortStrike, open2.longStrike]).toEqual([7740, 7745]); // price + 20, then width above
+    expect([open1.shortStrike, open1.longStrike]).toEqual([7700, 7695]); // 7700.5 rounded DOWN, then width below
+    expect([open2.shortStrike, open2.longStrike]).toEqual([7745, 7750]); // 7740.5 rounded UP, then width above
+  });
+
+  it("with nearest rounding the same signals land on the closest strikes", async () => {
+    vi.stubEnv("BOT_SPX_EMA_BIAS_STRIKE_ROUNDING", "nearest");
+    await emit("bullish", { price: 7720.5 });
+    await emit("bearish", { price: 7720.5, barTime: "bar-2", now: BASE_NOW + 130_000 });
+    const [open1, , open2] = executor.placedOrders;
+    expect([open1.shortStrike, open1.longStrike]).toEqual([7700, 7695]);
+    expect([open2.shortStrike, open2.longStrike]).toEqual([7740, 7745]);
   });
 });
 
@@ -184,12 +193,12 @@ describe("executor exceptions", () => {
 });
 
 describe("missing required config", () => {
-  it("logs config_error and flags the bot instead of failing silently when an offset is unset", async () => {
-    vi.stubEnv("BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+  it("logs config_error and flags the bot instead of failing silently when the expected credit is unset", async () => {
+    vi.stubEnv("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", "");
     await emit("bullish");
 
     expect(outcomes()).toEqual(["config_error"]);
-    expect(decisionsStore.all()[0].reason).toContain("BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET");
+    expect(decisionsStore.all()[0].reason).toContain("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE");
     expect(bot()?.needsAttention).toBe(true);
     expect(executor.placedOrders).toHaveLength(0);
   });

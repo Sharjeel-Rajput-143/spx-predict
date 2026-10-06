@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { botDisplayName, ensureBotRecord, getBotLimits, getBotStaticConfig, listBotIds, missingSettingsOf } from "@/lib/automation/bots";
+import { getAlertEmail, getGlobalWindow } from "@/lib/automation/appSettings";
 import { ERROR_FAILSAFE_THRESHOLD, isDryRun, isTestMode } from "@/lib/automation/config";
 import { countTodayErrors } from "@/lib/automation/errors";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk } from "@/lib/automation/safeguards";
 import { executorStatus } from "@/lib/automation/sharedExecutor";
-import { decisionsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
-import type { BotStaticConfig, Decision } from "@/lib/automation/types";
+import { alertsStore, decisionsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
+import { describeWindow, hoursConfigFor } from "@/lib/automation/tradingHours";
+import { DEFAULT_ALERTS, type BotStaticConfig, type Decision } from "@/lib/automation/types";
 import { getLastTick } from "@/lib/marketData/tickStore";
 
 function staticConfigSafe(id: string): { config: BotStaticConfig | null; error: string | null; missing: { key: string; why: string }[] | null } {
@@ -18,13 +20,16 @@ function staticConfigSafe(id: string): { config: BotStaticConfig | null; error: 
   }
 }
 
-/** A starting price for "Send test alert": the bot's last signal, else the
- * middle of its sanity range, else SPX's live quote. null = the person types one. */
+/** A starting price for "Send test alert": the bot's last signal, else the live quote of its
+ * underlying, else the middle of its sanity range. null = the person types one. */
 function suggestedPrice(botId: string, config: BotStaticConfig | null): number | null {
   const last = signalsStore.query((s) => s.botId === botId && s.status === "accepted" && s.price > 0).at(-1)?.price;
   if (last) return last;
-  if (config?.priceRange) return Math.round((config.priceRange.min + config.priceRange.max) / 2 / config.strikeIncrement) * config.strikeIncrement;
-  if (config?.underlying === "SPX") return getLastTick("SPX")?.price ?? null;
+  if (config) {
+    const live = getLastTick(config.underlying)?.price;
+    if (live) return live;
+    if (config.priceRange) return Math.round((config.priceRange.min + config.priceRange.max) / 2 / config.strikeIncrement) * config.strikeIncrement;
+  }
   return null;
 }
 
@@ -39,6 +44,8 @@ export async function GET(req: NextRequest) {
     const { config, error, missing } = staticConfigSafe(id);
     const record = ensureBotRecord(id);
     const limits = getBotLimits(id);
+    const atRisk = config ? sumActiveAllocationRisk(id, config.widthPoints, config.openingCreditEstimate) : 0;
+    const allocation = config?.allocationLimit ?? null;
     return {
       id,
       name: config?.name ?? botDisplayName(id),
@@ -54,8 +61,24 @@ export async function GET(req: NextRequest) {
       dailyNewPositionLimit: limits.dailyNewPositionLimit,
       activePositionCount: activePositionsForBot(id).length,
       closedPositionCount: positionsStore.query((p) => p.botId === id && (p.status === "closed" || p.status === "expired")).length,
-      atRisk: config ? sumActiveAllocationRisk(id, config.widthPoints, config.openingCreditEstimate) : 0,
-      allocation: config?.allocationLimit ?? null,
+      atRisk,
+      allocation,
+      // What's left to open with: the allocation minus what active positions could lose.
+      available: allocation != null ? Math.round((allocation - atRisk) * 100) / 100 : null,
+      settings: config
+        ? {
+            quantity: config.quantity,
+            widthPoints: config.widthPoints,
+            strikeIncrement: config.strikeIncrement,
+            putShortOffset: config.putShortOffset,
+            callShortOffset: config.callShortOffset,
+            strikeRounding: config.strikeRounding ?? "outward",
+            openPricePercent: config.openPricePercent ?? 100,
+            closePricePercent: config.closePricePercent ?? 100,
+            window: describeWindow(hoursConfigFor(config.hours)),
+            alerts: record.alerts ?? DEFAULT_ALERTS,
+          }
+        : null,
       totalPositionLimit: limits.totalPositionLimit,
       suggestedPrice: suggestedPrice(id, config),
     };
@@ -99,7 +122,14 @@ export async function GET(req: NextRequest) {
       receivedAt: s.receivedAt,
       test: (s.raw as { test?: unknown } | null)?.test === true,
       symbol: (s.raw as { symbol?: unknown } | null)?.symbol ?? null,
-      decisions: (decisionsBySignal.get(s.id) ?? []).sort((a, b) => a.createdAt - b.createdAt).map((d) => ({ id: d.id, outcome: d.outcome, reason: d.reason, createdAt: d.createdAt })),
+      decisions: (decisionsBySignal.get(s.id) ?? []).sort((a, b) => a.createdAt - b.createdAt).map((d) => ({
+        id: d.id,
+        outcome: d.outcome,
+        reason: d.reason,
+        createdAt: d.createdAt,
+        // Target price, rounding mode and chosen strikes, in words ("Target 21,003.69 (...), rounded down to 5 -> short ...").
+        strikePlan: (d.detail.strikePlan as { text?: string } | undefined)?.text ?? null,
+      })),
     }));
 
   return NextResponse.json({
@@ -109,5 +139,7 @@ export async function GET(req: NextRequest) {
     positions,
     orders,
     signals,
+    alerts: alertsStore.all().sort((a, b) => b.createdAt - a.createdAt).slice(0, 50),
+    alertEmail: { enabled: getAlertEmail().enabled, to: getAlertEmail().to },
   });
 }

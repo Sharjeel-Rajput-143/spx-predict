@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getGlobalWindow } from "@/lib/automation/appSettings";
 import { botDisplayName, deleteBot, ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, isKnownBot, listBotIds, missingSettingsOf, updateBot, type BotPatch } from "@/lib/automation/bots";
 import {
   CLOSE_CONFIRM_TIMEOUT_SECONDS,
@@ -100,7 +101,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       flipCooldownSeconds: getFlipCooldownSeconds(),
       orderFillTimeoutSeconds: ORDER_FILL_TIMEOUT_SECONDS,
       closeConfirmTimeoutSeconds: CLOSE_CONFIRM_TIMEOUT_SECONDS,
-      hours: { start: clock(TRADING_HOURS.startMinutes), end: clock(TRADING_HOURS.endMinutes), timezone: TRADING_HOURS.timezone },
+      hours: { start: clock(getGlobalWindow().startMinutes), end: clock(getGlobalWindow().endMinutes), timezone: TRADING_HOURS.timezone },
       dryRun: isDryRun(),
     },
     counts: {

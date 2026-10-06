@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withBotLock } from "./botLock";
-import { ensureBotRecord, getBotStaticConfig, updateBot } from "./bots";
+import { ensureBotRecord, getBotLimits, getBotStaticConfig, updateBot } from "./bots";
 import { summarizeBot } from "./summary";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { __resetSweepState, runDueSweeps, sweepMinutesFor } from "./eodSweep";
 import { MockExecutor } from "./executor";
 import { countTodayNewPositions } from "./safeguards";
-import { botsStore, decisionsStore, positionsStore } from "./store";
+import { botsStore, decisionsStore, positionsStore, runsStore } from "./store";
 import { maxRisk } from "./strikes";
 import { BASE_NOW, NDX_BOT_ID, TEST_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 import type { SignalDirection } from "./types";
@@ -65,8 +65,6 @@ describe("NDX bot config", () => {
   });
 
   it.each([
-    ["BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET"],
-    ["BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET"],
     ["BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"],
     ["BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"],
     ["BOT_NDX_EMA_BIAS_PRICE_MIN"],
@@ -83,21 +81,21 @@ describe("NDX bot config", () => {
   });
 
   it("while unconfigured it is switched off, keeps its name, and lists each missing value for the UI", () => {
-    for (const k of ["STRIKE_INCREMENT", "PUT_SHORT_OFFSET", "PRICE_MAX"]) vi.stubEnv(`BOT_NDX_EMA_BIAS_${k}`, "");
+    for (const k of ["STRIKE_INCREMENT", "OPENING_CREDIT_ESTIMATE", "PRICE_MAX"]) vi.stubEnv(`BOT_NDX_EMA_BIAS_${k}`, "");
     const summary = summarizeBot(NDX_BOT_ID);
     expect(summary.name).toBe("NDX EMA 9/20 Bias");
     expect(summary.enabled).toBe(false);
     expect(summary.missingSettings?.map((m) => m.key)).toEqual([
       "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT",
-      "BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET",
+      "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE",
       "BOT_NDX_EMA_BIAS_PRICE_MAX",
     ]);
   });
 
   it("names every missing value at once", () => {
-    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
-    vi.stubEnv("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", "");
-    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/PUT_SHORT_OFFSET[\s\S]*CALL_SHORT_OFFSET/);
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MAX", "");
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/STRIKE_INCREMENT[\s\S]*PRICE_MAX/);
   });
 
   it("#4 refuses width 10 with increment 25 (width_not_multiple_of_increment), starts with increment 5", async () => {
@@ -162,11 +160,11 @@ describe("signals reach only their own bot", () => {
 
 describe("NDX strikes and risk", () => {
   it("#5 rounds to the increment and always derives the long strike from the short strike", async () => {
-    // 21,003.7 - 30 = 20,973.7 -> 20,975; a long strike taken from the price (21,003.7 - 10 -> 20,995)
+    // 21,003.7 - 30 = 20,973.7 -> rounded DOWN to 20,970; a long strike taken from the price (21,003.7 - 10)
     // would be nowhere near it. Derived correctly it is exactly one width below the short.
     await emit(NDX_BOT_ID, "bullish");
     const [open] = executor.placedOrders;
-    expect([open.shortStrike, open.longStrike]).toEqual([20_975, 20_965]);
+    expect([open.shortStrike, open.longStrike]).toEqual([20_970, 20_960]);
     expect(open.shortStrike % 5).toBe(0);
     expect(open.shortStrike - open.longStrike).toBe(10);
   });
@@ -226,7 +224,7 @@ describe("NDX position limits and flips", () => {
       "open:short_call_spread",
     ]);
     const [, close, open] = executor.placedOrders;
-    expect([close.shortStrike, close.longStrike, close.quantity]).toEqual([20_975, 20_965, 1]);
+    expect([close.shortStrike, close.longStrike, close.quantity]).toEqual([20_970, 20_960, 1]);
     expect([open.shortStrike, open.longStrike, open.quantity]).toEqual([21_035, 21_045, 1]);
     expect(positionsStore.query((p) => p.status === "open")).toHaveLength(1);
   });
@@ -307,5 +305,140 @@ describe("two bots at the same moment", () => {
     await emit(NDX_BOT_ID, "bearish", { barTime: "bar-2", now: BASE_NOW + 200_000 }); // flips: close, then a 2nd opening -> over NDX's limit of 1
     expect(outcomesOf(TEST_BOT_ID)).toEqual(["opened"]);
     expect(outcomesOf(NDX_BOT_ID)).toContain("daily_limit_reached");
+  });
+});
+
+describe("the live bot's settings, mirrored", () => {
+  it("NDX offsets default to -0.01 / +0.01 (marked: owner to confirm for NDX), rounding to out of the money", () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", "");
+    expect(getBotStaticConfig(NDX_BOT_ID)).toMatchObject({ putShortOffset: -0.01, callShortOffset: 0.01, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100 });
+  });
+
+  it("the increment still has no default", () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/BOT_NDX_EMA_BIAS_STRIKE_INCREMENT/);
+  });
+
+  it("with the default offsets the NDX strikes land at the first strike at or beyond the price", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", "");
+    await emit(NDX_BOT_ID, "bullish");
+    await emit(NDX_BOT_ID, "bearish", { barTime: "b2", now: BASE_NOW + 200_000 });
+    const opens = executor.placedOrders.filter((o) => o.kind === "open");
+    expect(opens.map((o) => [o.shortStrike, o.longStrike])).toEqual([[21_000, 20_990], [21_005, 21_015]]);
+  });
+
+  it("nearest rounding is selectable, and the strike follows", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_ROUNDING", "nearest");
+    expect(getBotStaticConfig(NDX_BOT_ID).strikeRounding).toBe("nearest");
+    await emit(NDX_BOT_ID, "bullish"); // 21,003.7 - 30 = 20,973.7 -> 20,975, not 20,970
+    expect(executor.placedOrders[0].shortStrike).toBe(20_975);
+  });
+
+  it("an unknown rounding mode is refused, not guessed", () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_ROUNDING", "sideways");
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/"outward" or "nearest"/);
+  });
+
+  it("total position limit: SPX holds up to 3 by default, NDX stays at 1", () => {
+    vi.stubEnv("BOT_SPX_EMA_BIAS_TOTAL_POSITION_LIMIT", "");
+    expect(getBotLimits(TEST_BOT_ID).totalPositionLimit).toBe(3);
+    expect(getBotLimits(NDX_BOT_ID).totalPositionLimit).toBe(1);
+    expect(getBotLimits(TEST_BOT_ID)).toMatchObject({ dailyNewPositionLimit: 10 });
+    // A safeguard set on the bot still wins.
+    ensureBotRecord(NDX_BOT_ID);
+    updateBot(NDX_BOT_ID, { safeguards: { totalPositionLimit: 2 } });
+    expect(getBotLimits(NDX_BOT_ID).totalPositionLimit).toBe(2);
+  });
+
+  it.each([["0"], ["-5"], ["101"], ["abc"]])("an order price of %s%% of bid/ask is refused", (value) => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_OPEN_PRICE_PERCENT", value);
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow();
+  });
+
+  it("the price percent travels with the order (the mock has no bid/ask, so it only records it)", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_OPEN_PRICE_PERCENT", "80");
+    const seen: unknown[] = [];
+    const spy = vi.spyOn(executor, "placeOpenOrder").mockImplementation(async (req) => {
+      seen.push(req.pricePercent);
+      return { ref: "mock-x" };
+    });
+    await emit(NDX_BOT_ID, "bullish");
+    expect(seen).toEqual([80]);
+    spy.mockRestore();
+  });
+});
+
+describe("every decision carries the target price, rounding mode and chosen strikes", () => {
+  const plans = (bot: string) => decisionsStore.query((d) => d.botId === bot).map((d) => (d.detail.strikePlan as { text: string } | undefined)?.text);
+
+  it("an opened signal", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+    await emit(NDX_BOT_ID, "bullish");
+    expect(decisionsStore.all()[0].detail.strikePlan).toMatchObject({ price: 21_003.7, offset: -0.01, target: 21_003.69, rounding: "outward", increment: 5, shortStrike: 21_000, longStrike: 20_990 });
+    expect(plans(NDX_BOT_ID)).toEqual(["Target 21,003.69 (21,003.7 - 0.01), rounded down to 5 -> short 21,000, long 20,990"]);
+  });
+
+  it("a flip's close and open both carry it, and the run's strike check shows it", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", "");
+    await emit(NDX_BOT_ID, "bullish");
+    await emit(NDX_BOT_ID, "bearish", { barTime: "b2", now: BASE_NOW + 200_000 });
+    const text = plans(NDX_BOT_ID);
+    expect(text).toHaveLength(3); // opened, closed, opened
+    expect(text.slice(1).every((t) => t?.includes("rounded up to 5 -> short 21,005, long 21,015"))).toBe(true);
+  });
+
+  it("skipped signals carry it too: outside hours, off, mismatch, out of range", async () => {
+    await emit(NDX_BOT_ID, "bullish", { symbol: "SPX", barTime: "m" }); // symbol_mismatch
+    await emit(NDX_BOT_ID, "bullish", { price: 7720, symbol: null, barTime: "r" }); // price_out_of_range
+    ensureBotRecord(NDX_BOT_ID);
+    botsStore.update(NDX_BOT_ID, { enabled: false });
+    await emit(NDX_BOT_ID, "bullish", { barTime: "off" }); // automations_off
+    expect(outcomesOf(NDX_BOT_ID)).toEqual(["symbol_mismatch", "price_out_of_range", "automations_off"]);
+    expect(plans(NDX_BOT_ID).every((t) => typeof t === "string" && t.includes("Target"))).toBe(true);
+  });
+
+  it("the run trace shows the target, the mode and the strikes in the strike check and on the Open card", async () => {
+    await emit(NDX_BOT_ID, "bullish");
+    const run = runsStore.all()[0];
+    const strikes = run.nodes.find((n) => n.kind === "decision" && n.text.startsWith("Strikes pass"));
+    expect(strikes).toMatchObject({ measured: "Target 20,973.7 (21,003.7 - 30), rounded down to 5 -> short 20,970, long 20,960" });
+    const open = run.nodes.find((n) => n.kind === "action");
+    expect(open).toMatchObject({ params: expect.arrayContaining([{ label: "Short put", value: "20970 (target 20,973.7 = 21003.7 - 30, rounded down to 5)" }]) });
+  });
+});
+
+describe("values saved from the built-in canvas are what the engine uses", () => {
+  const saved = (changes: Record<string, unknown>) => {
+    const { id: _id, ...base } = getBotStaticConfig(NDX_BOT_ID);
+    ensureBotRecord(NDX_BOT_ID);
+    updateBot(NDX_BOT_ID, { inputs: { ...base, ...changes } as never });
+  };
+
+  it("a trading window saved on the time node is enforced, and clearing it returns to the default", async () => {
+    saved({ hours: { start: "11:00", end: "15:00" } }); // BASE_NOW is 10:40am ET
+    await emit(NDX_BOT_ID, "bullish");
+    expect(outcomesOf(NDX_BOT_ID)).toEqual(["outside_hours"]);
+    expect(getBotStaticConfig(NDX_BOT_ID).hours).toEqual({ start: "11:00", end: "15:00" });
+
+    const { hours: _drop, ...rest } = getBotStaticConfig(NDX_BOT_ID);
+    updateBot(NDX_BOT_ID, { inputs: rest as never });
+    await emit(NDX_BOT_ID, "bullish", { barTime: "b2", now: BASE_NOW + 200_000 });
+    expect(outcomesOf(NDX_BOT_ID)).toEqual(["outside_hours", "opened"]);
+  });
+
+  it("an offset, width, size and rounding saved on the open node change the strikes the next signal gets", async () => {
+    saved({ putShortOffset: -0.5, widthPoints: 15, strikeRounding: "nearest", quantity: 2, allocationLimit: 5000 });
+    await emit(NDX_BOT_ID, "bullish"); // 21,003.7 - 0.5 = 21,003.2 -> nearest 21,005; long 15 below
+    expect(executor.placedOrders[0]).toMatchObject({ shortStrike: 21_005, longStrike: 20_990, quantity: 2 });
+  });
+
+  it("a bad window or price is refused with a message, not saved", () => {
+    expect(() => saved({ hours: { start: "15:00", end: "11:00" } })).toThrow(/start before they end/);
+    expect(() => saved({ closePricePercent: 150 })).toThrow(/percent of bid\/ask/);
+    expect(() => saved({ widthPoints: 12 })).toThrow(/multiple of the strike increment/);
+    expect(getBotStaticConfig(NDX_BOT_ID).hours).toBeUndefined();
   });
 });

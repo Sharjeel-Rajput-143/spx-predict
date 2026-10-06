@@ -57,7 +57,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
     expect(byText["Current market time is between 9:35am - 3:55pm"].measured).toBe("Current time is 10:40am");
     expect(byText["Bot has exactly or more than 1 position with Short Call Spread type and any status"].measured).toBe("1 position");
     expect(byText["Bot holds fewer than 1 Short Put Spread position"].measured).toBe("0 positions");
-    expect(byText["Strikes pass the checks (order, not equal, on the increment, the right width)"].measured).toBe("Short 7700, long 7695");
+    expect(byText["Strikes pass the checks (order, not equal, on the increment, the right width)"].measured).toBe("Target 7,700.5 (7,720.5 - 20), rounded down to 5 -> short 7,700, long 7,695");
   });
 
   it("the action cards carry the exact legs, the position they made, and a frozen snapshot of their settings", async () => {
@@ -67,7 +67,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
 
     expect(close).toMatchObject({ action: "close", positionId: "old-call", outcome: "closed", summary: "SPX Short Call Spread Oct 6 / -7,720 call, +7,725 call" });
     expect(close.params).toEqual([
-      { label: "Price", value: "Close order with no limit price set" },
+      { label: "Price", value: "100% of bid/ask (no limit price is sent yet)" },
       { label: "Quantity", value: "3 contracts (100% of position)" },
       { label: "Confirm timeout", value: "0s" }, // the test's 50ms timeout, rounded
     ]);
@@ -76,9 +76,9 @@ describe("a flip is recorded step by step with the real values compared", () => 
     expect(open).toMatchObject({ action: "open", positionId: opened.id, outcome: "opened", summary: "SPX Short Put Spread Oct 6 / -7,700 put, +7,695 put" });
     expect(open.params).toEqual(
       expect.arrayContaining([
-        { label: "Price", value: "Limit credit $2.20" },
+        { label: "Price", value: "Limit credit $2.20 (100% of bid/ask)" },
         { label: "Quantity", value: "3 contracts" },
-        { label: "Short put", value: "7700 (7720.5 - 20, rounded to 5)" },
+        { label: "Short put", value: "7700 (target 7,700.5 = 7720.5 - 20, rounded down to 5)" },
         { label: "Long put", value: "7695 (5 points below the short put)" },
       ]),
     );

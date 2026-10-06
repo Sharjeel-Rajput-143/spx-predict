@@ -29,7 +29,7 @@ interface Props {
   signals: Signal[];
   estimate: number | undefined;
   bot: PositionBot;
-  /** SPX last price (live quote), or null when there isn't one. */
+  /** The underlying's last price (live quote), or null when there isn't one. */
   last: number | null;
   now: number;
   onClose: () => void;
@@ -59,7 +59,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
   const openSignal = p.openSignalId ? signals.find((s) => s.id === p.openSignalId) : undefined;
   const atOpen = p.underlyingAtOpen ?? openSignal?.price ?? null;
   const underlying = last ?? atOpen;
-  const underlyingLabel = last != null ? "SPX now" : "SPX at open";
+  const underlyingLabel = last != null ? `${p.underlying} now` : `${p.underlying} at open`;
   const otm = spread && underlying != null ? otmFraction(p, underlying) : null;
 
   const today = etDayKey(now);
@@ -70,7 +70,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
   const closable = p.status === "open" || p.status === "closing";
   const orders = allOrders.filter((o) => o.positionId === p.id).sort((a, b) => a.createdAt - b.createdAt);
 
-  const summary = `SPX ${TYPE_LABEL[p.type]} ${p.shortStrike}/${p.longStrike} ${letter}, exp ${p.expiry}, ${quantity} contracts${credit != null ? `, credit ${usd2(credit)}` : ""}`;
+  const summary = `${p.underlying} ${TYPE_LABEL[p.type]} ${p.shortStrike}/${p.longStrike} ${letter}, exp ${p.expiry}, ${quantity} contracts${credit != null ? `, credit ${usd2(credit)}` : ""}`;
 
   const copy = () =>
     navigator.clipboard
@@ -109,7 +109,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
       <div className="space-y-6">
         {/* Header strip */}
         <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-lg bg-accent/10 px-2.5 py-1.5 text-sm font-bold text-accent">SPX</span>
+          <span className="rounded-lg bg-accent/10 px-2.5 py-1.5 text-sm font-bold text-accent">{p.underlying}</span>
           <div>
             <div className="flex items-center gap-2">
               <span className="text-base font-semibold">{POSITION_TYPES[p.type]}</span>
@@ -142,7 +142,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
               ["Bid / ask", "—", NEEDS_CHAIN],
               ["Quantity", `${quantity} contract${quantity === 1 ? "" : "s"}`],
               ["DIT", dit != null ? `${dit} day${dit === 1 ? "" : "s"}` : "—", "Days in trade."],
-              ["Price at open", atOpen != null ? num(atOpen) : "—", "SPX at the signal that opened it."],
+              ["Price at open", atOpen != null ? num(atOpen) : "—", `${p.underlying} at the signal that opened it.`],
             ]}
           />
         </div>
@@ -307,7 +307,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
           }
         >
           <p className="text-sm text-muted">
-            Sends a close order for SPX {p.shortStrike}/{p.longStrike} {kind} spread to the executor now. If the close fails, the bot is flagged as needing attention.
+            Sends a close order for {p.underlying} {p.shortStrike}/{p.longStrike} {kind} spread to the executor now. If the close fails, the bot is flagged as needing attention.
           </p>
         </Modal>
       )}

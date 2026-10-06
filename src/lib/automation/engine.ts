@@ -23,7 +23,7 @@ import {
   sumActiveAllocationRisk,
 } from "./safeguards";
 import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
-import { computeStrikes, maxRisk, validateStrikes, type StrikePair } from "./strikes";
+import { describePlan, maxRisk, planStrikes, roundingWords, validateStrikes, type StrikePair, type StrikePlan } from "./strikes";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
 import { describeTradingTime, describeWindow, easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
 import type { BotStaticConfig, BrokerExecutor, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
@@ -126,11 +126,12 @@ async function closePosition(
   timeoutMs: number,
   pollIntervalMs: number,
   now: number,
+  pricePercent?: number,
 ): Promise<CloseResult> {
   positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
   let ref: string;
   try {
-    ({ ref } = await executor.placeCloseOrder(position));
+    ({ ref } = await executor.placeCloseOrder(position, { pricePercent }));
   } catch (err) {
     // Left "closing": we can't know the broker didn't take the order, so the
     // position keeps counting as live until an operator resolves it.
@@ -184,11 +185,9 @@ async function closePosition(
   return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled." };
 }
 
-/**
- * The full per-signal decision logic (spec steps 0-10). Must always be
- * invoked through withBotLock so two signals for the same bot never run at
- * once. Takes an already-persisted signal row (see receiveAndSaveSignal).
- */
+/** The plan as stored on a decision: the numbers plus the sentence. */
+const planDetail = (plan: StrikePlan) => ({ ...plan, text: describePlan(plan) });
+
 const fmtLevel = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 /** Why a signal's price can't be used, or null when it can. */
@@ -204,15 +203,21 @@ function priceRangeProblem(price: number, config: BotStaticConfig): string | nul
 const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
 
 /** The settings a close order is sent with - a snapshot for the run log. */
-function closeParamsFor(p: Position, timeoutMs: number): { label: string; value: string }[] {
+function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100): { label: string; value: string }[] {
   const qty = p.filledQuantity || p.requestedQuantity;
   return [
-    { label: "Price", value: "Close order with no limit price set" },
+    // TODO(unconfirmed): what "% of bid/ask" means exactly - the owner is to confirm. No limit price is computed or sent yet.
+    { label: "Price", value: `${pricePercent}% of bid/ask (no limit price is sent yet)` },
     { label: "Quantity", value: `${qty} contract${qty === 1 ? "" : "s"} (100% of position)` },
     { label: "Confirm timeout", value: `${Math.round(timeoutMs / 1000)}s` },
   ];
 }
 
+/**
+ * The full per-signal decision logic (spec steps 0-10). Must always be
+ * invoked through withBotLock so two signals for the same bot never run at
+ * once. Takes an already-persisted signal row (see receiveAndSaveSignal).
+ */
 export async function processSignal(signal: Signal, options: ProcessSignalOptions): Promise<void> {
   const manual = (signal.raw as { source?: string } | null)?.source === "manual";
   const rec = new RunRecorder({
@@ -245,8 +250,11 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   const dryRun = options.dryRun ?? isDryRun();
   const { botId } = signal;
 
+  // Once the bot's settings are known, every decision of this run carries how its strikes
+  // would be (or were) chosen: target price, rounding mode, the strikes.
+  let plan: StrikePlan | null = null;
   const log = (outcome: DecisionOutcome, reason: string, detail: Record<string, unknown> = {}) =>
-    logDecision({ signalId: signal.id, botId, outcome, reason, detail, now });
+    logDecision({ signalId: signal.id, botId, outcome, reason, detail: { ...(plan ? { strikePlan: planDetail(plan) } : {}), ...detail }, now });
 
   // A required setting (e.g. the strike offsets) is missing: say so in the
   // decision log rather than only throwing into the route's console.
@@ -259,6 +267,10 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     rec.decision("Bot has its required trading inputs", false, errorMessage(err));
     log("config_error", errorMessage(err));
     return;
+  }
+
+  if (Number.isFinite(signal.price) && signal.price > 0) {
+    plan = planStrikes(wantedType(signal.signal as SignalDirection), signal.price, staticConfig);
   }
 
   // Step 0: stale-position safety net (the EOD sweep is the primary mechanism).
@@ -378,14 +390,14 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
       continue;
     }
 
-    const closeParams = closeParamsFor(position, closeTimeoutMs);
+    const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent);
     if (dryRun) {
       rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: nothing sent." });
       log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id });
       continue;
     }
 
-    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now);
+    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, staticConfig.closePricePercent);
     rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParams, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
@@ -402,6 +414,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     botId,
     staticConfig,
     wanted,
+    plan,
     signal,
     price: signal.price,
     executor: options.executor,
@@ -420,6 +433,8 @@ interface OpenStageContext {
   wanted: PositionType;
   /** Given for a manual position; otherwise derived from the signal's price. */
   strikes?: StrikePair;
+  /** How the strikes were derived, for the decision log (absent for a manual position). */
+  plan?: StrikePlan | null;
   signal: Signal | null;
   /** Underlying price when the position is opened. */
   price: number | null;
@@ -463,12 +478,13 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       position,
       summary: position ? undefined : describeLegs({ underlying: staticConfig.underlying, type: wanted, expiry: easternDateKey(now), shortStrike: k.shortStrike, longStrike: k.longStrike }),
       params: [
-        { label: "Price", value: `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)}` },
+        // TODO(unconfirmed): what "% of bid/ask" means exactly - the owner is to confirm.
+        { label: "Price", value: `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)} (${staticConfig.openPricePercent ?? 100}% of bid/ask)` },
         { label: "Quantity", value: `${staticConfig.quantity} contract${staticConfig.quantity === 1 ? "" : "s"}` },
         { label: "Expiration", value: `${easternDateKey(now)} (same day)` },
         {
           label: `Short ${side}`,
-          value: ctx.manual || ctx.price == null ? `${k.shortStrike} (entered by hand)` : `${k.shortStrike} (${ctx.price} ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}, rounded to ${staticConfig.strikeIncrement})`,
+          value: ctx.manual || ctx.price == null || !ctx.plan ? `${k.shortStrike} (entered by hand)` : `${k.shortStrike} (target ${fmtLevel(ctx.plan.target)} = ${ctx.price} ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}, rounded ${roundingWords(ctx.plan)} ${ctx.plan.rounding === "nearest" ? "" : "to "}${staticConfig.strikeIncrement})`,
         },
         { label: `Long ${side}`, value: `${k.longStrike} (${staticConfig.widthPoints} points ${side === "put" ? "below" : "above"} the short ${side})` },
         { label: "Fill timeout", value: `${Math.round(ctx.openTimeoutMs / 1000)}s` },
@@ -486,7 +502,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       botId,
       outcome,
       reason,
-      detail: { ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
+      detail: { ...(ctx.plan ? { strikePlan: planDetail(ctx.plan) } : {}), ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
       now,
     });
     return { ok: outcome === "opened" || outcome === "dry_run", outcome, reason };
@@ -514,9 +530,9 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("daily_limit_reached", "Daily new-position limit reached; closing stays allowed, opening does not.");
   }
 
-  const strikes = ctx.strikes ?? computeStrikes(wanted, ctx.price ?? 0, staticConfig);
+  const strikes = ctx.strikes ?? planStrikes(wanted, ctx.price ?? 0, staticConfig);
   const validation = validateStrikes(wanted, strikes, staticConfig);
-  rec?.decision("Strikes pass the checks (order, not equal, on the increment, the right width)", validation.ok, validation.ok ? `Short ${strikes.shortStrike}, long ${strikes.longStrike}` : `${validation.reason} (short ${strikes.shortStrike}, long ${strikes.longStrike})`);
+  rec?.decision("Strikes pass the checks (order, not equal, on the increment, the right width)", validation.ok, validation.ok ? (ctx.plan ? describePlan(ctx.plan) : `Short ${strikes.shortStrike}, long ${strikes.longStrike}`) : `${validation.reason} (short ${strikes.shortStrike}, long ${strikes.longStrike})`);
   if (!validation.ok) {
     recordError(botId, "invalid_strikes", { strikes, reason: validation.reason }, now);
     botsStore.update(botId, { needsAttention: true, needsAttentionReason: `invalid_strikes: ${validation.reason}` });
@@ -597,6 +613,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   try {
     ({ ref } = await executor.placeOpenOrder({
       botId,
+      pricePercent: staticConfig.openPricePercent,
       underlying: staticConfig.underlying,
       optionRoot: staticConfig.optionRoot,
       positionType: wanted,
@@ -738,7 +755,13 @@ export async function manualClose(positionId: string, options: ManualOptions & {
     if (inFlight.length > 0) return log("close_in_flight", "A close order for this position is already in flight; nothing sent.");
 
     const closeTimeoutMs = options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000;
-    const params = closeParamsFor(position, closeTimeoutMs);
+    let closePercent: number | undefined;
+    try {
+      closePercent = getBotStaticConfig(botId).closePricePercent;
+    } catch {
+      /* a bot without complete inputs: the default applies */
+    }
+    const params = closeParamsFor(position, closeTimeoutMs, closePercent);
     if (options.dryRun ?? isDryRun()) {
       rec.action({ action: "close", title: closeTitle(position), position, params, outcome: "dry_run", reason: "Dry run: nothing sent." });
       return log("dry_run", `Dry run: would close ${position.type} position.`, true);
@@ -751,6 +774,7 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       closeTimeoutMs,
       options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
       now,
+      closePercent,
     );
     rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {

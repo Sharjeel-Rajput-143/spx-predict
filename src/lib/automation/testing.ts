@@ -1,6 +1,6 @@
 import "server-only";
 import { __resetSweepState } from "./eodSweep";
-import { botsStore, decisionsStore, errorsStore, ordersStore, positionsStore, runsStore, signalsStore } from "./store";
+import { alertsStore, botsStore, decisionsStore, errorsStore, ordersStore, positionsStore, runsStore, signalsStore } from "./store";
 
 /** What "Reset test data" removes. Bots, their settings and their on/off
  * state are kept - only what the engine recorded is cleared. */
@@ -11,6 +11,7 @@ export interface ResetSummary {
   decisions: number;
   runs: number;
   errors: number;
+  alerts: number;
 }
 
 export function resetTestData(): ResetSummary {
@@ -22,6 +23,7 @@ export function resetTestData(): ResetSummary {
     decisions: decisionsStore.removeWhere(all),
     runs: runsStore.removeWhere(all),
     errors: errorsStore.removeWhere(all),
+    alerts: alertsStore.removeWhere(all),
   };
   // A bot flagged needs-attention because of a test run goes back to clean; the daily counter and log view restart.
   for (const bot of botsStore.all()) {

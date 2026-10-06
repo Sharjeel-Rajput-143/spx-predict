@@ -8,8 +8,8 @@ const data = (over: Partial<StatusResponse> = {}): StatusResponse => ({
   now: Date.UTC(2026, 9, 6, 14, 40),
   executor: { kind: "mock", venue: "mock", error: null, dryRun: false, testMode: true },
   bots: [
-    { id: "ndx_ema_bias", name: "NDX EMA 9/20 Bias", underlying: "NDX", enabled: true, needsAttention: false, needsAttentionReason: null, configError: null, missingSettings: null, errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 2, dailyNewPositionLimit: 10, activePositionCount: 1, closedPositionCount: 1, totalPositionLimit: 1, suggestedPrice: 21_003.7 },
-    { id: "spx_ema_bias", name: "SPX EMA 9/20 Bias", underlying: "SPX", enabled: false, needsAttention: false, needsAttentionReason: null, configError: "SPX needs settings", missingSettings: [{ key: "BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", why: "ask the owner" }], errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 0, dailyNewPositionLimit: 10, activePositionCount: 0, closedPositionCount: 0, totalPositionLimit: 1, suggestedPrice: null },
+    { id: "ndx_ema_bias", name: "NDX EMA 9/20 Bias", underlying: "NDX", enabled: true, needsAttention: false, needsAttentionReason: null, configError: null, missingSettings: null, errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 2, dailyNewPositionLimit: 10, activePositionCount: 1, closedPositionCount: 1, totalPositionLimit: 1, suggestedPrice: 21_003.7, allocation: 2000, atRisk: 650, available: 1350, settings: { quantity: 1, widthPoints: 10, strikeIncrement: 5, putShortOffset: -0.01, callShortOffset: 0.01, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100, window: "9:35am - 3:55pm", alerts: { open: true, close: true, warning: true, error: true } } },
+    { id: "spx_ema_bias", name: "SPX EMA 9/20 Bias", underlying: "SPX", enabled: false, needsAttention: false, needsAttentionReason: null, configError: "SPX needs settings", missingSettings: [{ key: "BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", why: "ask the owner" }], errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 0, dailyNewPositionLimit: 10, activePositionCount: 0, closedPositionCount: 0, totalPositionLimit: 3, suggestedPrice: null, allocation: null, atRisk: 0, available: null, settings: null },
   ],
   positions: [
     { id: "p2", botId: "ndx_ema_bias", underlying: "NDX", type: "short_call_spread", status: "open", shortStrike: 21_035, longStrike: 21_045, requestedQuantity: 1, filledQuantity: 1, expiry: "2026-10-06", credit: 3.5, openedAt: 2, closedAt: null, venue: "mock", test: true },
@@ -23,6 +23,8 @@ const data = (over: Partial<StatusResponse> = {}): StatusResponse => ({
     { id: "s2", botId: "ndx_ema_bias", signal: "bearish", price: 21_003.7, status: "accepted", rejectReason: null, receivedAt: 2, test: true, symbol: "NDX", decisions: [{ id: "d1", outcome: "closed", reason: "Closed short_put_spread position.", createdAt: 2 }, { id: "d2", outcome: "opened", reason: "Opened new position.", createdAt: 3 }] },
     { id: "s3", botId: "ndx_ema_bias", signal: "bullish", price: 0, status: "rejected", rejectReason: "bad_secret", receivedAt: 1, test: false, symbol: null, decisions: [] },
   ],
+  alerts: [{ id: "a1", botId: "ndx_ema_bias", kind: "open", outcome: "opened", message: "NDX EMA 9/20 Bias: Opened new position.", createdAt: 3, email: "off" }],
+  alertEmail: { enabled: false, to: null },
   ...over,
 });
 
@@ -77,6 +79,39 @@ describe("StatusView", () => {
     expect(html).toContain("Setup needed");
     expect(html).toContain("PUT_SHORT_OFFSET");
     expect(html).toContain("Finish this bot&#x27;s setup first.");
+  });
+
+  it("shows the owner's numbers: allocation, capital at risk, available, positions today, active positions", () => {
+    const html = render(data());
+    for (const label of ["Allocation", "Capital at risk", "Available", "Positions today", "Active positions"]) expect(html).toContain(label);
+    expect(html).toContain("$2,000");
+    expect(html).toContain("$650");
+    expect(html).toContain("$1,350");
+    expect(html).toContain("2/10"); // positions today against the daily limit
+    expect(html).toContain("1/1"); // active positions against the position limit
+  });
+
+  it("says how strikes are chosen: offsets, rounding, window, order price", () => {
+    const html = render(data());
+    expect(html).toContain("Short put -0.01 / short call +0.01");
+    expect(html).toContain("out of the money (put down, call up)");
+    expect(html).toContain("9:35am - 3:55pm");
+    expect(html).toContain("100% (open) / 100% (close) of bid/ask");
+  });
+
+  it("lists activity alerts, with email off", () => {
+    const html = render(data());
+    expect(html).toContain("Activity alerts");
+    expect(html).toContain(">Opened<");
+    expect(html).toContain("NDX EMA 9/20 Bias: Opened new position.");
+    expect(html).toContain("Email off");
+    expect(render(data({ alertEmail: { enabled: true, to: "owner@example.invalid" } }))).toContain("queued only");
+  });
+
+  it("shows the target price, rounding and strikes under a decision", () => {
+    const d = data();
+    d.signals[0].decisions[1].strikePlan = "Target 21,003.69 (21,003.7 - 0.01), rounded down to 5 -> short 21,000, long 20,990";
+    expect(render(d)).toContain("Target 21,003.69 (21,003.7 - 0.01), rounded down to 5 -&gt; short 21,000, long 20,990");
   });
 
   it("offers Reset test data on the mock executor", () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import { planStrikes } from "@/lib/automation/strikes";
 import { useEffect, useMemo, useState } from "react";
 import { IconChevronDown, IconMore, IconPlus } from "@/components/icons";
 import { Card } from "@/components/ui";
@@ -81,24 +82,29 @@ export function PositionsTab({ ctx }: { ctx: BotContext }) {
   );
 }
 
-/** SPX last price, polled lightly - the "Last" column. "—" when there's no live quote. */
-function useSpxLast(): number | null {
-  const [price, setPrice] = useState<number | null>(null);
+/** Last price of each underlying the positions trade (SPX, NDX...), polled lightly - the "Last" column.
+ * null when there's no live quote for it. */
+function useLasts(symbols: string[]): Record<string, number | null> {
+  const [prices, setPrices] = useState<Record<string, number | null>>({});
+  const key = [...new Set(symbols)].sort().join(",");
   useEffect(() => {
     let alive = true;
+    const list = key ? key.split(",") : [];
     const tick = () =>
-      fetch("/api/quote?symbol=SPX")
-        .then((r) => r.json())
-        .then((q) => alive && setPrice(typeof q?.tick?.price === "number" ? q.tick.price : null))
-        .catch(() => undefined);
+      list.forEach((symbol) =>
+        fetch(`/api/quote?symbol=${encodeURIComponent(symbol)}`)
+          .then((r) => r.json())
+          .then((q) => alive && setPrices((p) => ({ ...p, [symbol]: typeof q?.tick?.price === "number" ? q.tick.price : null })))
+          .catch(() => undefined),
+      );
     tick();
     const id = setInterval(tick, 10_000);
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, []);
-  return price;
+  }, [key]);
+  return prices;
 }
 
 const dayDiff = (fromKey: string, toKey: string) => Math.round((Date.parse(toKey) - Date.parse(fromKey)) / 86_400_000);
@@ -111,7 +117,11 @@ export function PositionsView(props: PositionsViewProps) {
   const [closedOpen, setClosedOpen] = useState(props.initialClosedOpen ?? true);
   const [showTags, setShowTags] = useState(false);
   const [status, setStatus] = useState<"all" | "closed" | "expired" | "rejected">("all");
-  const last = useSpxLast();
+  const underlying = newPosition?.config.underlying ?? positions[0]?.underlying ?? "SPX";
+  const symbols = [...new Set([underlying, ...positions.map((p) => p.underlying)])];
+  const lasts = useLasts(symbols);
+  const lastOf = (p: { underlying: string }) => lasts[p.underlying] ?? null;
+  const last = lasts[underlying] ?? null;
 
   // "View position" from the Log: open that position once it's here.
   useEffect(() => {
@@ -126,7 +136,7 @@ export function PositionsView(props: PositionsViewProps) {
   const closedGroups = groupByDay(closed, (p) => p.closedAt ?? p.openedAt ?? 0, now);
   const signalById = useMemo(() => new Map(signals.map((s) => [s.id, s])), [signals]);
 
-  const table = { estimateFor, botName, onSelect: setSelected, last, now, signalById, showTags };
+  const table = { estimateFor, botName, onSelect: setSelected, lastOf, now, signalById, showTags };
 
   const totals = open.reduce(
     (acc, p) => {
@@ -173,8 +183,12 @@ export function PositionsView(props: PositionsViewProps) {
                 <option value="expired">Expired</option>
                 <option value="rejected">Rejected</option>
               </select>
-              <select aria-label="Symbol" className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-fg" defaultValue="SPX">
-                <option value="SPX">Symbol: SPX</option>
+              <select aria-label="Symbol" className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-fg" defaultValue={symbols[0]}>
+                {symbols.map((s) => (
+                  <option key={s} value={s}>
+                    Symbol: {s}
+                  </option>
+                ))}
               </select>
               <Dropdown
                 align="right"
@@ -224,7 +238,7 @@ export function PositionsView(props: PositionsViewProps) {
           signals={signals}
           estimate={estimateFor(selected.botId)}
           bot={botInfo?.(selected.botId) ?? { id: selected.botId, name: botName?.(selected.botId) ?? selected.botId }}
-          last={last}
+          last={lastOf(positions.find((p) => p.id === selected.id) ?? selected)}
           now={now}
           onClose={() => setSelected(null)}
           onChanged={onChanged}
@@ -240,7 +254,7 @@ interface TableProps {
   estimateFor: (botId: string) => number | undefined;
   botName?: (botId: string) => string;
   onSelect: (p: Position) => void;
-  last: number | null;
+  lastOf: (p: Position) => number | null;
   now: number;
   signalById: Map<string, Signal>;
   showTags: boolean;
@@ -249,7 +263,7 @@ interface TableProps {
 function Description({ p, showTags }: { p: Position; showTags?: boolean }) {
   return (
     <div>
-      <div className="font-medium">SPX</div>
+      <div className="font-medium">{p.underlying}</div>
       <div className="text-xs text-muted">
         {TYPE_LABEL[p.type]}
         {p.manual ? " · manual" : ""}
@@ -267,7 +281,7 @@ function Description({ p, showTags }: { p: Position; showTags?: boolean }) {
   );
 }
 
-function OpenTable({ positions, totals, estimateFor, botName, onSelect, last, now, showTags }: TableProps & { positions: Position[]; totals: { premium: number; risk: number } }) {
+function OpenTable({ positions, totals, estimateFor, botName, onSelect, lastOf, now, showTags }: TableProps & { positions: Position[]; totals: { premium: number; risk: number } }) {
   const today = etDayKey(now);
   return (
     <div className="overflow-x-auto">
@@ -296,7 +310,7 @@ function OpenTable({ positions, totals, estimateFor, botName, onSelect, last, no
                 <Td><Description p={p} showTags={showTags} /></Td>
                 {botName && <Td className="text-muted">{botName(p.botId)}</Td>}
                 <Td><LegPills p={p} /></Td>
-                <Td right>{last != null ? num(last) : "—"}</Td>
+                <Td right>{lastOf(p) != null ? num(lastOf(p)!) : "—"}</Td>
                 <Td right><span className="rounded-md bg-surface-2 px-1.5 py-0.5 text-xs">{Math.max(0, dayDiff(today, p.expiry))}d</span></Td>
                 <Td right>{p.filledQuantity ? `${p.filledQuantity}/${p.requestedQuantity}` : p.requestedQuantity}</Td>
                 <Td right className="text-faint">—</Td>
@@ -400,8 +414,7 @@ function NewPositionModal({
   const [type, setType] = useState<PositionType>("short_put_spread");
   const suggest = (t: PositionType) => {
     if (last == null) return "";
-    const offset = t === "short_put_spread" ? config.putShortOffset : config.callShortOffset;
-    return String(Math.round((last + offset) / config.strikeIncrement) * config.strikeIncrement);
+    return String(planStrikes(t, last, config).shortStrike);
   };
   const [shortStrike, setShortStrike] = useState(suggest("short_put_spread"));
   const [busy, setBusy] = useState(false);
@@ -458,7 +471,7 @@ function NewPositionModal({
             </button>
           ))}
         </div>
-        <Field label="Short strike" hint={last != null ? `Suggested from SPX ${num(last)} and the bot's offset.` : "No live quote - enter the strike."}>
+        <Field label="Short strike" hint={last != null ? `Suggested from ${config.underlying} ${num(last)} and the bot's offset.` : "No live quote - enter the strike."}>
           <input className={inputClass} inputMode="decimal" value={shortStrike} onChange={(e) => setShortStrike(e.target.value)} />
         </Field>
         <KeyValue

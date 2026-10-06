@@ -2,6 +2,12 @@ export type SignalDirection = "bullish" | "bearish";
 
 export type PositionType = "short_put_spread" | "short_call_spread";
 
+/** How the short strike is snapped onto the strike grid. "outward" (the default):
+ * the short put rounds DOWN and the short call rounds UP - the out-of-the-money
+ * side of the target price. "nearest" rounds to the closest strike.
+ * TODO(unconfirmed): verify against Option Alpha's real behavior. */
+export type StrikeRounding = "outward" | "nearest";
+
 export type PositionStatus = "opening" | "open" | "closing" | "closed" | "expired" | "rejected";
 
 /** Every check that asks "does an active position exist" must count all three -
@@ -63,6 +69,17 @@ export interface BotStaticConfig {
   /** The option series root ("NDXP" for NDX dailies). Informational until a
    * real broker executor needs it to build option symbols. */
   optionRoot?: string;
+  /** Default "outward". See StrikeRounding. */
+  strikeRounding?: StrikeRounding;
+  /** The order price as a percent of the bid/ask, for opening and closing orders
+   * (Option Alpha: "100% of bid/ask"). Unset = 100.
+   * TODO(unconfirmed): the exact meaning - confirm with the owner. Carried on the
+   * order as `pricePercent`; the mock has no bid/ask, so nothing is computed from it yet. */
+  openPricePercent?: number;
+  closePricePercent?: number;
+  /** This bot's own total-position limit; unset = the global default. A safeguard
+   * set on the bot (Settings > Safeguards) still wins. */
+  totalPositionLimit?: number;
   /** "HH:MM" America/New_York: when this bot's positions are swept to expired.
    * Unset = 4:05pm ET. Index options can trade later than equities, so a
    * bot on such a series sets its own. */
@@ -241,6 +258,8 @@ export type ExecutorVenue = "mock" | "tradier";
 
 export interface OpenSpreadRequest {
   botId: string;
+  /** Percent of bid/ask the order should be priced at (see BotStaticConfig.openPricePercent). */
+  pricePercent?: number;
   /** "NDX" / "SPX" - the underlying symbol. Optional: the mock ignores it. */
   underlying?: string;
   /** Option series root ("NDXP"). A broker executor refuses to guess it when unset. */
@@ -258,7 +277,7 @@ export interface BrokerExecutor {
   /** What kind of executor this is; unset is treated as "mock". */
   readonly venue?: ExecutorVenue;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
-  placeCloseOrder(position: Position): Promise<{ ref: string }>;
+  placeCloseOrder(position: Position, options?: { pricePercent?: number }): Promise<{ ref: string }>;
   getOrder(ref: string): Promise<OrderState>;
   cancelOrder(ref: string): Promise<void>;
   listPositions(botId: string): Promise<Position[]>;
@@ -305,4 +324,45 @@ export interface Run {
   trigger: string;
   startedAt: number;
   nodes: TraceNode[];
+}
+
+// --- Activity alerts: what happened, in plain words, for the status page (and optionally email) ---
+
+export type AlertKind = "open" | "close" | "warning" | "error";
+
+export interface ActivityAlert {
+  id: string;
+  botId: string;
+  kind: AlertKind;
+  /** The decision outcome that raised it. */
+  outcome: DecisionOutcome;
+  message: string;
+  signalId: string | null;
+  createdAt: number;
+  /** "off" unless email alerts are switched on; "queued" = written to the outbox (no sender is wired yet). */
+  email: "off" | "queued";
+}
+
+// --- App-wide settings (Settings page) ---
+
+export interface AppSettings {
+  /** The default signal window for every bot that doesn't have its own ("HH:MM", New York). null = the environment's (9:35 - 3:55 unless overridden). */
+  tradingWindow: { start: string; end: string } | null;
+  emailAlerts: {
+    /** Off by default. TODO(owner): no mail sender is wired yet, so enabling it only queues each alert. */
+    enabled: boolean;
+    to: string;
+    /** "When a position is opened or closed". */
+    onTrade: boolean;
+    /** Warnings and errors. */
+    onWarningError: boolean;
+    /** Alerts for test trades (the mock executor's). */
+    includeTest: boolean;
+  };
+  /** Minutes before a sign-in expires: 30, 60, 120, 240 or 480. */
+  sessionTimeoutMinutes: number;
+}
+
+export interface AppSettingsRow extends Partial<AppSettings> {
+  id: "app";
 }

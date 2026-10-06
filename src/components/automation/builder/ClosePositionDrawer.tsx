@@ -13,7 +13,8 @@ const withCurrent = (options: string[], current: string) => (current && !options
 export function ClosePositionDrawer({ step, readOnly, onSave, onClose }: { step: Step; readOnly?: boolean; onSave: (config: Record<string, string>) => void; onClose: () => void }) {
   const [c, setC] = useState<Record<string, string>>(step.config);
   const set = (k: string, v: string) => setC((p) => ({ ...p, [k]: v }));
-  const chip = c.type === "any" ? "Position (SPX, any spread)" : `Position (SPX, ${POSITION_TYPES[c.type] ?? "position"})`;
+  const symbol = c.symbol || "SPX";
+  const chip = c.type === "any" ? `Position (${symbol}, any spread)` : `Position (${symbol}, ${POSITION_TYPES[c.type] ?? "position"})`;
 
   return (
     <Drawer

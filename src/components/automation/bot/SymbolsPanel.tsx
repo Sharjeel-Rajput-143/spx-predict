@@ -6,7 +6,7 @@ import { Checkbox, Drawer, Dropdown, Field, InfoTip, MenuItem, Pill, buttonClass
 import { DEFAULT_SYMBOL_SETTINGS, loadRecentSymbols, loadSymbolSettings, saveSymbolSettings, type SymbolSettings } from "../builder/store";
 import { newId } from "../builder/model";
 
-const WATCHLISTS = ["SPX only", "Index options (SPX, XSP, NDX)", "Mega-cap tech", "My watchlist"];
+const watchlists = (underlying: string) => [`${underlying} only`, "Index options (SPX, XSP, NDX)", "Mega-cap tech", "My watchlist"];
 const SORTS = ["None", "Alphabetical", "Price: high to low", "Price: low to high", "Volume: high to low", "IV rank: high to low"];
 const LIMITS = ["5 symbols", "10 symbols", "25 symbols", "50 symbols", "100 symbols"];
 const POSITION_OPS = ["1 or more", "none", "exactly 1"];
@@ -15,9 +15,9 @@ const INDICATORS = ["RSI(14)", "EMA(9)", "EMA(20)", "SMA(50)", "MACD", "ATR(14)"
 const MAX_EXCLUDED = 50;
 
 /** "Bot Symbols": how a scanning bot would build its symbol list. These bots
- * trade SPX from webhook signals and don't scan, so the settings are saved
+ * trade their one underlying from webhook signals and don't scan, so the settings are saved
  * with the design (this browser) and the panel says so. */
-export function SymbolsPanel({ botId, onSaved, onClose }: { botId: string; onSaved: (s: SymbolSettings) => void; onClose: () => void }) {
+export function SymbolsPanel({ botId, underlying = "SPX", onSaved, onClose }: { botId: string; underlying?: string; onSaved: (s: SymbolSettings) => void; onClose: () => void }) {
   const [s, setS] = useState<SymbolSettings>(DEFAULT_SYMBOL_SETTINGS);
   const [draftExcluded, setDraftExcluded] = useState("");
   const [recents, setRecents] = useState<string[]>([]);
@@ -71,13 +71,13 @@ export function SymbolsPanel({ botId, onSaved, onClose }: { botId: string; onSav
         <p className="text-sm text-muted">Your bot will sort and filter the selected watchlist before every scan to produce a list of symbols.</p>
         <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
           <Pill tone="warn">Preview</Pill>
-          <span>Saved in this browser. The signal engine trades SPX from webhook signals and doesn&apos;t scan, so it doesn&apos;t read these yet.</span>
+          <span>Saved in this browser. The signal engine trades {underlying} from webhook signals and doesn&apos;t scan, so it doesn&apos;t read these yet.</span>
         </div>
 
         <Field label="Watchlist">
           <select className={inputClass} value={s.watchlist} onChange={(e) => set("watchlist", e.target.value)} aria-label="Watchlist">
             <option value="">Select a watchlist...</option>
-            {WATCHLISTS.map((w) => (
+            {watchlists(underlying).map((w) => (
               <option key={w} value={w}>
                 {w}
               </option>

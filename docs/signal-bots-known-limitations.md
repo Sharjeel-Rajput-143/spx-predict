@@ -51,7 +51,7 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 
 ## NDX bot (ndx_ema_bias)
 
-- It is the same engine and webhook as SPX, configured by `BOT_NDX_EMA_BIAS_*` env values. Until the required ones are set (strike increment, both offsets, expected credit, price range, sweep time) it shows "Setup needed" and every signal for it logs `config_error` naming what is missing. They have no defaults on purpose; the real numbers come from Blue and the option chain.
+- It is the same engine and webhook as SPX, configured by `BOT_NDX_EMA_BIAS_*` env values. Until the required ones are set (strike increment, expected credit, price range, sweep time) it shows "Setup needed" and every signal for it logs `config_error` naming what is missing. They have no defaults on purpose; the real numbers come from Blue and the option chain.
 - Still to verify before live use (marked TODO in `.env.example`): the NDXP root and a 0DTE series every weekday, the real strike increment, the series' final trading time, and the broker. Mock executor only.
 - `symbol_mismatch` is checked only when the alert sends a `symbol`. A body with no symbol is protected by the price range alone, so keep the alert body from the addendum.
 - Bots are only ever created in the UI as SPX; NDX is the env-configured built-in. Extra NDX bots from the New Bot form are accepted by validation but the form has no NDX option yet.
@@ -66,3 +66,42 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 - The mock fills at the configured expected credit and reports no close price, so credit shows the configured number and P/L stays blank. Nothing here says anything about real fills.
 - Reset test data wipes every recorded alert, position, order, decision and run (bots and settings stay) and is refused unless the mock executor is selected.
 - `EXECUTOR=tradier` is implemented but disabled and unverified against any real account - see the TODO list in `docs/tradier-executor-research.md`. `symbol_mismatch` and `price_out_of_range` leave the signal row as "accepted" (the route answers 200); the decision log carries the outcome.
+
+## Settings taken from the live Option Alpha SPX bot
+
+- **Offsets are decimals now.** The live bot puts the short strike 0.01 beyond the price. Both built-in bots default to put -0.01 / call +0.01. For SPX that is the owner's real value; for NDX it is the SPX bot's value copied over - **owner to confirm for NDX**. The NDX strike increment is still required, with no default.
+- **Rounding mode (`*_STRIKE_ROUNDING`, default `outward`).** The short put rounds down and the short call rounds up (the out-of-the-money side); `nearest` is the alternative. **TODO: verify "outward" against Option Alpha's real behavior.** This is the default for every bot, so an SPX signal at a price like 7720.5 now gives a call spread at 7745/7750 where it used to give 7740/7745. Set `BOT_SPX_EMA_BIAS_STRIKE_ROUNDING=nearest` to get the old result.
+- **Every decision records how its strikes were chosen**: price, signed offset, target (price + offset), rounding mode, increment and the chosen short/long strikes - in the decision's detail, on the status page under each alert, and in the run trace.
+- **Order price is a percent of bid/ask** (`*_OPEN_PRICE_PERCENT`, `*_CLOSE_PRICE_PERCENT`, default 100, shown on the bot's Settings and on the order). **TODO: the exact meaning of "100% of bid/ask" is unconfirmed**, and the mock has no bid/ask, so nothing is computed from it yet - it travels with the order for a real executor. The credit-below-width check is unchanged.
+- **Position limits per bot.** SPX holds up to 3 positions by default (`BOT_SPX_EMA_BIAS_TOTAL_POSITION_LIMIT`), NDX stays at 1; a limit set under Settings > Safeguards still wins. One position per side stays the default, so the live bot's flows (close the opposite side, then open if none is open) are unchanged.
+- **Activity alerts** (opened, closed, warning, error) are recorded for each bot (per-bot switches under Settings > Alerts, all on) and listed on the status page. Warnings are safeguard blocks (limits, symbol mismatch, price out of range, overlap); errors are failures (executor error, rejected or timed-out orders, bad config). Routine skips (bot off, outside hours, same side already held, duplicates, dry run) raise none. **Email is optional and off by default, and no mail sender is wired**: with `ALERT_EMAIL_ENABLED=true` and `ALERT_EMAIL_TO` set, each alert is only marked "queued". Choosing a provider is the owner's call.
+- **The two-stage flip stays**: close, wait for the confirmation, then open - safer than Option Alpha's single path.
+- **Option Alpha's "Close Monitor" automations are deliberately not copied.** It uses them to sweep wrong-side positions. If a similar check is wanted later it must compare against the **latest confirmed signal**, so it can never close the correct side.
+
+## Order pricing and the other Option Alpha options (decided)
+
+- **The mechanism is understood.** "100% of bid/ask" on the live bot is the **Final Price** setting inside a **SmartPricing** ladder running in **Normal** mode: up to four timed limit orders, ten seconds apart, the last one reaching the full bid/ask spread. Close Position uses the same preset, with quantity 100% of the position.
+- **Our single price plus the 120 second timeout is a deliberate simplification of that, for now.** The engine sends one price and waits; the percent-of-bid/ask settings travel with the order but nothing is computed from them, because the mock has no bid/ask.
+- **Final check with Blue:** only whether the live bot was ever switched off Normal. The mechanism itself is not an open question.
+- **Planned follow-up, tied to the broker decision (deferred, not forgotten):** once a broker is chosen and wired to live quotes (Tradier or otherwise), revisit adding a repricing ladder that steps toward the full spread the way Normal does - four prices, ten seconds each, ending at 100% of bid/ask. Until then the single price stays.
+- **Intentionally out of scope:** the other strike modes (delta, percent, expected move, GEX...), the other position-sizing modes (risk caps, percent of allocation, martingale), exit options (profit taking, stop loss, trailing stop...) and the entry and position filters. The live bot uses none of them, so there is nothing in its behavior to match. The engine stays as is: flat offsets for strikes, fixed contract sizing, no exit logic, hold to expiry with the end-of-day sweep. Any of these gets built only when specifically asked for.
+- **Other points from the same review:** OA's start/end times are choices on a 5-minute grid (ours take any HH:MM); OA has no weekday condition (our guard adds weekdays and the NYSE calendar); its position-count check ("exactly or more than 1 ... any status") matches ours, which counts opening, open and closing positions; its expiration is exactly 0 days, any series (not monthlys only), calendar days; NDX is not a searchable symbol there.
+
+## The built-in canvas is live; the flows you design are still previews
+
+- **Bullish and Bearish signal (Settings > Automations):** the canvas now opens as "Built-in · live". Click a node to edit its real values: the market time window (start and end on the 5-minute marks, or back to the default window), the open step (short strike offset with decimals, rounding, width, contracts, expected credit, price % of bid/ask) and the close step (price % of bid/ask). Save writes them to the bot's settings - the same ones as Settings > Bot inputs - and they apply to the next signal; an open position keeps the values it was opened with. The canvas redraws from the saved values.
+- **The shape of the flow is fixed.** It is the engine's logic, so steps can't be added, removed or reordered there, and the position-check nodes are explanations, not editable. Duplicate protection, the limits (Settings > Safeguards), the strike checks and the failsafe aren't drawn.
+- **Shared values.** Window, rounding, width, contracts, credit and price % belong to the bot, so editing them on the Bullish canvas also changes the Bearish one. Only the short offset is per side.
+- **Saving stores the bot's inputs with the bot**, which overrides its environment settings from then on (as Bot inputs already did for a built-in bot). The values it didn't show - option root, price range, sweep time, position limit - are carried over unchanged.
+- **Designs you build with the + button are unchanged:** they save to this browser only and don't reach the engine.
+
+
+## Settings page (modelled on Option Alpha's)
+
+- **Sections:** General, Trading Accounts, Bot Archive, Webhooks - in this app's own styling. Option Alpha's Subscription Plan, Community Profile and Referral Program are about their business, not this engine, and are not built. Personal information and Change Password are omitted too: sign-in is one shared password (`AUTOMATION_STATUS_PASSWORD`).
+- **Real, saved settings:** the default trading window (Bot schedule; a bot's own window on its canvas still wins), email preferences, session timeout, and text size (this browser only). Bot Archive restores and deletes for real.
+- **Email is preferences only.** No mail sender is connected, so enabling it queues each alert and sends nothing. Which provider to use is the owner's call.
+- **Session timeout** only matters when sign-in is required (a password is set). Two-step authentication is shown as not available.
+- **Trading Accounts** is read-only: the executor in use and the accounts the bots name. Add account is disabled until the broker decision.
+- **Webhooks** now leads with the alerts this app *receives*: the URL, whether `WEBHOOK_SECRET` is set (never its value), and a ready TradingView message for each bot and direction with a `<SECRET>` placeholder. The old outbound Option Alpha connections sit behind a "Show connections" button, so opening Settings no longer loads them.
+- **Exit options and in-the-money positions:** unlike Option Alpha there are no exit options and no auto-close, so these show as explanations, not controls.

@@ -199,7 +199,7 @@ describe("through the engine, with the kill switch and dry run", () => {
     const { calls, impl } = fakeFetch([{ body: SAMPLE_PLACED }, { body: sampleOrder({ status: "filled", quantity: 1, exec_quantity: 1, avg_fill_price: 3.4 }) }]);
     await processSignal(send("bullish"), { executor: new TradierExecutor(baseConfig, impl), now: BASE_NOW, ...fast });
 
-    expect(calls[0].form["option_symbol[0]"]).toBe("NDXP261006P20975000"); // root from the bot's config, strikes from the engine
+    expect(calls[0].form["option_symbol[0]"]).toBe("NDXP261006P20970000"); // root from the bot's config, strikes from the engine
     const position = positionsStore.query((p) => p.botId === NDX_BOT_ID)[0];
     expect(position).toMatchObject({ status: "open", credit: 3.4, venue: "tradier", optionRoot: "NDXP", brokerOrderRef: "4815162" });
     expect(decisionsStore.all().map((d) => d.outcome)).toEqual(["opened"]);

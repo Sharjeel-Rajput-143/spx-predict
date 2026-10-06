@@ -60,6 +60,7 @@ export function AutomationBuilder({
   botName,
   readOnly = false,
   note,
+  liveEditor,
   onSaved,
   onClose,
 }: {
@@ -69,6 +70,9 @@ export function AutomationBuilder({
   readOnly?: boolean;
   /** A line of context shown above the canvas (used for built-in flows). */
   note?: string;
+  /** Built-in flows only: a node's real, saved-to-the-bot editor. Returns null for a node with nothing to edit
+   * (it then opens read-only). The canvas structure itself stays fixed. */
+  liveEditor?: (step: Step, close: () => void) => React.ReactNode | null;
   onSaved: (draft: AutomationDraft) => void;
   onClose: () => void;
 }) {
@@ -153,7 +157,10 @@ export function AutomationBuilder({
     },
   };
 
-  const opened = openId ? findStep(steps, openId) : undefined;
+  const openedStep = openId ? findStep(steps, openId) : undefined;
+  const live = openedStep && liveEditor ? liveEditor(openedStep, () => setOpenId(null)) : null;
+  /** The preview drawers only open for a node that has no live editor. */
+  const opened = live ? undefined : openedStep;
   const captioning = captionId ? findStep(steps, captionId) : undefined;
   const noting = notesId ? findStep(steps, notesId) : undefined;
 
@@ -196,7 +203,7 @@ export function AutomationBuilder({
           ))}
           {!readOnly && <option value="__new">New folder...</option>}
         </select>
-        <Pill tone={readOnly ? "info" : "warn"}>{readOnly ? "Built-in · read only" : "Preview"}</Pill>
+        <Pill tone={readOnly ? "info" : "warn"}>{readOnly ? (liveEditor ? "Built-in · live" : "Built-in · read only") : "Preview"}</Pill>
         {saved && <span className="text-xs text-up">Saved</span>}
         {flash && <span className="text-xs text-muted">{flash}</span>}
         <div className="ml-auto flex items-center gap-2">
@@ -312,6 +319,7 @@ export function AutomationBuilder({
         />
       )}
 
+      {live}
       {opened && needsCondition(opened.kind) && (
         <DecisionDrawer
           title={stepInfo(opened.kind).name}

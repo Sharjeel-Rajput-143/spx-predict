@@ -225,7 +225,8 @@ export function describeStep(s: Step, inputs: BotInput[] = []): string {
     case "open_trade_idea":
       return `Open trade idea (${c.symbol || "symbol?"})`;
     case "close_position":
-      return `Close Position (${c.type === "any" ? "SPX, any spread" : `SPX, ${POSITION_TYPES[c.type] ?? "position"}`})`;
+      const symbol = c.symbol || "SPX";
+      return `Close Position (${c.type === "any" ? `${symbol}, any spread` : `${symbol}, ${POSITION_TYPES[c.type] ?? "position"}`})`;
     case "update_exit":
       return `Exit options: profit ${c.profit ? `${c.profit}%` : "—"}, stop ${c.stop ? `${c.stop}%` : "—"}`;
     case "notification":

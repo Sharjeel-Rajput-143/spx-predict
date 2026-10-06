@@ -306,6 +306,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
       {run && (
         <RunModal
           botId={botId}
+          underlying={data.config?.underlying}
           initialSignal={run.signal}
           lastPrice={data.signals.find((s) => s.status === "accepted")?.price}
           onClose={() => setRun(null)}
