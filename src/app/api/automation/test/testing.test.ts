@@ -118,7 +118,7 @@ describe("Send test alert goes through the real webhook path", () => {
     expect((await alert(post("alert", { bot: NDX_BOT_ID, signal: "bullish" }))).status).toBe(400);
     expect((await alert(post("alert", { bot: NDX_BOT_ID, signal: "bullish", price: -1 }))).status).toBe(400);
 
-    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "abc");
     const res = await send(NDX_BOT_ID, "bullish", 21_003.7);
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/STRIKE_INCREMENT/);
@@ -192,12 +192,12 @@ describe("status page data", () => {
     expect(latest.decisions[0].strikePlan).toMatch(/^Target 7,690/);
   });
 
-  it("suggests the middle of the price range for a bot that has had no alert, and lists missing settings for one that can't run", async () => {
+  it("suggests the middle of the price range for a bot that has had no alert, and reports a wrong setting without failing", async () => {
     const data = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
     expect(data.bots.find((b: { id: string }) => b.id === NDX_BOT_ID).suggestedPrice).toBe(22_500); // (15,000 + 30,000) / 2, on the increment
-    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MAX", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "abc");
     const broken = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
-    expect(broken.bots.find((b: { id: string }) => b.id === NDX_BOT_ID).missingSettings.map((m: { key: string }) => m.key)).toEqual(["BOT_NDX_EMA_BIAS_PRICE_MAX"]);
+    expect(broken.bots.find((b: { id: string }) => b.id === NDX_BOT_ID).configError).toMatch(/STRIKE_INCREMENT/);
   });
 
   it("reports a misconfigured broker executor instead of failing", async () => {

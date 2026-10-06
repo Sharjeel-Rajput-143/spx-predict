@@ -20,13 +20,8 @@ WEBHOOK_SECRET=<any long random string>
 AUTOMATION_STATUS_PASSWORD=<a password for the admin pages>
 AUTOMATION_DRY_RUN=true            # decisions and ladders only, no orders - until you turn it off
 
-# NDX bot - the values the owner hasn't given, taken from the real chain by the probe below:
-BOT_NDX_EMA_BIAS_STRIKE_INCREMENT=<from the probe>
-BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE=<a credit below 10, e.g. what the probe's sample spread shows>
-BOT_NDX_EMA_BIAS_PRICE_MIN=<a level well below NDX today>
-BOT_NDX_EMA_BIAS_PRICE_MAX=<a level well above NDX today>
-BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME=<HH:MM ET after the NDXP series' last trading time>
-BOT_NDX_EMA_BIAS_OPTION_ROOT=<from the probe: NDXP if the daily series is listed under it>
+# The NDX bot needs no settings: it has working defaults (strike spacing 5, option root NDXP, sweep 16:15 ET,
+# offsets -0.01/+0.01). The probe below prints the real spacing/root if you want to override them.
 ```
 Do **not** set `TRADIER_BASE_URL` or `TRADIER_ALLOW_PRODUCTION`. Leave the sandbox default.
 

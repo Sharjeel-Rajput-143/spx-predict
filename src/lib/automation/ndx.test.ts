@@ -64,38 +64,39 @@ describe("NDX bot config", () => {
     });
   });
 
-  it.each([
-    ["BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"],
-    ["BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"],
-    ["BOT_NDX_EMA_BIAS_PRICE_MIN"],
-    ["BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME"],
-  ])("#3 refuses to start without %s, and says which value is missing", async (name) => {
-    vi.stubEnv(name, "");
-    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(name);
+  it("needs no settings at all: with none of the optional ones set it has working defaults", () => {
+    for (const k of ["STRIKE_INCREMENT", "OPENING_CREDIT_ESTIMATE", "PRICE_MIN", "PRICE_MAX", "EOD_SWEEP_TIME", "OPTION_ROOT", "PUT_SHORT_OFFSET", "CALL_SHORT_OFFSET"]) vi.stubEnv(`BOT_NDX_EMA_BIAS_${k}`, "");
+    const c = getBotStaticConfig(NDX_BOT_ID);
+    expect(c).toMatchObject({ strikeIncrement: 5, openingCreditEstimate: 3.5, eodSweepTime: "16:15", optionRoot: "NDXP", putShortOffset: -0.01, callShortOffset: 0.01 });
+    expect(c.priceRange).toBeUndefined();
+    const summary = summarizeBot(NDX_BOT_ID);
+    expect(summary).toMatchObject({ name: "NDX EMA 9/20 Bias", enabled: true, configError: null, missingSettings: null });
+  });
 
+  it("without a price range there is no sanity check on the price - the other checks still apply", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MIN", "");
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MAX", "");
+    await emit(NDX_BOT_ID, "bullish", { symbol: "SPX", barTime: "m" }); // the symbol check still refuses a wrong chart
+    expect(outcomesOf(NDX_BOT_ID)).toEqual(["symbol_mismatch"]);
+  });
+
+  it("the price range is both ends or neither", () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MAX", "");
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/PRICE_MIN and BOT_NDX_EMA_BIAS_PRICE_MAX must be set together/);
+  });
+
+  it.each([
+    ["BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"],
+    ["BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"],
+    ["BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", "HH:MM"],
+  ])("a setting that is set wrongly (%s) is refused with a message", async (name, expected) => {
+    vi.stubEnv(name, "abc");
+    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(expected);
     await emit(NDX_BOT_ID, "bullish");
     expect(executor.placedOrders).toHaveLength(0);
     const decision = decisionsStore.query((d) => d.botId === NDX_BOT_ID)[0];
     expect(decision.outcome).toBe("config_error");
-    expect(decision.reason).toContain(name);
-  });
-
-  it("while unconfigured it is switched off, keeps its name, and lists each missing value for the UI", () => {
-    for (const k of ["STRIKE_INCREMENT", "OPENING_CREDIT_ESTIMATE", "PRICE_MAX"]) vi.stubEnv(`BOT_NDX_EMA_BIAS_${k}`, "");
-    const summary = summarizeBot(NDX_BOT_ID);
-    expect(summary.name).toBe("NDX EMA 9/20 Bias");
-    expect(summary.enabled).toBe(false);
-    expect(summary.missingSettings?.map((m) => m.key)).toEqual([
-      "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT",
-      "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE",
-      "BOT_NDX_EMA_BIAS_PRICE_MAX",
-    ]);
-  });
-
-  it("names every missing value at once", () => {
-    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
-    vi.stubEnv("BOT_NDX_EMA_BIAS_PRICE_MAX", "");
-    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/STRIKE_INCREMENT[\s\S]*PRICE_MAX/);
+    expect(decision.reason).toContain(expected);
   });
 
   it("#4 refuses width 10 with increment 25 (width_not_multiple_of_increment), starts with increment 5", async () => {
@@ -313,11 +314,6 @@ describe("the live bot's settings, mirrored", () => {
     vi.stubEnv("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", "");
     vi.stubEnv("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", "");
     expect(getBotStaticConfig(NDX_BOT_ID)).toMatchObject({ putShortOffset: -0.01, callShortOffset: 0.01, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100 });
-  });
-
-  it("the increment still has no default", () => {
-    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
-    expect(() => getBotStaticConfig(NDX_BOT_ID)).toThrow(/BOT_NDX_EMA_BIAS_STRIKE_INCREMENT/);
   });
 
   it("with the default offsets the NDX strikes land at the first strike at or beyond the price", async () => {

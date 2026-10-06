@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { SMART_PRICING_MODES, type SmartPricingMode } from "./smartPricing";
-import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, isDemoHost, parseClockMinutes, requiredEnvNumber } from "./config";
+import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes } from "./config";
 import {
   alertsStore,
   botsStore,
@@ -45,35 +45,8 @@ function pricingAndLimits(prefix: string, defaultTotalPositionLimit: number): Pi
   };
 }
 
-const CREDIT_TODO =
-  "Phase 1 has no real option chain, so the engine needs a configured expected opening " +
-  "credit per spread (used for the allocation-limit check and the order's limit price). " +
-  "See .env.example's TODO - the spec's $2.20 is an example, not a confirmed live value.";
-
 /** Env vars the NDX bot cannot start without. Each is a real trading or safety
  * parameter that must come from Blue or the broker's option chain - never a guess. */
-/** DEMO ONLY: the trading settings nobody has given a demo deployment (a serverless host running just the mock executor,
- * so nothing real is behind it). They make the bots usable for a walk-through; they are test numbers, not anyone's real
- * settings, and are never applied locally, nor with a broker configured. */
-const DEMO_SETTINGS: Record<string, string> = {
-  BOT_NDX_EMA_BIAS_STRIKE_INCREMENT: "5",
-  BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE: "3.5",
-  BOT_NDX_EMA_BIAS_PRICE_MIN: "15000",
-  BOT_NDX_EMA_BIAS_PRICE_MAX: "30000",
-  BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME: "16:15",
-  BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE: "2.2",
-};
-
-if (isDemoHost()) for (const [key, value] of Object.entries(DEMO_SETTINGS)) if (!process.env[key]) process.env[key] = value;
-
-const NDX_REQUIRED: { key: string; why: string }[] = [
-  { key: "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", why: "confirm the real strike increment near the money from the NDX option chain" },
-  { key: "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", why: "expected credit per spread, must be below the 10 point width" },
-  { key: "BOT_NDX_EMA_BIAS_PRICE_MIN", why: "lowest NDX level a real signal can carry (sanity range)" },
-  { key: "BOT_NDX_EMA_BIAS_PRICE_MAX", why: "highest NDX level a real signal can carry (sanity range)" },
-  { key: "BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", why: "HH:MM ET after the confirmed final trading time of the NDX series" },
-];
-
 /** A built-in bot is missing required settings: carries the list so the UI can
  * show it as a checklist rather than one long sentence. */
 export class MissingSettingsError extends Error {
@@ -97,16 +70,6 @@ export const botDisplayName = (botId: string): string => botsStore.get(botId)?.n
 /** NDX is a second bot row driven by config, not forked code. Names every
  * missing required value at once so one look at the error is enough. */
 function ndxConfig(): BotStaticConfig {
-  const missing = NDX_REQUIRED.filter(({ key }) => !process.env[key]);
-  if (missing.length > 0) {
-    throw new MissingSettingsError(
-      missing,
-      `NDX bot cannot start - required setting${missing.length === 1 ? "" : "s"} not set: ` +
-        missing.map((m) => `${m.key} (${m.why})`).join("; ") +
-        ". These have no defaults on purpose - see .env.example.",
-    );
-  }
-  const need = (key: string) => requiredEnvNumber(key, "");
   const hoursStart = process.env.BOT_NDX_EMA_BIAS_HOURS_START;
   const hoursEnd = process.env.BOT_NDX_EMA_BIAS_HOURS_END;
   return {
@@ -118,18 +81,31 @@ function ndxConfig(): BotStaticConfig {
     optionRoot: envString("BOT_NDX_EMA_BIAS_OPTION_ROOT", "NDXP"),
     quantity: envNumber("BOT_NDX_EMA_BIAS_QUANTITY", 1),
     widthPoints: envNumber("BOT_NDX_EMA_BIAS_WIDTH_POINTS", 10),
-    strikeIncrement: need("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT"),
+    // NDX strikes near the money are 5 points apart (the sandbox probe, scripts/tradier-sandbox-probe.ts, prints the real spacing).
+    strikeIncrement: envNumber("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", 5),
     // Mirrors the live SPX bot (short strike 0.01 beyond the price, i.e. the first strike at or beyond it).
     // TODO(owner to confirm for NDX): these defaults are the SPX bot's, not a value anyone chose for NDX.
     putShortOffset: envNumber("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", -0.01),
     callShortOffset: envNumber("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", 0.01),
     ...pricingAndLimits("BOT_NDX_EMA_BIAS", 1),
     allocationLimit: envNumber("BOT_NDX_EMA_BIAS_ALLOCATION_LIMIT", 2000),
-    openingCreditEstimate: need("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE"),
-    eodSweepTime: process.env.BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME,
-    priceRange: { min: need("BOT_NDX_EMA_BIAS_PRICE_MIN"), max: need("BOT_NDX_EMA_BIAS_PRICE_MAX") },
+    // Only the fallback price (when there is no live quote to price the spread from, e.g. the mock) and the pre-trade risk check.
+    openingCreditEstimate: envNumber("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", 3.5),
+    // TODO(verify): index options keep trading until 4:15pm ET; positions are marked expired after that.
+    eodSweepTime: envString("BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", "16:15"),
+    // A sanity range for the signal's price is optional: set both ends to turn it on.
+    ...optionalPriceRange("BOT_NDX_EMA_BIAS"),
     ...(hoursStart && hoursEnd ? { hours: { start: hoursStart, end: hoursEnd } } : {}),
   };
+}
+
+/** `<PREFIX>_PRICE_MIN` and `_PRICE_MAX`: both or neither. */
+function optionalPriceRange(prefix: string): Pick<BotStaticConfig, "priceRange"> {
+  const min = process.env[`${prefix}_PRICE_MIN`];
+  const max = process.env[`${prefix}_PRICE_MAX`];
+  if (!min && !max) return {};
+  if (!min || !max) throw new Error(`${prefix}_PRICE_MIN and ${prefix}_PRICE_MAX must be set together (or neither).`);
+  return { priceRange: { min: envNumber(`${prefix}_PRICE_MIN`, 0), max: envNumber(`${prefix}_PRICE_MAX`, 0) } };
 }
 
 /** Startup checks that apply to every bot, whatever its source. The first
@@ -186,7 +162,8 @@ const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
     callShortOffset: envNumber("BOT_SPX_EMA_BIAS_CALL_SHORT_OFFSET", 0.01),
     ...pricingAndLimits("BOT_SPX_EMA_BIAS", 3),
     allocationLimit: envNumber("BOT_SPX_EMA_BIAS_ALLOCATION_LIMIT", 20000),
-    openingCreditEstimate: requiredEnvNumber("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", CREDIT_TODO),
+    // The spec's example credit; only the fallback price and the pre-trade risk check (a live quote sets the real price).
+    openingCreditEstimate: envNumber("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", 2.2),
   }),
   ndx_ema_bias: ndxConfig,
 };

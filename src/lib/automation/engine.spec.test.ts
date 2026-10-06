@@ -193,8 +193,8 @@ describe("executor exceptions", () => {
 });
 
 describe("missing required config", () => {
-  it("logs config_error and flags the bot instead of failing silently when the expected credit is unset", async () => {
-    vi.stubEnv("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", "");
+  it("logs config_error and flags the bot instead of failing silently when a setting is wrong", async () => {
+    vi.stubEnv("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", "abc");
     await emit("bullish");
 
     expect(outcomes()).toEqual(["config_error"]);

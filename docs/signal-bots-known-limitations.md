@@ -51,7 +51,7 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 
 ## NDX bot (ndx_ema_bias)
 
-- It is the same engine and webhook as SPX, configured by `BOT_NDX_EMA_BIAS_*` env values. Until the required ones are set (strike increment, expected credit, price range, sweep time) it shows "Setup needed" and every signal for it logs `config_error` naming what is missing. They have no defaults on purpose; the real numbers come from Blue and the option chain.
+- It is the same engine and webhook as SPX, configured by `BOT_NDX_EMA_BIAS_*` env values. It works with no settings: strike spacing 5, option root NDXP, a fallback credit of 3.5 (used only when there is no live quote and for the risk check), and positions marked expired at 16:15 ET. The signal-price sanity range is optional. All can be overridden; the sandbox probe prints the real spacing and root. A wrong value (not a number, a width that isn't a multiple of the spacing) is still refused, naming it.
 - Still to verify before live use (marked TODO in `.env.example`): the NDXP root and a 0DTE series every weekday, the real strike increment, the series' final trading time, and the broker. Mock executor only.
 - `symbol_mismatch` is checked only when the alert sends a `symbol`. A body with no symbol is protected by the price range alone, so keep the alert body from the addendum.
 - Bots are only ever created in the UI as SPX; NDX is the env-configured built-in. Extra NDX bots from the New Bot form are accepted by validation but the form has no NDX option yet.

@@ -36,8 +36,8 @@ describe("GET /api/automation/settings", () => {
     expect((await (await get()).json()).webhook.secretSet).toBe(false);
   });
 
-  it("lists a bot that isn't set up yet without failing", async () => {
-    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "");
+  it("lists a bot whose settings are wrong without failing", async () => {
+    vi.stubEnv("BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", "abc");
     const body = await (await get()).json();
     expect(body.webhook.bots.find((b: { id: string }) => b.id === NDX_BOT_ID)).toMatchObject({ name: "NDX EMA 9/20 Bias", underlying: null });
   });
