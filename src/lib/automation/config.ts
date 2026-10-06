@@ -38,7 +38,8 @@ export const CLOSE_CONFIRM_TIMEOUT_SECONDS = envNumber("CLOSE_CONFIRM_TIMEOUT_SE
 /** Internal polling cadence, not part of the spec's config list - short
  * enough in production to notice a fill quickly, overridable in tests so a
  * 120s timeout doesn't mean a 120s test. */
-export const ORDER_POLL_INTERVAL_MS = envNumber("AUTOMATION_ORDER_POLL_INTERVAL_MS", 2000);
+/** A serverless demo host answers within seconds, so it checks for a fill more often (the mock fills instantly). */
+export const ORDER_POLL_INTERVAL_MS = envNumber("AUTOMATION_ORDER_POLL_INTERVAL_MS", process.env.VERCEL ? 250 : 2000);
 
 /** Minimum seconds a position must have been held before a flip may close it.
  * 0 (the default) disables the cooldown; it exists to cut whipsaw losses on
@@ -73,10 +74,6 @@ export const EOD_SWEEP_MINUTE_ET = 5;
 /** The sweep time a bot gets when it doesn't set its own (4:05pm ET). */
 export const DEFAULT_EOD_SWEEP_MINUTES = EOD_SWEEP_HOUR_ET * 60 + EOD_SWEEP_MINUTE_ET;
 
-export function getWebhookSecret(): string {
-  return requiredEnvString("WEBHOOK_SECRET", "Set it in .env.local before any TradingView alert can reach the webhook.");
-}
-
 /** Sign-in is required whenever a status-page password is configured. With none set it is skipped - in local
  * development, and on a production host running only the mock executor (a demo with nothing real behind it, where the app
  * shows a warning). It is NEVER skipped once a real broker is configured (EXECUTOR=tradier, sandbox or production): then a
@@ -84,10 +81,8 @@ export function getWebhookSecret(): string {
 export function isAuthRequired(): boolean {
   if (isAuthDisabled()) return false;
   if (process.env.AUTOMATION_STATUS_PASSWORD) return true;
-  return process.env.NODE_ENV === "production" && brokerConfigured();
+  return process.env.NODE_ENV === "production" && isBrokerConfigured();
 }
-
-const brokerConfigured = () => process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
 
 /** True when sign-in is off in a production build: on purpose (AUTOMATION_AUTH_DISABLED=true) or because no password
  * was ever set. The app shows a warning on every page. */
@@ -100,7 +95,7 @@ export function isAuthOpenInProduction(): boolean {
  * money is in play (Tradier production), where sign-in stays on. */
 export function isAuthDisabled(): boolean {
   if (process.env.AUTOMATION_AUTH_DISABLED !== "true") return false;
-  const realMoney = brokerConfigured() && process.env.TRADIER_ALLOW_PRODUCTION === "true";
+  const realMoney = isBrokerConfigured() && process.env.TRADIER_ALLOW_PRODUCTION === "true";
   return !realMoney;
 }
 
@@ -116,5 +111,24 @@ export function isDryRun(): boolean {
  * (the clock check is skipped and says so in the trace). Real webhook alerts
  * are never affected. Off unless AUTOMATION_TEST_MODE=true. */
 export function isTestMode(): boolean {
-  return envString("AUTOMATION_TEST_MODE", "false") === "true";
+  const raw = process.env.AUTOMATION_TEST_MODE;
+  if (raw !== undefined && raw !== "") return raw === "true";
+  // Not set: test alerts may run any time on the mock executor (nothing real is behind it), never when a broker is configured.
+  return !isBrokerConfigured();
+}
+
+export const isBrokerConfigured = () => process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
+
+/** A deployment on a serverless host (Vercel) that is only running the mock executor: a demo. It fills in the settings
+ * nobody has given it, so the pages work with no environment variables at all. Never true locally and never with a broker. */
+export const isDemoHost = () => Boolean(process.env.VERCEL) && !isBrokerConfigured();
+
+let demoSecret: string | undefined;
+
+export function getWebhookSecret(): string {
+  const set = process.env.WEBHOOK_SECRET;
+  if (set) return set;
+  // A demo host with no secret set makes a throwaway one: Send test alert uses it internally, and nobody outside can know it.
+  if (isDemoHost()) return (demoSecret ??= `demo-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`);
+  return requiredEnvString("WEBHOOK_SECRET", "Set it in .env.local before any TradingView alert can reach the webhook.");
 }

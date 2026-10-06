@@ -58,6 +58,13 @@ export interface IngestResult {
   processing?: Promise<void>;
 }
 
+/** On a serverless host (a demo) the work must finish before the answer goes out - the function may be stopped the moment
+ * it responds. The mock fills at once, so this takes a moment; anywhere else the answer still goes out immediately. */
+export async function settleIfServerless(result: IngestResult, maxMs = 8000): Promise<void> {
+  if (!process.env.VERCEL || !result.processing) return;
+  await Promise.race([result.processing, new Promise<void>((r) => setTimeout(r, maxMs))]);
+}
+
 export function ingestWebhook(parsed: unknown, options: IngestOptions): IngestResult {
   // First of all: a host that can't keep records can't run the engine, and must not half-process (or half-log) an alert.
   const storage = storageProblem();

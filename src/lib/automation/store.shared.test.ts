@@ -39,12 +39,16 @@ describe("where the records live", () => {
     expect(resolveDataDir({ AUTOMATION_DATA_DIR: "/nope" }, () => false)).toEqual({ dir: "/nope", temporary: false });
   });
 
-  it("Vercel is reported as unfit to run the engine even though its pages work", async () => {
+  it("a demo on Vercel (mock executor) reports nothing; a broker on Vercel is refused with the reason", async () => {
     const { storageProblem } = await import("./store");
     vi.stubEnv("VERCEL", "1");
-    expect(storageProblem()).toMatch(/Vercel, a serverless host/);
+    vi.stubEnv("EXECUTOR", "");
+    expect(storageProblem()).toBeNull();
+    vi.stubEnv("EXECUTOR", "tradier");
+    expect(storageProblem()).toMatch(/can't be driven from Vercel/);
     vi.stubEnv("VERCEL", "");
     expect(storageProblem()).toBeNull();
     vi.unstubAllEnvs();
   });
+
 });

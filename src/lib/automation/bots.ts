@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { SMART_PRICING_MODES, type SmartPricingMode } from "./smartPricing";
-import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes, requiredEnvNumber } from "./config";
+import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, isDemoHost, parseClockMinutes, requiredEnvNumber } from "./config";
 import {
   alertsStore,
   botsStore,
@@ -52,6 +52,20 @@ const CREDIT_TODO =
 
 /** Env vars the NDX bot cannot start without. Each is a real trading or safety
  * parameter that must come from Blue or the broker's option chain - never a guess. */
+/** DEMO ONLY: the trading settings nobody has given a demo deployment (a serverless host running just the mock executor,
+ * so nothing real is behind it). They make the bots usable for a walk-through; they are test numbers, not anyone's real
+ * settings, and are never applied locally, nor with a broker configured. */
+const DEMO_SETTINGS: Record<string, string> = {
+  BOT_NDX_EMA_BIAS_STRIKE_INCREMENT: "5",
+  BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE: "3.5",
+  BOT_NDX_EMA_BIAS_PRICE_MIN: "15000",
+  BOT_NDX_EMA_BIAS_PRICE_MAX: "30000",
+  BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME: "16:15",
+  BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE: "2.2",
+};
+
+if (isDemoHost()) for (const [key, value] of Object.entries(DEMO_SETTINGS)) if (!process.env[key]) process.env[key] = value;
+
 const NDX_REQUIRED: { key: string; why: string }[] = [
   { key: "BOT_NDX_EMA_BIAS_STRIKE_INCREMENT", why: "confirm the real strike increment near the money from the NDX option chain" },
   { key: "BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", why: "expected credit per spread, must be below the 10 point width" },

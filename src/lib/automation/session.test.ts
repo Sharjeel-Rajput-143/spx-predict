@@ -86,3 +86,35 @@ describe("switching sign-in off on purpose", () => {
     expect(await ask()).toMatchObject({ authDisabled: false, authRequired: false }); // local: open, no warning
   });
 });
+
+describe("a demo deployment (serverless host, mock executor only)", () => {
+  it("is a demo only on Vercel with no broker", async () => {
+    const { isDemoHost, isTestMode, getWebhookSecret } = await import("./config");
+    vi.stubEnv("VERCEL", "");
+    expect(isDemoHost()).toBe(false);
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("EXECUTOR", "");
+    expect(isDemoHost()).toBe(true);
+    vi.stubEnv("EXECUTOR", "tradier");
+    expect(isDemoHost()).toBe(false);
+
+    // Test alerts may run any time on the mock, and never default on with a broker.
+    vi.stubEnv("AUTOMATION_TEST_MODE", "");
+    vi.stubEnv("EXECUTOR", "");
+    expect(isTestMode()).toBe(true);
+    vi.stubEnv("EXECUTOR", "tradier");
+    expect(isTestMode()).toBe(false);
+    vi.stubEnv("AUTOMATION_TEST_MODE", "false");
+    vi.stubEnv("EXECUTOR", "");
+    expect(isTestMode()).toBe(false);
+
+    // A throwaway webhook secret on the demo host, none anywhere else.
+    vi.stubEnv("WEBHOOK_SECRET", "");
+    vi.stubEnv("VERCEL", "1");
+    const secret = getWebhookSecret();
+    expect(secret).toMatch(/^demo-/);
+    expect(getWebhookSecret()).toBe(secret);
+    vi.stubEnv("VERCEL", "");
+    expect(() => getWebhookSecret()).toThrow(/WEBHOOK_SECRET/);
+  });
+});

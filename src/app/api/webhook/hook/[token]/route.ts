@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
-import { ingestWebhook } from "@/lib/automation/webhookIngest";
+import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
 import { getLastTick } from "@/lib/marketData/tickStore";
 
@@ -55,6 +55,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const barTime = payload.barTime ?? `${hook.id}-${new Date(now).toISOString().slice(0, 16)}`;
   const result = ingestWebhook({ bot: hook.botId, signal: hook.direction, ...(underlying ? { symbol: underlying } : {}), price, bar_time: barTime, interval: payload.interval ?? "", webhook: hook.name }, { executor: sharedExecutor, trusted: true });
+  await settleIfServerless(result);
   if (result.status === 200) webhooksStore.update(hook.id, { lastTriggeredAt: now, triggerCount: hook.triggerCount + 1 });
   return NextResponse.json(result.body, { status: result.status });
 }

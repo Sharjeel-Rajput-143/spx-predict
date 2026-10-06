@@ -30,11 +30,13 @@ For real trading that matters: a signal could be accepted and never acted on, or
 
 The status page shows a red "This server can't run the engine" banner whenever it is opened on a host that can't write its records.
 
-## Looking at the UI on Vercel (demo) - no settings needed
+## The Vercel demo - works like the local one, no settings needed
 
-With no environment variables at all, a production deploy now works as a demo: **no sign-in box**, and the pages keep their data in a temporary folder (so bots and settings can vanish, and differ between instances). The status page also shows a red "can't run the engine" notice: **TradingView alerts and orders are refused on Vercel** - it is serverless, so it may stop working right after it answers an alert.
+On Vercel with no environment variables at all (and only the mock executor) the app is a demo that behaves like the local one: no sign-in box, both bots ready to use, **Send test alert** and **Send a test call** work at any hour, and a TradingView call to a webhook is answered after the engine has run it (so nothing is cut off when the function ends). Its settings come from demo values built in for this case only (test numbers, never used locally or with a broker). Its data sits in a temporary folder, so it can reset when Vercel starts a fresh instance.
 
-Sign-in comes back automatically as soon as it matters:
-- set `AUTOMATION_STATUS_PASSWORD` and the password box returns;
-- set `EXECUTOR=tradier` (the broker) with no password and access is denied until you set one - it never runs a broker unprotected;
-- `AUTOMATION_AUTH_DISABLED=true` switches sign-in off even then (sandbox only; ignored for Tradier production).
+Limits to know when showing it:
+- A real alert obeys market hours (weekdays 9:35am-3:55pm ET); only the test alert and test call work outside them.
+- Nothing is a real order: it is the mock executor.
+- A broker can't be driven from Vercel (`EXECUTOR=tradier` is refused there). That needs a server that stays up, as above.
+
+Sign-in comes back automatically as soon as it matters: set `AUTOMATION_STATUS_PASSWORD` and the password box returns; set `EXECUTOR=tradier` with no password and access is denied until you set one.

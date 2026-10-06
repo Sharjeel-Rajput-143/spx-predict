@@ -41,16 +41,20 @@ function writable(dir: string): boolean {
 const CHOICE = resolveDataDir();
 const DATA_DIR = CHOICE.dir;
 
-/** Why this host can't RUN the engine, or null when it can. The engine keeps its state in files and in memory and keeps
- * working after it has answered an alert, so it needs a server that stays up with a writable disk. A serverless host
- * (Vercel) can show the pages with temporary data, but must not be trusted with alerts or orders - saying so beats an
- * opaque 500, or an alert that is accepted and never acted on. */
+/** Why this host can't run the engine with a BROKER, or null. A real broker needs a server that stays up with a writable
+ * disk: the engine keeps its state in files and in memory and keeps working after it has answered an alert (placing orders,
+ * waiting up to minutes for fills), which a serverless function may stop. With only the mock executor (a demo) none of that
+ * matters, so nothing is reported - the pages simply run on a temporary folder when the disk is read-only. */
 export function storageProblem(): string | null {
-  if (process.env.VERCEL) {
-    return "This is Vercel, a serverless host. The pages work here with temporary data, but the engine can't take TradingView alerts or place orders: it keeps its state in files and in memory and keeps working after it answers an alert, which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
+  const broker = process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
+  if (process.env.VERCEL && broker) {
+    return "A broker can't be driven from Vercel: it is a serverless host, and the engine keeps working after it answers an alert (placing orders, waiting for fills), which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
   }
-  if (!writable(DATA_DIR) || CHOICE.temporary) {
-    return `This host can't keep the bots' records on disk${CHOICE.temporary ? ` (it is using a temporary folder, ${DATA_DIR})` : ` at ${DATA_DIR}`}. The engine needs a server that stays running with a writable disk - not a serverless host.`;
+  if (!writable(DATA_DIR)) {
+    return `This host can't write the bots' records to ${DATA_DIR}. The engine needs a writable disk.`;
+  }
+  if (broker && CHOICE.temporary) {
+    return `A broker is configured but this host's disk is read-only, so the bots' records are in a temporary folder (${DATA_DIR}) that will be lost. Use a server with a writable disk.`;
   }
   return null;
 }

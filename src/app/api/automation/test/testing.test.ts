@@ -87,6 +87,7 @@ describe("Send test alert goes through the real webhook path", () => {
   });
 
   it("outside trading hours it only runs with testing mode on, and says the clock check was skipped", async () => {
+    vi.stubEnv("AUTOMATION_TEST_MODE", "false"); // explicitly off (unset, on the mock executor, means on)
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(SATURDAY);
 
