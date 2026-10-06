@@ -6,7 +6,7 @@ import { countTodayErrors } from "@/lib/automation/errors";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk } from "@/lib/automation/safeguards";
 import { executorStatus } from "@/lib/automation/sharedExecutor";
-import { alertsStore, decisionsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
+import { alertsStore, decisionsStore, ordersStore, positionsStore, signalsStore, storageProblem } from "@/lib/automation/store";
 import { describeWindow, hoursConfigFor } from "@/lib/automation/tradingHours";
 import { DEFAULT_ALERTS, type BotStaticConfig, type Decision } from "@/lib/automation/types";
 import { getLastTick } from "@/lib/marketData/tickStore";
@@ -75,6 +75,7 @@ export async function GET(req: NextRequest) {
             strikeRounding: config.strikeRounding ?? "outward",
             openPricePercent: config.openPricePercent ?? 100,
             closePricePercent: config.closePricePercent ?? 100,
+            smartPricing: config.smartPricing ?? "normal",
             window: describeWindow(hoursConfigFor(config.hours)),
             alerts: record.alerts ?? DEFAULT_ALERTS,
           }
@@ -135,6 +136,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     now,
     executor: { ...executorStatus(), dryRun: isDryRun(), testMode: isTestMode() },
+    storageProblem: storageProblem(),
     bots,
     positions,
     orders,

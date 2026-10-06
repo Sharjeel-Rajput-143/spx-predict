@@ -310,7 +310,14 @@ export const payloadFor = (dir: "bullish" | "bearish", botId: string, symbol: st
 function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx: BotContext; onClose: () => void }) {
   const { data, patch, notify, openRun } = ctx;
   const [origin, setOrigin] = useState("");
-  useEffect(() => setOrigin(window.location.origin), []);
+  const [hooks, setHooks] = useState<{ id: string; name: string; path: string; active: boolean }[]>([]);
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    fetch("/api/automation/webhooks")
+      .then((r) => (r.ok ? r.json() : { webhooks: [] }))
+      .then((j: { webhooks: { id: string; name: string; path: string; active: boolean; botId: string; direction: string }[] }) => setHooks(j.webhooks.filter((w) => w.botId === ctx.data.bot.id && w.direction === dir)))
+      .catch(() => undefined);
+  }, [ctx.data.bot.id, dir]);
   const received = data.signals.filter((s) => s.signal === dir && s.status === "accepted").length;
   const on = data.bot.triggers[dir];
 
@@ -335,7 +342,28 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
         />
 
         <div>
-          <div className="text-xs font-medium uppercase tracking-wide text-muted">URL</div>
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">Webhook</div>
+          {hooks.length === 0 ? (
+            <p className="mt-1 text-sm text-muted">No webhook for this signal yet. Create one under Settings &gt; Webhooks (it takes a name and this bot).</p>
+          ) : (
+            <ul className="mt-1 space-y-2">
+              {hooks.map((h) => (
+                <li key={h.id} className="rounded-lg bg-surface-2 px-3 py-2">
+                  <div className="text-sm font-medium">
+                    {h.name} {!h.active && <span className="text-xs text-faint">(off)</span>}
+                  </div>
+                  <code className="block break-all text-xs">{origin}{h.path}</code>
+                  <button className="mt-1 text-xs font-medium text-accent hover:underline" onClick={() => navigator.clipboard?.writeText(`${origin}${h.path}`).then(() => notify("ok", "Webhook URL copied."))}>
+                    Copy URL
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-xs text-muted">Alert message for a named webhook: <code>{`{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}`}</code></p>
+        </div>
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide text-muted">Or one shared URL with a secret</div>
           <code className="mt-1 block break-all rounded-lg bg-surface-2 px-3 py-2 text-sm">POST {origin}/api/webhook/tradingview</code>
         </div>
         <div>
@@ -389,6 +417,7 @@ function InputsCard({ ctx }: { ctx: BotContext }) {
             ["Expected credit", usd2(config.openingCreditEstimate)],
             ["Strike rounding", (config.strikeRounding ?? "outward") === "outward" ? "Out of the money (put down, call up)" : "Nearest strike"],
             ["Order price", `${config.openPricePercent ?? 100}% of bid/ask to open, ${config.closePricePercent ?? 100}% to close`],
+            ["SmartPricing", `${(config.smartPricing ?? "normal")[0].toUpperCase()}${(config.smartPricing ?? "normal").slice(1)} - walks from the mid to that price when live quotes exist`],
           ]}
         />
       ) : (

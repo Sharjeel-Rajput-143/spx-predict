@@ -1,5 +1,6 @@
 import "server-only";
-import type { BrokerExecutor, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position } from "./types";
+import type { LegQuotes } from "./smartPricing";
+import type { BrokerExecutor, BrokerPosition, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position, SpreadQuoteRequest } from "./types";
 import { positionsStore } from "./store";
 
 /**
@@ -33,6 +34,9 @@ export interface TradierConfig {
   /** Always one of the two Tradier hosts; sandbox unless production was explicitly allowed. */
   baseUrl: string;
   sandbox: boolean;
+  /** Hard caps on any single OPENING order (closing is never capped). Required for production, optional in the sandbox. */
+  maxContracts?: number | null;
+  maxRiskPerOrder?: number | null;
 }
 
 type Env = Record<string, string | undefined>;
@@ -65,7 +69,21 @@ export function readTradierConfig(env: Env = process.env): TradierConfig {
     throw new TradierConfigError(`TRADIER_BASE_URL host "${url.hostname}" is not a Tradier host. Allowed: ${SANDBOX_HOST} (default), and ${PRODUCTION_HOST} only with TRADIER_ALLOW_PRODUCTION=true.`);
   }
 
-  return { token: env.TRADIER_TOKEN!.trim(), accountId: env.TRADIER_ACCOUNT_ID!.trim(), baseUrl: raw, sandbox: url.hostname === SANDBOX_HOST };
+  const sandbox = url.hostname === SANDBOX_HOST;
+  const cap = (name: string): number | null => {
+    const v = env[name]?.trim();
+    if (!v) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) throw new TradierConfigError(`${name} must be a number above 0, got "${v}".`);
+    return n;
+  };
+  const maxContracts = cap("TRADIER_MAX_CONTRACTS_PER_ORDER");
+  const maxRiskPerOrder = cap("TRADIER_MAX_RISK_PER_ORDER");
+  // Real money gets hard limits on what one order can be. They have no defaults: someone has to choose the numbers.
+  if (!sandbox && (maxContracts === null || maxRiskPerOrder === null)) {
+    throw new TradierConfigError("Production Tradier needs TRADIER_MAX_CONTRACTS_PER_ORDER and TRADIER_MAX_RISK_PER_ORDER set (no defaults): the most contracts, and the most dollars at risk, one opening order may carry.");
+  }
+  return { token: env.TRADIER_TOKEN!.trim(), accountId: env.TRADIER_ACCOUNT_ID!.trim(), baseUrl: raw, sandbox, maxContracts, maxRiskPerOrder };
 }
 
 /** OCC-style option symbol: ROOT + YYMMDD + C|P + strike x 1000 in 8 digits
@@ -155,6 +173,19 @@ export class TradierExecutor implements BrokerExecutor {
     }
   }
 
+  /** Market data lives outside the account's path: GET {base}/markets/... */
+  private async market(path: string, query: Record<string, string>): Promise<Record<string, unknown>> {
+    const url = `${this.config.baseUrl}${path}?${new URLSearchParams(query).toString()}`;
+    const res = await this.fetchImpl(url, { method: "GET", headers: { Authorization: `Bearer ${this.config.token}`, Accept: "application/json" }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`Tradier GET ${path} failed (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(`Tradier GET ${path} returned something that isn't JSON.`);
+    }
+  }
+
   private legs(args: { root: string | undefined; underlying: string | undefined; expiry: string; type: Position["type"]; shortStrike: number; longStrike: number }) {
     if (!args.root) throw new Error("No option root is configured for this bot (e.g. NDXP, SPXW), and the Tradier executor will not guess one. Set it in the bot's settings. TODO(unconfirmed): the right root for daily index expirations.");
     if (!args.underlying) throw new Error("No underlying symbol on this order.");
@@ -179,6 +210,7 @@ export class TradierExecutor implements BrokerExecutor {
    * number with type=credit; confirm with Tradier's preview-order call before
    * the first real order. */
   async placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }> {
+    this.checkOpeningLimits(req);
     const { underlying, short, long } = this.legs({ root: req.optionRoot, underlying: req.underlying, expiry: req.expiry, type: req.positionType, shortStrike: req.shortStrike, longStrike: req.longStrike });
     return this.submit({
       class: "multileg",
@@ -195,18 +227,48 @@ export class TradierExecutor implements BrokerExecutor {
     });
   }
 
-  /** Closing: buy back the short, sell the long. The engine sends no limit
-   * price on closes, so this is a market multileg order.
-   * TODO(unconfirmed): that the sandbox/production accept type=market for a
-   * multileg index spread. */
-  async placeCloseOrder(position: Position): Promise<{ ref: string }> {
+  /** The hard caps on one opening order. Checked before anything is sent; they exist so a wrong setting
+   * can't turn into a big order. A limit price that isn't a credit below the width is refused too. */
+  private checkOpeningLimits(req: OpenSpreadRequest): void {
+    const width = Math.abs(req.shortStrike - req.longStrike);
+    if (!(req.limitCredit > 0) || req.limitCredit >= width) throw new Error(`Refused: a limit credit of ${req.limitCredit} is not a credit between 0 and the width (${width}).`);
+    const { maxContracts, maxRiskPerOrder } = this.config;
+    if (maxContracts != null && req.quantity > maxContracts) throw new Error(`Refused: ${req.quantity} contracts is over the limit of ${maxContracts} per order (TRADIER_MAX_CONTRACTS_PER_ORDER).`);
+    const risk = Math.round((width - req.limitCredit) * 100 * req.quantity * 100) / 100;
+    if (maxRiskPerOrder != null && risk > maxRiskPerOrder) throw new Error(`Refused: this order risks $${risk}, over the limit of $${maxRiskPerOrder} per order (TRADIER_MAX_RISK_PER_ORDER).`);
+  }
+
+  /** The bid and ask of each leg. TODO(unconfirmed): the response shape of GET /markets/quotes for index option
+   * symbols (a single quote comes back as an object, several as a list), and that the sandbox serves them (its
+   * option data is delayed). Missing or unusable answers return null and the engine falls back to one price. */
+  async getSpreadQuote(req: SpreadQuoteRequest): Promise<LegQuotes | null> {
+    const { short, long } = this.legs({ root: req.optionRoot, underlying: req.underlying, expiry: req.expiry, type: req.type, shortStrike: req.shortStrike, longStrike: req.longStrike });
+    const json = await this.market("/markets/quotes", { symbols: `${short},${long}` });
+    const raw = (json.quotes as { quote?: unknown } | undefined)?.quote;
+    const list = (Array.isArray(raw) ? raw : raw ? [raw] : []) as { symbol?: string; bid?: unknown; ask?: unknown }[];
+    const pick = (symbol: string) => {
+      const q = list.find((x) => x.symbol === symbol);
+      const bid = q?.bid == null ? NaN : Number(q.bid);
+      const ask = q?.ask == null ? NaN : Number(q.ask);
+      return Number.isFinite(bid) && Number.isFinite(ask) ? { bid, ask } : null;
+    };
+    const s = pick(short);
+    const l = pick(long);
+    return s && l ? { short: s, long: l } : null;
+  }
+
+  /** Closing: buy back the short, sell the long. With a limit debit from the SmartPricing ladder it is a
+   * debit order at that price; with none it is a market multileg order.
+   * TODO(unconfirmed): that the sandbox/production accept type=market for a multileg index spread. */
+  async placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number }): Promise<{ ref: string }> {
     const { underlying, short, long } = this.legs({ root: position.optionRoot, underlying: position.underlying, expiry: position.expiry, type: position.type, shortStrike: position.shortStrike, longStrike: position.longStrike });
     const quantity = String(position.filledQuantity || position.requestedQuantity);
     return this.submit({
       class: "multileg",
       symbol: underlying,
-      type: "market",
+      type: options?.limitDebit !== undefined ? "debit" : "market",
       duration: "day",
+      ...(options?.limitDebit !== undefined ? { price: String(options.limitDebit) } : {}),
       "option_symbol[0]": short,
       "side[0]": "buy_to_close",
       "quantity[0]": quantity,
@@ -225,6 +287,16 @@ export class TradierExecutor implements BrokerExecutor {
 
   async cancelOrder(ref: string): Promise<void> {
     await this.call("DELETE", `/orders/${encodeURIComponent(ref)}`);
+  }
+
+  /** What Tradier itself holds. TODO(unconfirmed): the response shape - Tradier answers `"null"` when there are
+   * none, an object for one position and a list for several. */
+  async listBrokerPositions(): Promise<BrokerPosition[]> {
+    const json = await this.call("GET", "/positions");
+    const raw = json.positions as { position?: unknown } | string | null | undefined;
+    if (!raw || typeof raw === "string") return [];
+    const list = (Array.isArray(raw.position) ? raw.position : raw.position ? [raw.position] : []) as { symbol?: string; quantity?: unknown }[];
+    return list.filter((p) => typeof p.symbol === "string").map((p) => ({ symbol: p.symbol!, quantity: Number(p.quantity ?? 0) }));
   }
 
   /** Our own rows for this bot. TODO(unconfirmed): reconciling against Tradier's

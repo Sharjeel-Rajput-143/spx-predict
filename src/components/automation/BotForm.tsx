@@ -1,6 +1,7 @@
 "use client";
 
 import { Field, inputClass } from "@/components/automation/bot/primitives";
+import type { SmartPricingMode } from "@/lib/automation/smartPricing";
 import type { BotInputs, BotStaticConfig, BotTemplate, StrikeRounding } from "@/lib/automation/types";
 
 /** Every trading input is required. The offsets and expected credit have no
@@ -18,6 +19,7 @@ export interface BotFormValues {
   strikeRounding: StrikeRounding;
   openPricePercent: string;
   closePricePercent: string;
+  smartPricing: SmartPricingMode;
   group: string;
   tags: string;
 }
@@ -35,6 +37,7 @@ export const BLANK_FORM: BotFormValues = {
   strikeRounding: "outward",
   openPricePercent: "100",
   closePricePercent: "100",
+  smartPricing: "normal",
   group: "",
   tags: "",
 };
@@ -58,8 +61,8 @@ export function formFromTemplate(t: BotTemplate): BotFormValues {
 }
 
 /** Rounding and order-price fields from a saved config (blank = the defaults). */
-export function pricingFields(c: Partial<BotStaticConfig> | null | undefined): Pick<BotFormValues, "strikeRounding" | "openPricePercent" | "closePricePercent"> {
-  return { strikeRounding: c?.strikeRounding ?? "outward", openPricePercent: String(c?.openPricePercent ?? 100), closePricePercent: String(c?.closePricePercent ?? 100) };
+export function pricingFields(c: Partial<BotStaticConfig> | null | undefined): Pick<BotFormValues, "strikeRounding" | "openPricePercent" | "closePricePercent" | "smartPricing"> {
+  return { smartPricing: c?.smartPricing ?? "normal", strikeRounding: c?.strikeRounding ?? "outward", openPricePercent: String(c?.openPricePercent ?? 100), closePricePercent: String(c?.closePricePercent ?? 100) };
 }
 
 /** Parses a numeric field; empty stays undefined so the server reports it as missing. */
@@ -84,6 +87,7 @@ export function toInputs(f: BotFormValues, base?: Partial<BotInputs> | null): Bo
     strikeRounding: f.strikeRounding,
     openPricePercent: num(f.openPricePercent),
     closePricePercent: num(f.closePricePercent),
+    smartPricing: f.smartPricing,
   } as BotInputs;
 }
 
@@ -122,6 +126,14 @@ export function InputFields({ f, set, columns = 3 }: { f: BotFormValues; set: (k
             </Field>
             <Field label="Close price (% of bid/ask)" hint="Exact meaning to be confirmed with the owner.">
               <input className={inputClass} inputMode="decimal" value={f.closePricePercent} onChange={set("closePricePercent")} />
+            </Field>
+            <Field label="SmartPricing" hint="Normal: up to 4 prices, 10s each, from the mid toward the final price. Fast: 3 x 5s. Patient: 5 x 20s. Off: one limit order at the final price. Needs live quotes - the mock has none.">
+              <select className={inputClass} value={f.smartPricing} onChange={set("smartPricing")}>
+                <option value="normal">Normal</option>
+                <option value="fast">Fast</option>
+                <option value="patient">Patient</option>
+                <option value="off">Off</option>
+              </select>
             </Field>
             <Field label="Allocation ($)">
               <input className={inputClass} inputMode="decimal" value={f.allocationLimit} onChange={set("allocationLimit")} />

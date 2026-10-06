@@ -13,7 +13,8 @@ import {
 import { logDecision } from "./decisions";
 import { recordError } from "./errors";
 import { expireStalePositions } from "./expiry";
-import { watchOrder } from "./orderWatch";
+import { placeAndWatch } from "./placeAndWatch";
+import { DEFAULT_PRICE_TICK, buildLadder, describeLadder, type Ladder, type SmartPricingMode } from "./smartPricing";
 import {
   activePositionsForBot,
   activePositionsForBots,
@@ -26,7 +27,7 @@ import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
 import { describePlan, maxRisk, planStrikes, roundingWords, validateStrikes, type StrikePair, type StrikePlan } from "./strikes";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
 import { describeTradingTime, describeWindow, easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
-import type { BotStaticConfig, BrokerExecutor, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
+import type { BotStaticConfig, BrokerExecutor, SpreadQuoteRequest, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
 
 export interface ReceiveSignalInput {
   botId: string;
@@ -63,6 +64,8 @@ export interface ProcessSignalOptions {
   closeConfirmTimeoutMs?: number;
   orderFillTimeoutMs?: number;
   pollIntervalMs?: number;
+  /** How long each SmartPricing rung waits, overriding the preset's seconds (tests use milliseconds). */
+  ladderStepMs?: number;
 }
 
 function oppositeType(type: PositionType): PositionType {
@@ -107,16 +110,62 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-interface CloseResult {
-  ok: boolean;
-  outcome: DecisionOutcome;
-  reason: string;
-}
-
 /** What closed a position: the signal that did, or just the price when a person did it. */
 interface CloseCause {
   id: string | null;
   price: number | null;
+}
+
+/** How a bot's orders are priced. */
+interface Pricing {
+  mode: SmartPricingMode;
+  /** The final price as a percent of the way across the bid/ask. */
+  percent: number;
+  /** Seconds of waiting per rung, overriding the preset (tests use milliseconds). */
+  stepMs?: number;
+  width: number;
+}
+
+const pricingFor = (config: BotStaticConfig, side: "open" | "close", stepMs?: number): Pricing => ({
+  mode: config.smartPricing ?? "normal",
+  percent: (side === "open" ? config.openPricePercent : config.closePricePercent) ?? 100,
+  stepMs,
+  width: config.widthPoints,
+});
+
+/** What the engine knows about an order's price: the ladder it will walk, or why there isn't one. */
+interface PricePlan {
+  ladder: Ladder | null;
+  /** In words, for the trace and the log. */
+  note: string;
+  /** Set when a quote exists but can't be traded on. */
+  unusable?: string;
+}
+
+/** SmartPricing needs a market: the executor's quote of the spread. An executor without quotes (the mock) gets one
+ * price, as before. A quote that fails to arrive falls back to that single price too - and says so. */
+async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spread: SpreadQuoteRequest, pricing: Pricing): Promise<PricePlan> {
+  if (!executor.getSpreadQuote) return { ladder: null, note: "One price (this executor has no market to quote)" };
+  let legs: Awaited<ReturnType<NonNullable<BrokerExecutor["getSpreadQuote"]>>>;
+  try {
+    legs = await executor.getSpreadQuote(spread);
+  } catch (err) {
+    return { ladder: null, note: `One price (the quote failed: ${errorMessage(err)})` };
+  }
+  if (!legs) return { ladder: null, note: "One price (no quote available)" };
+  const built = buildLadder({ side, legs, mode: pricing.mode, finalPercent: pricing.percent, width: pricing.width, tick: DEFAULT_PRICE_TICK });
+  if (!built.ok) return { ladder: null, note: `No usable price: ${built.reason}`, unusable: built.reason };
+  return { ladder: built.ladder, note: describeLadder(built.ladder, pricing.percent) };
+}
+
+const spreadOf = (p: Position): SpreadQuoteRequest => ({ underlying: p.underlying, optionRoot: p.optionRoot, expiry: p.expiry, type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike });
+
+interface CloseResult {
+  ok: boolean;
+  outcome: DecisionOutcome;
+  reason: string;
+  /** How the close was priced, in words. */
+  pricing?: string;
 }
 
 async function closePosition(
@@ -126,45 +175,36 @@ async function closePosition(
   timeoutMs: number,
   pollIntervalMs: number,
   now: number,
-  pricePercent?: number,
+  pricing?: Pricing,
 ): Promise<CloseResult> {
   positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
-  let ref: string;
-  try {
-    ({ ref } = await executor.placeCloseOrder(position, { pricePercent }));
-  } catch (err) {
+
+  // Closing is a debit: buy the spread back. With a market to look at, walk from the mid toward the full spread;
+  // with none (or an unusable quote) the executor's own default applies, as it always has.
+  const plan = pricing && executor.getSpreadQuote ? await planPrice(executor, "debit", spreadOf(position), pricing) : null;
+  const ladder = plan?.ladder ?? null;
+  const pricingNote = plan?.note;
+
+  const result = await placeAndWatch({
+    executor,
+    kind: "close",
+    positionId: position.id,
+    now,
+    place: (price) => executor.placeCloseOrder(position, { pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}) }),
+    prices: ladder?.prices ?? null,
+    stepMs: pricing?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
+    finalMs: timeoutMs,
+    pollMs: pollIntervalMs,
+    defaultLimit: 0,
+  });
+  if (!result.ok) {
     // Left "closing": we can't know the broker didn't take the order, so the
     // position keeps counting as live until an operator resolves it.
-    return { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(err)}` };
+    return result.stage === "place"
+      ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote }
+      : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote };
   }
-  positionsStore.update(position.id, { brokerOrderRef: ref });
-
-  const orderRow: Order = {
-    id: `ord-${now}-${crypto.randomUUID()}`,
-    positionId: position.id,
-    kind: "close",
-    status: "working",
-    limitPrice: 0,
-    filledQuantity: 0,
-    ref,
-    createdAt: now,
-    updatedAt: now,
-  };
-  ordersStore.insert(orderRow);
-
-  let watched: Awaited<ReturnType<typeof watchOrder>>;
-  try {
-    watched = await watchOrder(executor, ref, { timeoutMs, pollIntervalMs });
-  } catch (err) {
-    return { ok: false, outcome: "executor_error", reason: `Lost track of close order ${ref}: ${errorMessage(err)}` };
-  }
-  const { state, timedOut } = watched;
-  ordersStore.update(orderRow.id, {
-    status: state.status,
-    filledQuantity: state.filledQuantity,
-    rejectReason: state.rejectReason,
-    updatedAt: Date.now(),
-  });
+  const { state, timedOut } = result;
 
   const targetQuantity = position.filledQuantity || position.requestedQuantity;
   if (state.status === "filled" && state.filledQuantity >= targetQuantity) {
@@ -174,15 +214,15 @@ async function closePosition(
       closePrice: state.averagePrice ?? null,
       underlyingAtClose: signal?.price ?? null,
     });
-    return { ok: true, outcome: "closed", reason: "Close order filled." };
+    return { ok: true, outcome: "closed", reason: "Close order filled.", pricing: pricingNote };
   }
   if (state.status === "rejected") {
-    return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "Close order rejected." };
+    return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "Close order rejected.", pricing: pricingNote };
   }
-  if (timedOut && state.filledQuantity === 0) {
-    return { ok: false, outcome: "close_timeout", reason: "Close order never filled before the confirm timeout." };
+  if (state.filledQuantity === 0) {
+    return { ok: false, outcome: "close_timeout", reason: timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling.", pricing: pricingNote };
   }
-  return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled." };
+  return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled.", pricing: pricingNote };
 }
 
 /** The plan as stored on a decision: the numbers plus the sentence. */
@@ -203,11 +243,12 @@ function priceRangeProblem(price: number, config: BotStaticConfig): string | nul
 const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
 
 /** The settings a close order is sent with - a snapshot for the run log. */
-function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100): { label: string; value: string }[] {
+function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100, how?: { note?: string; quotes: boolean; mode: SmartPricingMode }): { label: string; value: string }[] {
   const qty = p.filledQuantity || p.requestedQuantity;
+  // With a market to price against the order walks a SmartPricing ladder; without one it goes out at a single price.
+  const price = how?.note ?? (how?.quotes ? `SmartPricing ${how.mode}, final price ${pricePercent}% of bid/ask` : `${pricePercent}% of bid/ask (no limit price is sent yet)`);
   return [
-    // TODO(unconfirmed): what "% of bid/ask" means exactly - the owner is to confirm. No limit price is computed or sent yet.
-    { label: "Price", value: `${pricePercent}% of bid/ask (no limit price is sent yet)` },
+    { label: "Price", value: price },
     { label: "Quantity", value: `${qty} contract${qty === 1 ? "" : "s"} (100% of position)` },
     { label: "Confirm timeout", value: `${Math.round(timeoutMs / 1000)}s` },
   ];
@@ -390,15 +431,16 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
       continue;
     }
 
-    const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent);
+    const closeHow = { quotes: !!options.executor.getSpreadQuote, mode: staticConfig.smartPricing ?? "normal" };
+    const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, closeHow);
     if (dryRun) {
       rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: nothing sent." });
       log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id });
       continue;
     }
 
-    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, staticConfig.closePricePercent);
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParams, outcome: result.outcome, reason: result.reason });
+    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, pricingFor(staticConfig, "close", options.ladderStepMs));
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
@@ -422,6 +464,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     dryRun,
     openTimeoutMs,
     pollIntervalMs,
+    ladderStepMs: options.ladderStepMs,
     manual: false,
   });
 }
@@ -443,6 +486,8 @@ interface OpenStageContext {
   dryRun: boolean;
   openTimeoutMs: number;
   pollIntervalMs: number;
+  /** Overrides how long each SmartPricing rung waits (tests). */
+  ladderStepMs?: number;
   manual: boolean;
 }
 
@@ -462,6 +507,9 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   const rec = ctx.rec;
   let created: Position | null = null;
   let actionRecorded = false;
+  /** How the order is priced, once known: the SmartPricing ladder in words, and its numbers for the log. */
+  let priceNote: string | undefined;
+  let pricingDetail: Record<string, unknown> = {};
   const side = wanted === "short_put_spread" ? "put" : "call";
 
   /** Records the open as an action card, once, when the run reaches its end. */
@@ -479,7 +527,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       summary: position ? undefined : describeLegs({ underlying: staticConfig.underlying, type: wanted, expiry: easternDateKey(now), shortStrike: k.shortStrike, longStrike: k.longStrike }),
       params: [
         // TODO(unconfirmed): what "% of bid/ask" means exactly - the owner is to confirm.
-        { label: "Price", value: `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)} (${staticConfig.openPricePercent ?? 100}% of bid/ask)` },
+        { label: "Price", value: priceNote ?? `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)} (${staticConfig.openPricePercent ?? 100}% of bid/ask)` },
         { label: "Quantity", value: `${staticConfig.quantity} contract${staticConfig.quantity === 1 ? "" : "s"}` },
         { label: "Expiration", value: `${easternDateKey(now)} (same day)` },
         {
@@ -502,7 +550,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       botId,
       outcome,
       reason,
-      detail: { ...(ctx.plan ? { strikePlan: planDetail(ctx.plan) } : {}), ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
+      detail: { ...(ctx.plan ? { strikePlan: planDetail(ctx.plan) } : {}), ...pricingDetail, ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
       now,
     });
     return { ok: outcome === "opened" || outcome === "dry_run", outcome, reason };
@@ -555,6 +603,8 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   }
 
   const expiry = easternDateKey(now);
+  let ladderPrices: number[] | null = null;
+  let ladderStepMs = 0;
   const newLegs = positionLegs({
     underlying: staticConfig.underlying,
     expiry,
@@ -567,6 +617,17 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   rec?.decision("No leg collides with an existing position", !overlap, overlap ? `Overlaps ${describeLegs(overlap)}` : "No overlapping legs");
   if (overlap) {
     return finish("overlapping_strikes", "New legs collide with an existing active position.", { overlapPositionId: overlap.id });
+  }
+
+  // With a market to look at (a real executor), price the order off the spread's own bid/ask: a SmartPricing ladder.
+  if (executor.getSpreadQuote) {
+    const priced = await planPrice(executor, "credit", { underlying: staticConfig.underlying, optionRoot: staticConfig.optionRoot, expiry, type: wanted, shortStrike: strikes.shortStrike, longStrike: strikes.longStrike }, pricingFor(staticConfig, "open", ctx.ladderStepMs));
+    ladderPrices = priced.ladder?.prices ?? null;
+    ladderStepMs = (priced.ladder?.secondsEach ?? 0) * 1000;
+    priceNote = priced.note;
+    pricingDetail = { pricing: { note: priced.note, ...(priced.ladder ? { mode: priced.ladder.mode, prices: priced.ladder.prices, mid: priced.ladder.mid, final: priced.ladder.final } : {}) } };
+    rec?.decision("The spread has a price to trade at", !priced.unusable, priced.note);
+    if (priced.unusable) return finish("open_rejected", `No usable price for this spread: ${priced.unusable}`);
   }
 
   if (ctx.dryRun) {
@@ -609,57 +670,41 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("executor_error", reason, { positionId: position.id });
   };
 
-  let ref: string;
-  try {
-    ({ ref } = await executor.placeOpenOrder({
-      botId,
-      pricePercent: staticConfig.openPricePercent,
-      underlying: staticConfig.underlying,
-      optionRoot: staticConfig.optionRoot,
-      positionType: wanted,
-      shortStrike: strikes.shortStrike,
-      longStrike: strikes.longStrike,
-      quantity: staticConfig.quantity,
-      limitCredit: staticConfig.openingCreditEstimate,
-      expiry,
-    }));
-  } catch (err) {
-    return failOpen(`Open order failed: ${errorMessage(err)}`);
-  }
-  positionsStore.update(position.id, { brokerOrderRef: ref });
-
-  const orderRow: Order = {
-    id: `ord-${now}-${crypto.randomUUID()}`,
-    positionId: position.id,
+  const result = await placeAndWatch({
+    executor,
     kind: "open",
-    status: "working",
-    limitPrice: staticConfig.openingCreditEstimate,
-    filledQuantity: 0,
-    ref,
-    createdAt: now,
-    updatedAt: now,
-  };
-  ordersStore.insert(orderRow);
-
-  let watched: Awaited<ReturnType<typeof watchOrder>>;
-  try {
-    watched = await watchOrder(executor, ref, { timeoutMs: ctx.openTimeoutMs, pollIntervalMs: ctx.pollIntervalMs });
-  } catch (err) {
-    return failOpen(`Lost track of open order ${ref}: ${errorMessage(err)}`);
-  }
-  const { state, timedOut } = watched;
-  ordersStore.update(orderRow.id, {
-    status: state.status,
-    filledQuantity: state.filledQuantity,
-    rejectReason: state.rejectReason,
-    updatedAt: Date.now(),
+    positionId: position.id,
+    now,
+    place: (price) =>
+      executor.placeOpenOrder({
+        botId,
+        pricePercent: staticConfig.openPricePercent,
+        underlying: staticConfig.underlying,
+        optionRoot: staticConfig.optionRoot,
+        positionType: wanted,
+        shortStrike: strikes.shortStrike,
+        longStrike: strikes.longStrike,
+        quantity: staticConfig.quantity,
+        limitCredit: price ?? staticConfig.openingCreditEstimate,
+        expiry,
+      }),
+    prices: ladderPrices,
+    stepMs: ctx.ladderStepMs ?? ladderStepMs,
+    finalMs: ctx.openTimeoutMs,
+    pollMs: ctx.pollIntervalMs,
+    defaultLimit: staticConfig.openingCreditEstimate,
   });
+  if (!result.ok) {
+    return failOpen(result.stage === "place" ? `Open order failed: ${errorMessage(result.error)}` : `Lost track of open order ${result.ref}: ${errorMessage(result.error)}`);
+  }
+  const { state, timedOut } = result;
 
-  if (state.status === "rejected" || (timedOut && state.filledQuantity === 0)) {
+  // Nothing filled: the broker rejected it, or it ended (our timeout, or canceled elsewhere) with no fill.
+  if (state.status === "rejected" || state.filledQuantity === 0) {
     positionsStore.update(position.id, { status: "rejected" });
-    const reason = state.rejectReason ?? "Open order timed out unfilled.";
+    const reason = state.rejectReason ?? (timedOut ? "Open order timed out unfilled." : "Open order ended without filling.");
     recordError(botId, "open_failed", { positionId: position.id, reason }, now);
-    return finish(state.status === "rejected" ? "open_rejected" : "open_timeout_no_fill", reason, { positionId: position.id });
+    return finish(state.status === "rejected" ? "open_rejected" : "open_timeout_no_fill", reason, { positionId: position.id, rungsTried: result.rungsTried });
   }
 
   // Full fill, or a partial the timeout settled at - both become `open` at
@@ -669,7 +714,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     filledQuantity: state.filledQuantity,
     credit: state.averagePrice ?? staticConfig.openingCreditEstimate,
   });
-  return finish("opened", "Opened new position.", { positionId: position.id, filledQuantity: state.filledQuantity });
+  return finish("opened", "Opened new position.", { positionId: position.id, filledQuantity: state.filledQuantity, rungsTried: result.rungsTried });
 }
 
 // ---------------------------------------------------------------------------
@@ -684,6 +729,7 @@ export interface ManualOptions {
   closeConfirmTimeoutMs?: number;
   orderFillTimeoutMs?: number;
   pollIntervalMs?: number;
+  ladderStepMs?: number;
 }
 
 /** Places a position at an explicit short strike (long derived from the bot's
@@ -722,6 +768,7 @@ export async function manualOpen(
       dryRun: options.dryRun ?? isDryRun(),
       openTimeoutMs: options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000,
       pollIntervalMs: options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
+      ladderStepMs: options.ladderStepMs,
       manual: true,
     });
   } finally {
@@ -755,13 +802,14 @@ export async function manualClose(positionId: string, options: ManualOptions & {
     if (inFlight.length > 0) return log("close_in_flight", "A close order for this position is already in flight; nothing sent.");
 
     const closeTimeoutMs = options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000;
-    let closePercent: number | undefined;
+    let botConfig: BotStaticConfig | null = null;
     try {
-      closePercent = getBotStaticConfig(botId).closePricePercent;
+      botConfig = getBotStaticConfig(botId);
     } catch {
-      /* a bot without complete inputs: the default applies */
+      /* a bot without complete inputs: the defaults apply */
     }
-    const params = closeParamsFor(position, closeTimeoutMs, closePercent);
+    const closeHow = { quotes: !!options.executor.getSpreadQuote, mode: botConfig?.smartPricing ?? ("normal" as SmartPricingMode) };
+    const params = closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, closeHow);
     if (options.dryRun ?? isDryRun()) {
       rec.action({ action: "close", title: closeTitle(position), position, params, outcome: "dry_run", reason: "Dry run: nothing sent." });
       return log("dry_run", `Dry run: would close ${position.type} position.`, true);
@@ -774,9 +822,9 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       closeTimeoutMs,
       options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
       now,
-      closePercent,
+      botConfig ? pricingFor(botConfig, "close", options.ladderStepMs) : undefined,
     );
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params, outcome: result.outcome, reason: result.reason });
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId, reason: result.reason }, now);
       ensureBotRecord(botId);

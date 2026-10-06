@@ -16,7 +16,7 @@ export default async function BotPage({
   if (!isKnownBot(id)) notFound();
 
   if (!isValidSession(cookieStore.get(SESSION_COOKIE_NAME)?.value)) {
-    return <AutomationLogin next={`/automation/bots/${id}`} error={!!error} />;
+    return <AutomationLogin next={`/automation/bots/${id}`} error={error === "config" ? "config" : !!error} />;
   }
   // Keyed by bot so switching bots remounts: no stale data, no alerts for the previous bot's history.
   return <BotDetail key={id} botId={id} initialTab={tab} />;

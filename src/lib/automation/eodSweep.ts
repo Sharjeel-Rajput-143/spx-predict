@@ -1,7 +1,10 @@
 import "server-only";
-import { DEFAULT_EOD_SWEEP_MINUTES, parseClockMinutes } from "./config";
+import { DEFAULT_EOD_SWEEP_MINUTES, envNumber, isDryRun, parseClockMinutes } from "./config";
 import { getBotStaticConfig, listBotIds } from "./bots";
 import { expireAllActivePositions } from "./expiry";
+import { recoverInFlightPositions } from "./recovery";
+import { flagMismatches, reconcile } from "./reconcile";
+import { executorStatus, sharedExecutor } from "./sharedExecutor";
 import { easternDateKey } from "./tradingHours";
 
 const TICK_MS = 60_000;
@@ -57,8 +60,33 @@ export function runDueSweeps(now: number): string[] {
   return swept;
 }
 
+let lastReconcileAt = 0;
+
+/** Only a real broker executor, configured, with orders actually being sent, has anything to recover or compare. */
+function brokerReady(): boolean {
+  const s = executorStatus();
+  return s.venue === "tradier" && !s.error && !isDryRun();
+}
+
 function tick(): void {
   runDueSweeps(Date.now());
+
+  // Optional periodic check of our open positions against the broker's (RECONCILE_INTERVAL_MINUTES, off by default).
+  const everyMinutes = envNumber("RECONCILE_INTERVAL_MINUTES", 0);
+  if (everyMinutes > 0 && brokerReady() && Date.now() - lastReconcileAt >= everyMinutes * 60_000) {
+    lastReconcileAt = Date.now();
+    reconcile(sharedExecutor)
+      .then(flagMismatches)
+      .catch((err) => console.error("[automation] broker check failed", err));
+  }
+}
+
+/** On startup, settle any order a crash or restart left in flight (reads each back from the broker; sends nothing). */
+function recoverOnStartup(): void {
+  if (!brokerReady()) return;
+  recoverInFlightPositions(sharedExecutor)
+    .then((results) => results.length > 0 && console.warn(`[automation] recovery after restart: ${results.map((r) => `${r.was}->${r.action}`).join(", ")}`))
+    .catch((err) => console.error("[automation] recovery after restart failed", err));
 }
 
 /** Lazily started (same pattern as automations/scheduler.ts's
@@ -68,6 +96,7 @@ function tick(): void {
 export function startEodScheduler(): void {
   if (started) return;
   started = true;
+  recoverOnStartup();
   tick();
   setInterval(tick, TICK_MS);
 }

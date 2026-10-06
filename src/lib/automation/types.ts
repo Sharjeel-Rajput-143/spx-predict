@@ -1,5 +1,7 @@
 export type SignalDirection = "bullish" | "bearish";
 
+import type { LegQuotes, SmartPricingMode } from "./smartPricing";
+
 export type PositionType = "short_put_spread" | "short_call_spread";
 
 /** How the short strike is snapped onto the strike grid. "outward" (the default):
@@ -77,6 +79,8 @@ export interface BotStaticConfig {
    * order as `pricePercent`; the mock has no bid/ask, so nothing is computed from it yet. */
   openPricePercent?: number;
   closePricePercent?: number;
+  /** SmartPricing preset for opening and closing orders (default normal) - used only when the executor can quote the spread. */
+  smartPricing?: SmartPricingMode;
   /** This bot's own total-position limit; unset = the global default. A safeguard
    * set on the bot (Settings > Safeguards) still wins. */
   totalPositionLimit?: number;
@@ -273,14 +277,37 @@ export interface OpenSpreadRequest {
   expiry: string;
 }
 
+/** One option position as the broker reports it. */
+export interface BrokerPosition {
+  /** The OCC-style option symbol. */
+  symbol: string;
+  /** Contracts: negative = short. */
+  quantity: number;
+}
+
+/** The legs of a spread, to ask for a quote on. */
+export interface SpreadQuoteRequest {
+  underlying: string;
+  optionRoot?: string;
+  expiry: string;
+  type: PositionType;
+  shortStrike: number;
+  longStrike: number;
+}
+
 export interface BrokerExecutor {
   /** What kind of executor this is; unset is treated as "mock". */
   readonly venue?: ExecutorVenue;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
-  placeCloseOrder(position: Position, options?: { pricePercent?: number }): Promise<{ ref: string }>;
+  /** `limitDebit`: the most to pay to buy the spread back. Unset = the executor's own default (the mock fills; Tradier sends a market order). */
+  placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number }): Promise<{ ref: string }>;
   getOrder(ref: string): Promise<OrderState>;
   cancelOrder(ref: string): Promise<void>;
   listPositions(botId: string): Promise<Position[]>;
+  /** The bid and ask of each leg, when the executor can see them. Executors without a market (the mock) omit it, and orders then go out at one price. */
+  getSpreadQuote?(req: SpreadQuoteRequest): Promise<LegQuotes | null>;
+  /** What the broker itself holds, for checking against our records. */
+  listBrokerPositions?(): Promise<BrokerPosition[]>;
 }
 
 // --- Run trace: what the engine walked through for one signal or manual action ---
@@ -341,6 +368,24 @@ export interface ActivityAlert {
   createdAt: number;
   /** "off" unless email alerts are switched on; "queued" = written to the outbox (no sender is wired yet). */
   email: "off" | "queued";
+}
+
+// --- Named webhooks: one unique URL per bot and direction, like Option Alpha's ---
+
+export interface Webhook {
+  id: string;
+  /** What the person calls it ("BullishNDX"). */
+  name: string;
+  /** The secret part of the URL: whoever has the URL can trigger it. */
+  token: string;
+  botId: string;
+  /** Which signal a call to this URL means. */
+  direction: SignalDirection;
+  active: boolean;
+  createdAt: number;
+  lastTriggeredAt: number | null;
+  /** Calls accepted (not counting ones ignored by the once-a-minute limit). */
+  triggerCount: number;
 }
 
 // --- App-wide settings (Settings page) ---

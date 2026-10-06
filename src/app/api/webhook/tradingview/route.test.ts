@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signalsStore } from "@/lib/automation/store";
 import { NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
 import { POST } from "./route";
@@ -87,5 +87,18 @@ describe("POST /api/webhook/tradingview", () => {
     expect(signalsStore.query((s) => s.botId === NDX_BOT_ID)).toHaveLength(1);
     expect(signalsStore.query((s) => s.botId === TEST_BOT_ID)).toHaveLength(0);
     expect(signalsStore.all()[0].raw).toMatchObject({ symbol: "NDX" });
+  });
+});
+
+describe("a host that can't keep records", () => {
+  it("answers 503 with the reason before doing anything with the alert - not an opaque 500", async () => {
+    const { ingestWebhook } = await import("@/lib/automation/webhookIngest");
+    const store = await import("@/lib/automation/store");
+    const spy = vi.spyOn(store, "storageProblem").mockReturnValue("This host can't write the bots' records");
+    const result = ingestWebhook({ secret: "anything", bot: TEST_BOT_ID }, { executor: {} as never });
+    expect(result).toMatchObject({ status: 503 });
+    expect(String(result.body.error)).toMatch(/can't write/);
+    expect(signalsStore.all()).toHaveLength(0);
+    spy.mockRestore();
   });
 });

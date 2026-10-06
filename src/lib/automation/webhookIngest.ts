@@ -6,7 +6,7 @@ import { getWebhookSecret } from "./config";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { startEodScheduler } from "./eodSweep";
 import { executorStatus } from "./sharedExecutor";
-import { signalsStore } from "./store";
+import { signalsStore, storageProblem } from "./store";
 import type { BrokerExecutor } from "./types";
 
 /** The whole life of a TradingView alert after its JSON is parsed: secret
@@ -45,6 +45,8 @@ export interface IngestOptions {
   executor: BrokerExecutor;
   /** Set only by the admin page's Send test alert, after its own auth. A `test` field in a webhook body is ignored. */
   test?: boolean;
+  /** The caller was already authenticated another way (a named webhook's secret URL), so the shared secret in the body isn't checked. */
+  trusted?: boolean;
 }
 
 export interface IngestResult {
@@ -57,6 +59,10 @@ export interface IngestResult {
 }
 
 export function ingestWebhook(parsed: unknown, options: IngestOptions): IngestResult {
+  // First of all: a host that can't keep records can't run the engine, and must not half-process (or half-log) an alert.
+  const storage = storageProblem();
+  if (storage) return { status: 503, body: { error: storage } };
+
   startEodScheduler();
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -64,7 +70,7 @@ export function ingestWebhook(parsed: unknown, options: IngestOptions): IngestRe
   }
   const body = parsed as Record<string, unknown>;
 
-  if (!secretMatches(body.secret)) {
+  if (!options.trusted && !secretMatches(body.secret)) {
     logRejectedSignal(body, "bad_secret");
     return { status: 401, body: { error: "Unauthorized." } };
   }

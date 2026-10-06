@@ -37,7 +37,8 @@ function fakeFetch(replies: { status?: number; body: unknown }[]) {
   return { impl, calls };
 }
 
-// SAMPLE shapes (not recorded) of POST /orders and GET /orders/{id}.
+// SAMPLE shapes (not recorded) of GET /markets/quotes, POST /orders and GET /orders/{id}.
+const sampleQuotes = (short: string, long: string) => ({ quotes: { quote: [{ symbol: short, bid: 12.0, ask: 12.6 }, { symbol: long, bid: 8.7, ask: 9.3 }] } });
 const SAMPLE_PLACED = { order: { id: 4815162, status: "ok", partner_id: "sample" } };
 const sampleOrder = (over: Record<string, unknown>) => ({ order: { id: 4815162, quantity: 1, exec_quantity: 0, status: "open", ...over } });
 
@@ -63,7 +64,8 @@ describe("config: sandbox by default, production only on purpose", () => {
     const env = { TRADIER_TOKEN: "t", TRADIER_ACCOUNT_ID: "a", TRADIER_BASE_URL: TRADIER_PRODUCTION_URL };
     expect(() => readTradierConfig(env)).toThrow(/Refusing to use Tradier's PRODUCTION URL/);
     expect(() => readTradierConfig({ ...env, TRADIER_ALLOW_PRODUCTION: "yes" })).toThrow(/PRODUCTION/);
-    expect(readTradierConfig({ ...env, TRADIER_ALLOW_PRODUCTION: "true" })).toMatchObject({ baseUrl: TRADIER_PRODUCTION_URL, sandbox: false });
+    const caps = { TRADIER_MAX_CONTRACTS_PER_ORDER: "3", TRADIER_MAX_RISK_PER_ORDER: "1500" };
+    expect(readTradierConfig({ ...env, ...caps, TRADIER_ALLOW_PRODUCTION: "true" })).toMatchObject({ baseUrl: TRADIER_PRODUCTION_URL, sandbox: false, maxContracts: 3, maxRiskPerOrder: 1500 });
   });
 
   it("the allow flag alone does not switch to production - the URL must be set too", () => {
@@ -196,24 +198,27 @@ describe("through the engine, with the kill switch and dry run", () => {
     receiveAndSaveSignal({ botId: NDX_BOT_ID, signal: direction, price: 21_003.7, barTime, interval: "5", raw: { symbol: "NDX" }, now: BASE_NOW });
 
   it("a signal places a multileg order through the executor and the fill becomes the position's credit", async () => {
-    const { calls, impl } = fakeFetch([{ body: SAMPLE_PLACED }, { body: sampleOrder({ status: "filled", quantity: 1, exec_quantity: 1, avg_fill_price: 3.4 }) }]);
+    const { calls, impl } = fakeFetch([{ body: sampleQuotes("NDXP261006P20970000", "NDXP261006P20960000") }, { body: SAMPLE_PLACED }, { body: sampleOrder({ status: "filled", quantity: 1, exec_quantity: 1, avg_fill_price: 3.4 }) }]);
     await processSignal(send("bullish"), { executor: new TradierExecutor(baseConfig, impl), now: BASE_NOW, ...fast });
 
-    expect(calls[0].form["option_symbol[0]"]).toBe("NDXP261006P20970000"); // root from the bot's config, strikes from the engine
+    expect(calls[0].url).toContain("/markets/quotes?symbols=NDXP261006P20970000%2CNDXP261006P20960000"); // the legs priced off Tradier's own bid/ask
+    expect(calls[1].form["option_symbol[0]"]).toBe("NDXP261006P20970000"); // root from the bot's config, strikes from the engine
+    expect(calls[1].form.price).toBe("3.3"); // SmartPricing starts at the mid of the quote
     const position = positionsStore.query((p) => p.botId === NDX_BOT_ID)[0];
     expect(position).toMatchObject({ status: "open", credit: 3.4, venue: "tradier", optionRoot: "NDXP", brokerOrderRef: "4815162" });
     expect(decisionsStore.all().map((d) => d.outcome)).toEqual(["opened"]);
   });
 
-  it("dry run decides and records but never calls the executor", async () => {
-    const { calls, impl } = fakeFetch([]);
+  it("dry run decides and records, reads the quote to show its ladder, and never places an order", async () => {
+    const { calls, impl } = fakeFetch([{ body: sampleQuotes("NDXP261006P20970000", "NDXP261006P20960000") }]);
     await processSignal(send("bullish"), { executor: new TradierExecutor(baseConfig, impl), now: BASE_NOW, dryRun: true, ...fast });
-    expect(calls).toHaveLength(0);
+    expect(calls.map((c) => c.method)).toEqual(["GET"]); // a read-only quote, no POST
+    expect(decisionsStore.all()[0].detail).toMatchObject({ pricing: { prices: [3.3, 3.1, 2.9, 2.7] } });
     expect(decisionsStore.all().map((d) => d.outcome)).toEqual(["dry_run"]);
     expect(positionsStore.all()).toHaveLength(0);
   });
 
-  it("a bot switched off never reaches the executor", async () => {
+  it("a bot switched off never reaches the executor - not even for a quote", async () => {
     botsStore.insert({ id: NDX_BOT_ID, enabled: false, needsAttention: false, needsAttentionReason: null, createdAt: 0 });
     const { calls, impl } = fakeFetch([]);
     await processSignal(send("bullish"), { executor: new TradierExecutor(baseConfig, impl), now: BASE_NOW, ...fast });
@@ -222,10 +227,93 @@ describe("through the engine, with the kill switch and dry run", () => {
   });
 
   it("a rejected order is a rejected open, with Tradier's reason", async () => {
-    const { impl } = fakeFetch([{ body: SAMPLE_PLACED }, { body: sampleOrder({ status: "rejected", reason_description: "Insufficient buying power" }) }]);
+    const { impl } = fakeFetch([{ body: sampleQuotes("NDXP261006P20970000", "NDXP261006P20960000") }, { body: SAMPLE_PLACED }, { body: sampleOrder({ status: "rejected", reason_description: "Insufficient buying power" }) }]);
     await processSignal(send("bullish"), { executor: new TradierExecutor(baseConfig, impl), now: BASE_NOW, ...fast });
     expect(decisionsStore.all()[0]).toMatchObject({ outcome: "open_rejected" });
     expect(decisionsStore.all()[0].reason).toMatch(/Insufficient buying power/);
+  });
+});
+
+describe("quotes, debit closes, positions", () => {
+  const spread = { underlying: "NDX", optionRoot: "NDXP", expiry: "2026-10-06", type: "short_put_spread" as const, shortStrike: 20_970, longStrike: 20_960 };
+
+  it("asks for both legs at once from the market-data endpoint, and returns each leg's bid and ask", async () => {
+    const { calls, impl } = fakeFetch([{ body: sampleQuotes("NDXP261006P20970000", "NDXP261006P20960000") }]);
+    const q = await new TradierExecutor(baseConfig, impl).getSpreadQuote(spread);
+    expect(q).toEqual({ short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } });
+    expect(calls[0]).toMatchObject({ method: "GET", url: `${TRADIER_SANDBOX_URL}/markets/quotes?symbols=NDXP261006P20970000%2CNDXP261006P20960000` });
+    expect(calls[0].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("returns null - never a guess - when a leg is missing or has no bid or ask", async () => {
+    const one = fakeFetch([{ body: { quotes: { quote: { symbol: "NDXP261006P20970000", bid: 12, ask: 12.6 } } } }]); // a single quote comes back as an object
+    expect(await new TradierExecutor(baseConfig, one.impl).getSpreadQuote(spread)).toBeNull();
+    const noAsk = fakeFetch([{ body: { quotes: { quote: [{ symbol: "NDXP261006P20970000", bid: 12, ask: null }, { symbol: "NDXP261006P20960000", bid: 8.7, ask: 9.3 }] } } }]);
+    expect(await new TradierExecutor(baseConfig, noAsk.impl).getSpreadQuote(spread)).toBeNull();
+    const unmatched = fakeFetch([{ body: { quotes: { unmatched_symbols: { symbol: ["X"] } } } }]);
+    expect(await new TradierExecutor(baseConfig, unmatched.impl).getSpreadQuote(spread)).toBeNull();
+  });
+
+  it("won't guess an option root for a quote either", async () => {
+    const { calls, impl } = fakeFetch([]);
+    await expect(new TradierExecutor(baseConfig, impl).getSpreadQuote({ ...spread, optionRoot: undefined })).rejects.toThrow(/will not guess/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a close with a ladder price is a debit order at that price; with none it stays a market order", async () => {
+    const { calls, impl } = fakeFetch([{ body: SAMPLE_PLACED }, { body: SAMPLE_PLACED }]);
+    const position = buildPosition({ botId: NDX_BOT_ID, underlying: "NDX", optionRoot: "NDXP", type: "short_put_spread", status: "open", shortStrike: 20_970, longStrike: 20_960, requestedQuantity: 1, filledQuantity: 1 });
+    const ex = new TradierExecutor(baseConfig, impl);
+    await ex.placeCloseOrder(position, { limitDebit: 3.5 });
+    await ex.placeCloseOrder(position);
+    expect(calls[0].form).toMatchObject({ type: "debit", price: "3.5", "side[0]": "buy_to_close", "side[1]": "sell_to_close" });
+    expect(calls[1].form).toMatchObject({ type: "market" });
+    expect(calls[1].form.price).toBeUndefined();
+  });
+
+  it("lists what Tradier holds - nothing as the string \"null\", one position as an object, several as a list", async () => {
+    const { impl } = fakeFetch([{ body: { positions: "null" } }, { body: { positions: { position: { symbol: "NDXP261006P20970000", quantity: -1 } } } }, { body: { positions: { position: [{ symbol: "A", quantity: -1 }, { symbol: "B", quantity: 1 }] } } }]);
+    const ex = new TradierExecutor(baseConfig, impl);
+    expect(await ex.listBrokerPositions()).toEqual([]);
+    expect(await ex.listBrokerPositions()).toEqual([{ symbol: "NDXP261006P20970000", quantity: -1 }]);
+    expect(await ex.listBrokerPositions()).toEqual([{ symbol: "A", quantity: -1 }, { symbol: "B", quantity: 1 }]);
+  });
+});
+
+describe("hard limits on real money", () => {
+  const live = { ...baseConfig, baseUrl: TRADIER_PRODUCTION_URL, sandbox: false, maxContracts: 2, maxRiskPerOrder: 1500 };
+  const req = (over: Partial<Parameters<TradierExecutor["placeOpenOrder"]>[0]> = {}) => ({ botId: NDX_BOT_ID, underlying: "NDX", optionRoot: "NDXP", positionType: "short_put_spread" as const, shortStrike: 20_970, longStrike: 20_960, quantity: 1, limitCredit: 3.5, expiry: "2026-10-06", ...over });
+
+  it("production won't start without both caps - they have no defaults", () => {
+    const env = { TRADIER_TOKEN: "t", TRADIER_ACCOUNT_ID: "a", TRADIER_BASE_URL: TRADIER_PRODUCTION_URL, TRADIER_ALLOW_PRODUCTION: "true" };
+    expect(() => readTradierConfig(env)).toThrow(/TRADIER_MAX_CONTRACTS_PER_ORDER and TRADIER_MAX_RISK_PER_ORDER/);
+    expect(() => readTradierConfig({ ...env, TRADIER_MAX_CONTRACTS_PER_ORDER: "2" })).toThrow(/TRADIER_MAX_RISK_PER_ORDER/);
+    expect(() => readTradierConfig({ ...env, TRADIER_MAX_CONTRACTS_PER_ORDER: "0", TRADIER_MAX_RISK_PER_ORDER: "1500" })).toThrow(/above 0/);
+    expect(() => readTradierConfig({ TRADIER_TOKEN: "t", TRADIER_ACCOUNT_ID: "a" })).not.toThrow(); // the sandbox needs none
+  });
+
+  it("an opening order over the contract cap, or the risk cap, is refused before any request", async () => {
+    const { calls, impl } = fakeFetch([]);
+    const ex = new TradierExecutor(live, impl);
+    await expect(ex.placeOpenOrder(req({ quantity: 3 }))).rejects.toThrow(/3 contracts is over the limit of 2/);
+    await expect(ex.placeOpenOrder(req({ quantity: 2, shortStrike: 20_970, longStrike: 20_880, limitCredit: 3 }))).rejects.toThrow(/risks \$17400, over the limit of \$1500/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an order within the caps goes through, and closing is never capped", async () => {
+    const { calls, impl } = fakeFetch([{ body: SAMPLE_PLACED }, { body: SAMPLE_PLACED }]);
+    const ex = new TradierExecutor(live, impl);
+    await ex.placeOpenOrder(req({ quantity: 1 })); // risks 10 x 100 - 350 = $650
+    await ex.placeCloseOrder(buildPosition({ botId: NDX_BOT_ID, underlying: "NDX", optionRoot: "NDXP", type: "short_put_spread", status: "open", shortStrike: 20_970, longStrike: 20_960, requestedQuantity: 9, filledQuantity: 9 }));
+    expect(calls).toHaveLength(2);
+  });
+
+  it("a limit credit that isn't below the width (or isn't a credit) is refused, sandbox or not", async () => {
+    const { calls, impl } = fakeFetch([]);
+    const ex = new TradierExecutor(baseConfig, impl);
+    await expect(ex.placeOpenOrder(req({ limitCredit: 10 }))).rejects.toThrow(/not a credit between 0 and the width \(10\)/);
+    await expect(ex.placeOpenOrder(req({ limitCredit: 0 }))).rejects.toThrow(/not a credit/);
+    expect(calls).toHaveLength(0);
   });
 });
 

@@ -6,6 +6,10 @@ const TERMINAL: readonly OrderStatus[] = ["filled", "canceled", "rejected"];
 export interface WatchOrderOptions {
   timeoutMs: number;
   pollIntervalMs: number;
+  /** How long to keep waiting once part of the order has filled (each new partial fill restarts it).
+   * Option Alpha waits the full default timeout (2 minutes) for the rest of a partial fill, even on a
+   * rung whose own wait is only seconds. Unset = the same as `timeoutMs`. */
+  partialTimeoutMs?: number;
 }
 
 export interface WatchOrderResult {
@@ -24,7 +28,7 @@ function sleep(ms: number): Promise<void> {
  * partial fill the timeout resets" - so the deadline moves forward every
  * time filledQuantity changes, not just once at the start. */
 export async function watchOrder(executor: BrokerExecutor, ref: string, options: WatchOrderOptions): Promise<WatchOrderResult> {
-  const { timeoutMs, pollIntervalMs } = options;
+  const { timeoutMs, pollIntervalMs, partialTimeoutMs = timeoutMs } = options;
   let deadline = Date.now() + timeoutMs;
   let lastFilledQuantity = -1;
 
@@ -34,7 +38,7 @@ export async function watchOrder(executor: BrokerExecutor, ref: string, options:
 
     if (state.filledQuantity !== lastFilledQuantity) {
       lastFilledQuantity = state.filledQuantity;
-      deadline = Date.now() + timeoutMs;
+      deadline = Date.now() + (state.filledQuantity > 0 ? partialTimeoutMs : timeoutMs);
     }
 
     if (Date.now() >= deadline) {

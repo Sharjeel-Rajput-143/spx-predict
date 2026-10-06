@@ -28,7 +28,7 @@ export default async function AutomationStatusPage({
           <button type="submit" className="w-full rounded-lg bg-fg px-3 py-2 text-sm font-medium text-bg">
             Sign in
           </button>
-          {error && <p className="text-xs text-down">Wrong password.</p>}
+          {error === "config" ? <p className="text-xs text-down">Sign-in isn&apos;t set up on this server: AUTOMATION_STATUS_PASSWORD is not set. Set it in the host&apos;s environment settings and redeploy.</p> : error && <p className="text-xs text-down">Wrong password.</p>}
         </form>
       </div>
     );

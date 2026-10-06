@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { WebhookSettings } from "@/components/automations/WebhookSettings";
 import { cn } from "@/lib/format";
-import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, type ArchivedBot, type SettingsData, type SavePatch } from "./settings/sections";
+import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, type ArchivedBot, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
 
 const SECTIONS = [
   { key: "general", label: "General" },
@@ -18,6 +18,7 @@ export function SettingsView() {
   const [section, setSection] = useState<SectionKey>("general");
   const [data, setData] = useState<SettingsData | null>(null);
   const [archived, setArchived] = useState<ArchivedBot[]>([]);
+  const [hooks, setHooks] = useState<WebhookView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showOutbound, setShowOutbound] = useState(false);
 
@@ -36,6 +37,10 @@ export function SettingsView() {
       .then((r) => (r.ok ? r.json() : { bots: [] }))
       .then((json: { bots: (ArchivedBot & { archived: boolean })[] }) => setArchived(json.bots.filter((b) => b.archived)))
       .catch(() => undefined);
+    fetch("/api/automation/webhooks")
+      .then((r) => (r.ok ? r.json() : { webhooks: [] }))
+      .then((json: { webhooks: WebhookView[] }) => setHooks(json.webhooks))
+      .catch(() => undefined);
   }, []);
   useEffect(load, [load]);
 
@@ -45,6 +50,14 @@ export function SettingsView() {
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return json.error ?? "Couldn't save.";
     setData(json as SettingsData);
+    return null;
+  };
+
+  const createHook = async (name: string, botId: string, direction: "bullish" | "bearish"): Promise<string | null> => {
+    const res = await fetch("/api/automation/webhooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, botId, direction }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return json.error ?? "Couldn't create it.";
+    load();
     return null;
   };
 
@@ -82,6 +95,10 @@ export function SettingsView() {
             <WebhooksSection
               data={data}
               origin={typeof window === "undefined" ? "" : window.location.origin}
+              hooks={hooks}
+              onCreate={createHook}
+              onToggle={(id, active) => fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }) }).then(load)}
+              onDelete={(id) => fetch(`/api/automation/webhooks/${id}`, { method: "DELETE" }).then(load)}
               outbound={
                 <OutboundGate shown={showOutbound} onShow={() => setShowOutbound(true)}>
                   <WebhookSettings />

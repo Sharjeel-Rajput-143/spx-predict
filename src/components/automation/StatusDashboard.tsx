@@ -34,6 +34,7 @@ export interface StatusBot {
     strikeRounding: "outward" | "nearest";
     openPricePercent: number;
     closePricePercent: number;
+    smartPricing: "normal" | "fast" | "patient" | "off";
     window: string;
     alerts: { open: boolean; close: boolean; warning: boolean; error: boolean };
   } | null;
@@ -107,9 +108,19 @@ export interface StatusExecutor {
   testMode: boolean;
 }
 
+export interface ReconcileView {
+  checkedAt: number;
+  ok: boolean;
+  expectedLegs: number;
+  brokerLegs: number;
+  problems: { kind: string; symbol: string; text: string }[];
+}
+
 export interface StatusResponse {
   now: number;
   executor: StatusExecutor;
+  /** Set when this host can't keep the bots' records (a serverless host). */
+  storageProblem?: string | null;
   bots: StatusBot[];
   positions: StatusPosition[];
   orders: StatusOrder[];
@@ -202,10 +213,11 @@ function ExecutorBanner({ executor }: { executor: StatusExecutor }) {
     );
   }
   const mock = executor.venue === "mock";
+  const live = !mock && !executor.sandbox;
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm", mock ? "bg-amber-500/10 text-amber-500" : "bg-accent/10 text-accent")}>
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm", mock ? "bg-amber-500/10 text-amber-500" : live ? "bg-down-soft text-down" : "bg-accent/10 text-accent")}>
       <span className="font-semibold">
-        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : executor.sandbox ? "Tradier SANDBOX (paper money)" : "Tradier PRODUCTION"}
+        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : live ? "LIVE — Tradier PRODUCTION: real money" : "Tradier SANDBOX (paper money)"}
       </span>
       {!mock && executor.baseUrl && <span className="font-mono text-xs">{executor.baseUrl}</span>}
       {executor.dryRun && <Pill tone="warn">Dry run: decisions only, no orders</Pill>}
@@ -293,7 +305,7 @@ function BotCard({
       {bot.settings && (
         <p className="text-xs text-muted">
           {bot.settings.quantity} × {bot.settings.widthPoints}-pt spreads, window {bot.settings.window}. Short put {signedPts(bot.settings.putShortOffset)} / short call {signedPts(bot.settings.callShortOffset)} from the price, rounded{" "}
-          {bot.settings.strikeRounding === "outward" ? "out of the money (put down, call up)" : "to the nearest"} to {bot.settings.strikeIncrement}. Orders at {bot.settings.openPricePercent}% (open) / {bot.settings.closePricePercent}% (close) of bid/ask.
+          {bot.settings.strikeRounding === "outward" ? "out of the money (put down, call up)" : "to the nearest"} to {bot.settings.strikeIncrement}. Orders at {bot.settings.openPricePercent}% (open) / {bot.settings.closePricePercent}% (close) of bid/ask, SmartPricing {bot.settings.smartPricing} (needs live quotes).
         </p>
       )}
 
@@ -348,6 +360,7 @@ export function StatusView({
   onToggle,
   onSend,
   onReset,
+  reconcile,
 }: {
   data: StatusResponse;
   busyBot: string | null;
@@ -355,6 +368,8 @@ export function StatusView({
   onToggle: (id: string) => void;
   onSend: (bot: StatusBot, signal: "bullish" | "bearish", price: number) => void;
   onReset: () => void;
+  /** Shown only with a broker executor: compare our open positions with what the broker holds. */
+  reconcile?: { report: ReconcileView | null; busy: boolean; error: string | null; onRun: () => void };
 }) {
   const botName = (id: string | null) => data.bots.find((b) => b.id === id)?.name ?? id ?? "—";
   const active = data.positions.filter((p) => ACTIVE.includes(p.status));
@@ -382,7 +397,40 @@ export function StatusView({
 
   return (
     <div className="space-y-4">
+      {data.storageProblem && (
+        <div className="rounded-xl bg-down-soft px-4 py-3 text-sm text-down">
+          <span className="font-semibold">This server can&apos;t run the engine.</span> {data.storageProblem}
+        </div>
+      )}
       <ExecutorBanner executor={data.executor} />
+
+      {reconcile && data.executor.venue === "tradier" && (
+        <Card className="space-y-2 p-4">
+          <SectionTitle
+            action={
+              <button onClick={reconcile.onRun} disabled={reconcile.busy} className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg disabled:opacity-50">
+                {reconcile.busy ? "Checking…" : "Check broker positions"}
+              </button>
+            }
+          >
+            Broker check
+          </SectionTitle>
+          <p className="text-xs text-muted">Compares what the bots say is open with what {data.executor.sandbox ? "the Tradier sandbox" : "Tradier"} actually holds, leg by leg. It reports and flags the bot - it never opens or closes anything.</p>
+          {reconcile.error && <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">{reconcile.error}</p>}
+          {reconcile.report &&
+            (reconcile.report.ok ? (
+              <p className="rounded-lg bg-up-soft px-3 py-2 text-sm text-up">
+                All matched at {formatTime(reconcile.report.checkedAt)}: {reconcile.report.expectedLegs} expected leg{reconcile.report.expectedLegs === 1 ? "" : "s"}, {reconcile.report.brokerLegs} held at the broker.
+              </p>
+            ) : (
+              <ul className="space-y-1 rounded-lg bg-down-soft px-3 py-2 text-sm text-down">
+                {reconcile.report.problems.map((p, i) => (
+                  <li key={i}>{p.text}</li>
+                ))}
+              </ul>
+            ))}
+        </Card>
+      )}
 
       <div className="grid gap-3 md:grid-cols-2">
         {data.bots.map((bot) => (
@@ -501,6 +549,9 @@ export function StatusDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [busyBot, setBusyBot] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, string>>({});
+  const [report, setReport] = useState<ReconcileView | null>(null);
+  const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [reconcileError, setReconcileError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetch("/api/automation/status")
@@ -549,6 +600,20 @@ export function StatusDashboard() {
       .finally(() => setBusyBot(null));
   };
 
+  const runReconcile = () => {
+    setReconcileBusy(true);
+    setReconcileError(null);
+    fetch("/api/automation/reconcile", { method: "POST" })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) return setReconcileError(j.error ?? "Couldn't check.");
+        setReport(j.report as ReconcileView);
+      })
+      .catch(() => setReconcileError("Couldn't reach the server."))
+      .then(load)
+      .finally(() => setReconcileBusy(false));
+  };
+
   const reset = () => {
     if (!window.confirm("Reset the test data? This clears every recorded alert, position, order and decision. Bots and their settings stay.")) return;
     fetch("/api/automation/test/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }) })
@@ -558,5 +623,5 @@ export function StatusDashboard() {
 
   if (error) return <Card className="p-4 text-sm text-down">{error}</Card>;
   if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
-  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} />;
+  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} reconcile={{ report, busy: reconcileBusy, error: reconcileError, onRun: runReconcile }} />;
 }

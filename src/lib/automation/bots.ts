@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { SMART_PRICING_MODES, type SmartPricingMode } from "./smartPricing";
 import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes, requiredEnvNumber } from "./config";
 import {
   alertsStore,
@@ -11,6 +12,7 @@ import {
   runsStore,
   signalsStore,
   templatesStore,
+  webhooksStore,
 } from "./store";
 import {
   ACTIVE_POSITION_STATUSES,
@@ -25,10 +27,15 @@ import {
 /** Settings both built-in bots share, read from `<PREFIX>_...` env vars:
  * strike rounding, the order price as a percent of bid/ask, and the bot's
  * total-position limit (the live SPX bot holds up to 3; NDX stays at 1). */
-function pricingAndLimits(prefix: string, defaultTotalPositionLimit: number): Pick<BotStaticConfig, "strikeRounding" | "openPricePercent" | "closePricePercent" | "totalPositionLimit"> {
+function pricingAndLimits(prefix: string, defaultTotalPositionLimit: number): Pick<BotStaticConfig, "strikeRounding" | "openPricePercent" | "closePricePercent" | "totalPositionLimit" | "smartPricing"> {
   const rounding = envString(`${prefix}_STRIKE_ROUNDING`, "outward");
   if (rounding !== "outward" && rounding !== "nearest") throw new Error(`${prefix}_STRIKE_ROUNDING must be "outward" or "nearest", got "${rounding}".`);
+  const smart = envString(`${prefix}_SMART_PRICING`, "normal");
+  if (!(SMART_PRICING_MODES as string[]).includes(smart)) throw new Error(`${prefix}_SMART_PRICING must be one of ${SMART_PRICING_MODES.join(", ")}, got "${smart}".`);
   return {
+    // The live Option Alpha bot runs SmartPricing in Normal mode (up to 4 prices, 10 seconds each). It only
+    // applies when the executor can quote the spread; the mock has no market, so it sends one price.
+    smartPricing: smart as SmartPricingMode,
     // TODO(unconfirmed): verify "outward" against Option Alpha's real behavior.
     strikeRounding: rounding,
     // TODO(unconfirmed): what "100% of bid/ask" means exactly - confirm with the owner.
@@ -131,6 +138,9 @@ export function checkBotConfig(c: BotStaticConfig): void {
   }
   for (const [label, v] of [["Open price", c.openPricePercent], ["Close price", c.closePricePercent]] as const) {
     if (v !== undefined && !(Number.isFinite(v) && v > 0 && v <= 100)) throw new Error(`invalid_config: ${label.toLowerCase()} must be a percent of bid/ask above 0 and at most 100 (got ${String(v)}).`);
+  }
+  if (c.smartPricing !== undefined && !(SMART_PRICING_MODES as string[]).includes(c.smartPricing)) {
+    throw new Error(`invalid_config: SmartPricing must be one of ${SMART_PRICING_MODES.join(", ")} (got "${String(c.smartPricing)}").`);
   }
   if (c.totalPositionLimit !== undefined && !(Number.isInteger(c.totalPositionLimit) && c.totalPositionLimit >= 1)) {
     throw new Error(`invalid_config: the total position limit must be a whole number of at least 1 (got ${String(c.totalPositionLimit)}).`);
@@ -531,5 +541,6 @@ export function deleteBot(botId: string): void {
   errorsStore.removeWhere((e) => e.botId === botId);
   runsStore.removeWhere((r) => r.botId === botId);
   alertsStore.removeWhere((a) => a.botId === botId);
+  webhooksStore.removeWhere((w) => w.botId === botId);
   botsStore.remove(botId);
 }

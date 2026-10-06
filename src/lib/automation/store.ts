@@ -1,7 +1,7 @@
 import "server-only";
 import fs from "node:fs";
 import path from "node:path";
-import type { ActivityAlert, AppSettingsRow, Bot, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
+import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
 
 /**
  * Tiny JSON-file-backed store, same shape as automations/store.ts's JsonStore
@@ -12,6 +12,24 @@ import type { ActivityAlert, AppSettingsRow, Bot, BotTemplate, Decision, ErrorRe
 // Overridable so the test suite never reads/writes the same files a running
 // dev/prod process uses (see vitest.setup.ts).
 const DATA_DIR = process.env.AUTOMATION_DATA_DIR ?? path.join(process.cwd(), "data", "automation");
+
+let storageChecked: string | null | undefined;
+
+/** Why this host can't keep the bots' records, or null when it can. The records live in JSON files on disk, so a host with a
+ * read-only filesystem (serverless platforms such as Vercel) can't run the engine - saying so beats an opaque 500. */
+export function storageProblem(): string | null {
+  if (storageChecked !== undefined) return storageChecked;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const probe = path.join(DATA_DIR, `.write-test-${process.pid}`);
+    fs.writeFileSync(probe, "ok");
+    fs.rmSync(probe);
+    storageChecked = null;
+  } catch (err) {
+    storageChecked = `This host can't write the bots' records to ${DATA_DIR} (${err instanceof Error ? err.message : String(err)}). The engine keeps its state in files and in memory, so it needs a server that stays running with a writable disk - not a serverless host.`;
+  }
+  return storageChecked;
+}
 
 /**
  * One in-memory cache per file, shared by every copy of this module. Next
@@ -126,6 +144,7 @@ export const errorsStore = new JsonStore<ErrorRecord>("errors");
 export const templatesStore = new JsonStore<BotTemplate>("templates");
 export const runsStore = new JsonStore<Run>("runs");
 export const alertsStore = new JsonStore<ActivityAlert>("alerts");
+export const webhooksStore = new JsonStore<Webhook>("webhooks");
 /** One row (id "app"): the app-wide settings from the Settings page. */
 export const settingsStore = new JsonStore<AppSettingsRow>("settings");
 
@@ -140,4 +159,5 @@ export function __resetAllStores(): void {
   runsStore.__reset();
   alertsStore.__reset();
   settingsStore.__reset();
+  webhooksStore.__reset();
 }
