@@ -373,11 +373,20 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   // Step 0: stale-position safety net (the EOD sweep is the primary mechanism).
   expireStalePositions(botId, now);
 
-  // Step 1: kill switch.
+  // Step 1: the switches. The kill switch stops every webhook run completely. The bot's On/Off is softer, like
+  // Option Alpha's "Always On" trigger, copied only for closes: with the bot off a webhook may still close the
+  // opposite position (the flip's close), and may never open. The sweep and the Close position button ignore both.
   const bot = ensureBotRecord(botId);
-  rec.decision("Bot is switched on", bot.enabled, bot.enabled ? "Bot is on" : "Bot is off");
-  if (!bot.enabled) {
-    log("automations_off", "Bot is switched off.");
+  if (bot.killSwitch) {
+    rec.decision("Kill switch is off", false, "Kill switch is on - nothing runs");
+    log("kill_switch", "Kill switch is on: nothing was closed or opened.");
+    return;
+  }
+  const closeOnly = !bot.enabled;
+  const closableNow = closeOnly ? activePositionsForBot(botId, oppositeType(wantedType(signal.signal as SignalDirection))) : [];
+  rec.decision("Bot is switched on", bot.enabled, bot.enabled ? "Bot is on" : closableNow.length > 0 ? "Bot is off - this run may close, never open" : "Bot is off");
+  if (closeOnly && closableNow.length === 0) {
+    log("automations_off", "Bot off: nothing to close, and the Open step is blocked. Nothing was opened.");
     return;
   }
 
@@ -482,6 +491,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   );
 
   for (const position of opposingPositions) {
+    if (closeOnly) log("bot_off_close_only", "Bot off, close only: handling the opposite position; nothing will be opened.", { positionId: position.id });
     const inFlight = ordersStore.query(
       (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
     );
@@ -531,6 +541,13 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
       return; // Never open the new side while the old side might still be held.
     }
     log("closed", result.reason, { positionId: position.id });
+  }
+
+  // The bot is off: the close above was all this run may do. The Open step is blocked.
+  if (closeOnly) {
+    rec.decision("Bot is switched on (the Open step)", false, "Bot off: the Open step is blocked");
+    log("automations_off", "Bot off: the Open step is blocked. The opposite position was handled; nothing was opened.", { botOff: true });
+    return;
   }
 
   // Stage B: open the wanted side - re-read fresh right before acting.
@@ -905,6 +922,16 @@ export async function manualOpen(
 
   try {
     expireStalePositions(botId, now);
+    // Opens always respect the switches (only closing is exempt).
+    const switches = ensureBotRecord(botId);
+    if (switches.killSwitch) {
+      rec.decision("Kill switch is off", false, "Kill switch is on");
+      return log("kill_switch", "Kill switch is on: nothing was opened.");
+    }
+    if (!switches.enabled) {
+      rec.decision("Bot is switched on", false, "Bot is off");
+      return log("automations_off", "Bot off: the Open step is blocked. Nothing was opened.");
+    }
     const hours = hoursConfigFor(staticConfig.hours);
     const inHours = isWithinTradingHours(now, hours);
     rec.decision(`Current market time is between ${describeWindow(hours)}`, inHours, describeTradingTime(now, hours));

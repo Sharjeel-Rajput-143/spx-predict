@@ -13,6 +13,7 @@ export interface BotSummary {
   mode: "paper";
   builtIn: boolean;
   enabled: boolean;
+  killSwitch: boolean;
   archived: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
@@ -58,6 +59,7 @@ export function summarizeBot(id: string, now = Date.now()): BotSummary {
     mode: "paper",
     builtIn: isBuiltInBot(id),
     enabled: record.enabled,
+    killSwitch: !!record.killSwitch,
     archived: !!record.archived,
     needsAttention: record.needsAttention,
     needsAttentionReason: record.needsAttentionReason,

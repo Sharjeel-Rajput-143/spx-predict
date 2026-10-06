@@ -72,6 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       name: config?.name ?? record.name ?? botDisplayName(id),
       builtIn: isBuiltInBot(id),
       enabled: record.enabled,
+      killSwitch: !!record.killSwitch,
       archived: !!record.archived,
       needsAttention: record.needsAttention,
       needsAttentionReason: record.needsAttentionReason,

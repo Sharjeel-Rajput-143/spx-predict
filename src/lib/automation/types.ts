@@ -24,6 +24,10 @@ export type OrderStatus = "working" | "partially_filled" | "filled" | "canceled"
 /** Every reason a signal can be stopped or acted on, one per decision log row. */
 export type DecisionOutcome =
   | "automations_off"
+  /** The kill switch is on: nothing runs for this bot. */
+  | "kill_switch"
+  /** The bot is off, and a webhook is closing the opposite position (it may close, never open). */
+  | "bot_off_close_only"
   | "outside_hours"
   | "duplicate_signal"
   | "already_in_position"
@@ -144,6 +148,10 @@ export const DEFAULT_ALERTS: BotAlerts = { open: true, close: true, warning: tru
 export interface Bot {
   id: string;
   enabled: boolean;
+  /** The kill switch: while on, a webhook run does nothing at all - no close, no open. Separate from `enabled`
+   * (the bot's On/Off, which still lets a webhook close the opposite position). The end-of-day sweep and the
+   * Close position button are never blocked by either. Only a person turns it off. */
+  killSwitch?: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
   createdAt: number;

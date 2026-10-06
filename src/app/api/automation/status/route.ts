@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
       name: config?.name ?? botDisplayName(id),
       underlying: config?.underlying ?? null,
       enabled: record.enabled,
+      killSwitch: !!record.killSwitch,
       needsAttention: record.needsAttention,
       needsAttentionReason: record.needsAttentionReason,
       configError: error,
