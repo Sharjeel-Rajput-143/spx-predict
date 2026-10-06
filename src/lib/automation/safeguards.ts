@@ -28,9 +28,10 @@ export function countTodayNewPositions(botId: string, nowMs: number, resetAt = 0
 }
 
 /** Sum of max risk across a bot's active positions, using each position's
- * realized credit once known or the configured estimate until then. */
-export function sumActiveAllocationRisk(botId: string, widthPoints: number, estimatedCredit: number): number {
-  return activePositionsForBot(botId).reduce((sum, p) => {
+ * realized credit once known or the configured estimate until then.
+ * `exclude`: positions a dry run says it *would* have closed, so the Open step is judged as it would be after them. */
+export function sumActiveAllocationRisk(botId: string, widthPoints: number, estimatedCredit: number, exclude?: ReadonlySet<string>): number {
+  return activePositionsForBot(botId).filter((p) => !exclude?.has(p.id)).reduce((sum, p) => {
     const credit = p.credit ?? estimatedCredit;
     const quantity = p.filledQuantity || p.requestedQuantity;
     return sum + maxRisk(widthPoints, quantity, credit);

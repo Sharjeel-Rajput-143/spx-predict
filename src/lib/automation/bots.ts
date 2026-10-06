@@ -17,8 +17,12 @@ import {
 import {
   ACTIVE_POSITION_STATUSES,
   DEFAULT_ALERTS,
+  EOD_SWEEP_MODES,
+  STRIKE_PRICE_SOURCES,
+  type StrikePriceSource,
   type Bot,
   type BotInputs,
+  type EodSweepMode,
   type BotSafeguards,
   type BotStaticConfig,
   type BotTemplate,
@@ -59,10 +63,13 @@ export class MissingSettingsError extends Error {
 export const missingSettingsOf = (err: unknown): { key: string; why: string }[] | null =>
   err instanceof MissingSettingsError ? err.missing : null;
 
-/** Names of the built-in bots, known even while their settings are incomplete. */
+/** Names of the built-in bots, known even while their settings are incomplete.
+ * The id `ndx_ema_bias` (and the `BOT_NDX_EMA_BIAS_*` settings prefix) is a LEGACY name: it stays because webhooks,
+ * stored records and settings are keyed on it. The platform has no EMA or indicator settings; the direction comes
+ * only from the TradingView webhook call. */
 const BUILT_IN_NAMES: Record<string, string> = {
   spx_ema_bias: "SPX EMA 9/20 Bias",
-  ndx_ema_bias: "NDX EMA 9/20 Bias",
+  ndx_ema_bias: "NDX Bias Bot",
 };
 
 export const botDisplayName = (botId: string): string => botsStore.get(botId)?.name ?? BUILT_IN_NAMES[botId] ?? botId;
@@ -88,15 +95,30 @@ function ndxConfig(): BotStaticConfig {
     putShortOffset: envNumber("BOT_NDX_EMA_BIAS_PUT_SHORT_OFFSET", -0.01),
     callShortOffset: envNumber("BOT_NDX_EMA_BIAS_CALL_SHORT_OFFSET", 0.01),
     ...pricingAndLimits("BOT_NDX_EMA_BIAS", 1),
+    // The price the strikes are built from: the alert's (default; right for the mock and the delayed sandbox)
+    // or a live quote taken when the Open step runs (only once a real-time quote source is connected).
+    strikePriceSource: strikePriceSource(envString("BOT_NDX_EMA_BIAS_STRIKE_PRICE_SOURCE", "alert")),
     allocationLimit: envNumber("BOT_NDX_EMA_BIAS_ALLOCATION_LIMIT", 2000),
     // Only the fallback price (when there is no live quote to price the spread from, e.g. the mock) and the pre-trade risk check.
     openingCreditEstimate: envNumber("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", 3.5),
-    // TODO(verify): index options keep trading until 4:15pm ET; positions are marked expired after that.
-    eodSweepTime: envString("BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", "16:15"),
+    // NDX index options (NDXP) stop trading at 4:15pm ET; the sweep runs ten minutes before that.
+    // TODO(verify): the series' final trading time against the broker's own listing.
+    eodSweepTime: envString("BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", "16:05"),
+    eodSweepMode: sweepMode(envString("BOT_NDX_EMA_BIAS_EOD_SWEEP_MODE", "estimate")),
     // A sanity range for the signal's price is optional: set both ends to turn it on.
     ...optionalPriceRange("BOT_NDX_EMA_BIAS"),
     ...(hoursStart && hoursEnd ? { hours: { start: hoursStart, end: hoursEnd } } : {}),
   };
+}
+
+function strikePriceSource(value: string): StrikePriceSource {
+  if (!(STRIKE_PRICE_SOURCES as readonly string[]).includes(value)) throw new Error(`BOT_NDX_EMA_BIAS_STRIKE_PRICE_SOURCE must be one of ${STRIKE_PRICE_SOURCES.join(", ")}, got "${value}".`);
+  return value as StrikePriceSource;
+}
+
+function sweepMode(value: string): EodSweepMode {
+  if (!(EOD_SWEEP_MODES as readonly string[]).includes(value)) throw new Error(`BOT_NDX_EMA_BIAS_EOD_SWEEP_MODE must be one of ${EOD_SWEEP_MODES.join(", ")}, got "${value}".`);
+  return value as EodSweepMode;
 }
 
 /** `<PREFIX>_PRICE_MIN` and `_PRICE_MAX`: both or neither. */
@@ -135,7 +157,13 @@ export function checkBotConfig(c: BotStaticConfig): void {
   if (c.totalPositionLimit !== undefined && !(Number.isInteger(c.totalPositionLimit) && c.totalPositionLimit >= 1)) {
     throw new Error(`invalid_config: the total position limit must be a whole number of at least 1 (got ${String(c.totalPositionLimit)}).`);
   }
+  if (c.strikePriceSource !== undefined && !(STRIKE_PRICE_SOURCES as readonly string[]).includes(c.strikePriceSource)) {
+    throw new Error(`invalid_config: the strike price source must be one of ${STRIKE_PRICE_SOURCES.join(", ")} (got "${String(c.strikePriceSource)}").`);
+  }
   if (c.eodSweepTime) parseClockMinutes(c.eodSweepTime, "End-of-day sweep time");
+  if (c.eodSweepMode !== undefined && !(EOD_SWEEP_MODES as readonly string[]).includes(c.eodSweepMode)) {
+    throw new Error(`invalid_config: the end-of-day sweep must be one of ${EOD_SWEEP_MODES.join(", ")} (got "${String(c.eodSweepMode)}").`);
+  }
   if (c.hours) {
     if (parseClockMinutes(c.hours.start, "Trading hours start") >= parseClockMinutes(c.hours.end, "Trading hours end")) {
       throw new Error("invalid_config: the trading hours must start before they end.");

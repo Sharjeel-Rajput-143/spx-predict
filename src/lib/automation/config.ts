@@ -31,6 +31,8 @@ export const DEDUPE_WINDOW_SECONDS = envNumber("DEDUPE_WINDOW_SECONDS", 120);
 export const MAX_POSITIONS_PER_TYPE = envNumber("MAX_POSITIONS_PER_TYPE", 1);
 export const TOTAL_POSITION_LIMIT = envNumber("TOTAL_POSITION_LIMIT", 1);
 export const DAILY_NEW_POSITION_LIMIT = envNumber("DAILY_NEW_POSITION_LIMIT", 10);
+/** A live quote older than this (seconds) isn't used for strikes: the bot refuses to open instead. */
+export const STRIKE_QUOTE_MAX_AGE_SECONDS = envNumber("STRIKE_QUOTE_MAX_AGE_SECONDS", 60);
 export const ERROR_FAILSAFE_THRESHOLD = envNumber("ERROR_FAILSAFE_THRESHOLD", 10);
 export const ORDER_FILL_TIMEOUT_SECONDS = envNumber("ORDER_FILL_TIMEOUT_SECONDS", 120);
 export const CLOSE_CONFIRM_TIMEOUT_SECONDS = envNumber("CLOSE_CONFIRM_TIMEOUT_SECONDS", 120);

@@ -6,6 +6,7 @@ import {
   ORDER_POLL_INTERVAL_MS,
   CLOSE_CONFIRM_TIMEOUT_SECONDS,
   ORDER_FILL_TIMEOUT_SECONDS,
+  STRIKE_QUOTE_MAX_AGE_SECONDS,
   getFlipCooldownSeconds,
   isDryRun,
   isTestMode,
@@ -13,7 +14,9 @@ import {
 import { logDecision } from "./decisions";
 import { recordError } from "./errors";
 import { expireStalePositions } from "./expiry";
+import { watchOrder } from "./orderWatch";
 import { placeAndWatch } from "./placeAndWatch";
+import { getLastTick } from "@/lib/marketData/tickStore";
 import { DEFAULT_PRICE_TICK, buildLadder, describeLadder, type Ladder, type SmartPricingMode } from "./smartPricing";
 import {
   activePositionsForBot,
@@ -66,6 +69,21 @@ export interface ProcessSignalOptions {
   pollIntervalMs?: number;
   /** How long each SmartPricing rung waits, overriding the preset's seconds (tests use milliseconds). */
   ladderStepMs?: number;
+  /** The underlying's latest live quote and its age, for a bot whose strikes come from a live quote. Default: the app's live price feed. */
+  liveQuote?: (symbol: string) => LiveQuote | null;
+}
+
+/** A live price for the underlying, and how old it is. */
+export interface LiveQuote {
+  price: number;
+  ageMs: number;
+}
+
+/** The app's own price feed (Google/Yahoo), the only quote source there is today. Its age is when it last got a price,
+ * not an exchange timestamp, so a feed that is itself delayed can't be told apart by age. */
+function feedQuote(symbol: string): LiveQuote | null {
+  const tick = getLastTick(symbol);
+  return tick ? { price: tick.price, ageMs: Math.max(0, Date.now() - tick.t) } : null;
 }
 
 function oppositeType(type: PositionType): PositionType {
@@ -166,9 +184,11 @@ interface CloseResult {
   reason: string;
   /** How the close was priced, in words. */
   pricing?: string;
+  /** One line per price the close tried. */
+  steps?: string[];
 }
 
-async function closePosition(
+export async function closePosition(
   position: Position,
   signal: CloseCause | null,
   executor: BrokerExecutor,
@@ -196,15 +216,16 @@ async function closePosition(
     finalMs: timeoutMs,
     pollMs: pollIntervalMs,
     defaultLimit: 0,
+    quantity: position.filledQuantity || position.requestedQuantity,
   });
   if (!result.ok) {
     // Left "closing": we can't know the broker didn't take the order, so the
     // position keeps counting as live until an operator resolves it.
     return result.stage === "place"
-      ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote }
-      : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote };
+      ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps }
+      : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps };
   }
-  const { state, timedOut } = result;
+  const { state, timedOut, steps } = result;
 
   const targetQuantity = position.filledQuantity || position.requestedQuantity;
   if (state.status === "filled" && state.filledQuantity >= targetQuantity) {
@@ -214,15 +235,48 @@ async function closePosition(
       closePrice: state.averagePrice ?? null,
       underlyingAtClose: signal?.price ?? null,
     });
-    return { ok: true, outcome: "closed", reason: "Close order filled.", pricing: pricingNote };
+    return { ok: true, outcome: "closed", reason: "Close order filled.", pricing: pricingNote, steps };
   }
   if (state.status === "rejected") {
-    return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "Close order rejected.", pricing: pricingNote };
+    return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "Close order rejected.", pricing: pricingNote, steps };
   }
   if (state.filledQuantity === 0) {
-    return { ok: false, outcome: "close_timeout", reason: timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling.", pricing: pricingNote };
+    return { ok: false, outcome: "close_timeout", reason: timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling.", pricing: pricingNote, steps };
   }
-  return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled.", pricing: pricingNote };
+  return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled. The rest was canceled; the position stays in closing, keeps its slot in the limits, and needs a person to clear it.", pricing: pricingNote, steps };
+}
+
+/** A close that was already in progress when a flip signal arrived: wait for it to be confirmed (the same wait and
+ * timeout as a close the flip sends itself). With no order working behind a "closing" position there is nothing to
+ * wait for, and no second close is sent either: it stays for a person to clear. */
+async function awaitCloseInProgress(
+  position: Position,
+  order: Order | null,
+  signal: CloseCause | null,
+  executor: BrokerExecutor,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): Promise<CloseResult> {
+  if (!order) {
+    return { ok: false, outcome: "close_in_flight", reason: "This position is closing, but no close order is working and none confirmed. A second close isn't sent: check the broker, then clear it with Close position." };
+  }
+  let watched: Awaited<ReturnType<typeof watchOrder>>;
+  try {
+    watched = await watchOrder(executor, order.ref, { timeoutMs, pollIntervalMs, partialTimeoutMs: timeoutMs });
+  } catch (err) {
+    return { ok: false, outcome: "executor_error", reason: `Lost track of close order ${order.ref}: ${errorMessage(err)}` };
+  }
+  const { state, timedOut } = watched;
+  ordersStore.update(order.id, { status: state.status, filledQuantity: state.filledQuantity, rejectReason: state.rejectReason, updatedAt: Date.now() });
+
+  const target = position.filledQuantity || position.requestedQuantity;
+  if (state.status === "filled" && state.filledQuantity >= target) {
+    positionsStore.update(position.id, { status: "closed", closedAt: Date.now(), closePrice: state.averagePrice ?? null, underlyingAtClose: signal?.price ?? null });
+    return { ok: true, outcome: "closed", reason: "The close that was already in progress is confirmed." };
+  }
+  if (state.status === "rejected") return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "The close in progress was rejected." };
+  if (state.filledQuantity === 0) return { ok: false, outcome: "close_timeout", reason: timedOut ? "The close in progress never filled before the confirm timeout." : "The close in progress ended without filling." };
+  return { ok: false, outcome: "close_partial_fill", reason: "The close in progress only partially filled. The rest was canceled; the position stays closing and needs a person to clear it." };
 }
 
 /** The plan as stored on a decision: the numbers plus the sentence. */
@@ -289,6 +343,8 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   const openTimeoutMs = options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000;
   const pollIntervalMs = options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS;
   const dryRun = options.dryRun ?? isDryRun();
+  /** Real clock at the start of the run: the flip's waits are real time, and they age the alert's price. */
+  const runStartedAt = Date.now();
   const { botId } = signal;
 
   // Once the bot's settings are known, every decision of this run carries how its strikes
@@ -388,8 +444,12 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   const wanted = wantedType(signal.signal as SignalDirection);
   const opposite = oppositeType(wanted);
 
-  // Stage A: close the opposite side.
+  // Stage A: close the opposite side. Every status counts as held, like Option Alpha's "any status" - a position
+  // that is already closing included. A closing position never gets a second close order: the flip waits for
+  // the close that is in progress to be confirmed, and only then runs the Open step.
   const opposingPositions = activePositionsForBot(botId, opposite);
+  /** Positions a dry run says it would have closed: the Open step is then judged as it would be after them. */
+  const wouldClose = new Set<string>();
 
   // Optional minimum hold time (off by default): a flip inside the cooldown
   // leaves the existing position alone and opens nothing.
@@ -425,22 +485,45 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     const inFlight = ordersStore.query(
       (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
     );
-    rec.decision("No close order is already in flight for it", inFlight.length === 0, inFlight.length === 0 ? "No working close order" : `${inFlight.length} working close order`);
-    if (inFlight.length > 0) {
-      log("close_in_flight", "A close order for this position is already in flight; nothing sent.", { positionId: position.id });
+
+    if (position.status === "closing" || inFlight.length > 0) {
+      rec.decision(
+        "The position isn't already closing",
+        false,
+        inFlight.length > 0 ? `A close order is working (${inFlight.length}) - no second close is sent` : "It is closing, with no close order working - no second close is sent",
+      );
+      if (dryRun) {
+        wouldClose.add(position.id);
+        rec.action({ action: "close", title: closeTitle(position), position, params: [{ label: "Wait", value: `up to ${Math.round(closeTimeoutMs / 1000)}s for the close in progress to be confirmed` }], outcome: "dry_run", reason: "Dry run: would wait for the close in progress to be confirmed." });
+        log("dry_run", "Dry run: would wait for the close already in progress to be confirmed, then open.", { positionId: position.id, wouldClose: true });
+        continue;
+      }
+      const waited = await awaitCloseInProgress(position, inFlight[0] ?? null, signal, options.executor, closeTimeoutMs, pollIntervalMs);
+      rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [{ label: "Wait", value: `up to ${Math.round(closeTimeoutMs / 1000)}s for the close in progress to be confirmed` }], outcome: waited.outcome, reason: waited.reason });
+      if (!waited.ok) {
+        // An unconfirmed close with no order behind it was flagged when it went wrong; waiting on a real one that fails again is a new error.
+        if (waited.outcome !== "close_in_flight") recordError(botId, "close_failed", { positionId: position.id, reason: waited.reason }, now);
+        botsStore.update(botId, { needsAttention: true, needsAttentionReason: waited.reason });
+        log(waited.outcome, waited.reason, { positionId: position.id });
+        return; // Never open the new side while the old side might still be held.
+      }
+      log("closed", waited.reason, { positionId: position.id });
       continue;
     }
+
+    rec.decision("The position isn't already closing", true, "No close order is working");
 
     const closeHow = { quotes: !!options.executor.getSpreadQuote, mode: staticConfig.smartPricing ?? "normal" };
     const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, closeHow);
     if (dryRun) {
-      rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: nothing sent." });
-      log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id });
+      wouldClose.add(position.id);
+      rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: would close; nothing sent." });
+      log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id, wouldClose: true });
       continue;
     }
 
     const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, pricingFor(staticConfig, "close", options.ladderStepMs));
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), outcome: result.outcome, reason: result.reason });
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
@@ -466,6 +549,9 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     pollIntervalMs,
     ladderStepMs: options.ladderStepMs,
     manual: false,
+    wouldCloseIds: wouldClose,
+    liveQuote: options.liveQuote ?? feedQuote,
+    runStartedAt,
   });
 }
 
@@ -489,6 +575,12 @@ interface OpenStageContext {
   /** Overrides how long each SmartPricing rung waits (tests). */
   ladderStepMs?: number;
   manual: boolean;
+  /** A dry run: positions it said it would close, which the Open step treats as gone. */
+  wouldCloseIds?: ReadonlySet<string>;
+  /** Where a live strike price comes from. */
+  liveQuote?: (symbol: string) => LiveQuote | null;
+  /** Date.now() when the run began, to work out how old the alert's price is by the time the Open step runs. */
+  runStartedAt?: number;
 }
 
 export interface StageResult {
@@ -507,9 +599,18 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   const rec = ctx.rec;
   let created: Position | null = null;
   let actionRecorded = false;
+  /** The price the strikes are built from, and how they were derived from it: the alert's, or a live quote's. */
+  let usedPrice: number | null = ctx.price;
+  let usedPlan: StrikePlan | null | undefined = ctx.plan;
+  /** Which price was used, how old it was when the Open step ran, and what it was - on every decision from there on. */
+  let sourceDetail: Record<string, unknown> = {};
+  let sourceNote: string | undefined;
+  const gone = ctx.wouldCloseIds ?? new Set<string>();
   /** How the order is priced, once known: the SmartPricing ladder in words, and its numbers for the log. */
   let priceNote: string | undefined;
   let pricingDetail: Record<string, unknown> = {};
+  /** One line per price the order tried, for the run trace. */
+  let orderSteps: string[] = [];
   const side = wanted === "short_put_spread" ? "put" : "call";
 
   /** Records the open as an action card, once, when the run reaches its end. */
@@ -529,14 +630,16 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
         // TODO(unconfirmed): what "% of bid/ask" means exactly - the owner is to confirm.
         { label: "Price", value: priceNote ?? `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)} (${staticConfig.openPricePercent ?? 100}% of bid/ask)` },
         { label: "Quantity", value: `${staticConfig.quantity} contract${staticConfig.quantity === 1 ? "" : "s"}` },
+        ...(sourceNote ? [{ label: "Strike price", value: sourceNote }] : []),
         { label: "Expiration", value: `${easternDateKey(now)} (same day)` },
         {
           label: `Short ${side}`,
-          value: ctx.manual || ctx.price == null || !ctx.plan ? `${k.shortStrike} (entered by hand)` : `${k.shortStrike} (target ${fmtLevel(ctx.plan.target)} = ${ctx.price} ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}, rounded ${roundingWords(ctx.plan)} ${ctx.plan.rounding === "nearest" ? "" : "to "}${staticConfig.strikeIncrement})`,
+          value: ctx.manual || usedPrice == null || !usedPlan ? `${k.shortStrike} (entered by hand)` : `${k.shortStrike} (target ${fmtLevel(usedPlan.target)} = ${usedPrice} ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}, rounded ${roundingWords(usedPlan)} ${usedPlan.rounding === "nearest" ? "" : "to "}${staticConfig.strikeIncrement})`,
         },
         { label: `Long ${side}`, value: `${k.longStrike} (${staticConfig.widthPoints} points ${side === "put" ? "below" : "above"} the short ${side})` },
         { label: "Fill timeout", value: `${Math.round(ctx.openTimeoutMs / 1000)}s` },
       ],
+      steps: orderSteps,
       outcome,
       reason,
     });
@@ -550,10 +653,17 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       botId,
       outcome,
       reason,
-      detail: { ...(ctx.plan ? { strikePlan: planDetail(ctx.plan) } : {}), ...pricingDetail, ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
+      detail: { ...(usedPlan ? { strikePlan: planDetail(usedPlan) } : {}), ...sourceDetail, ...pricingDetail, ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
       now,
     });
     return { ok: outcome === "opened" || outcome === "dry_run", outcome, reason };
+  };
+
+  /** A limit triggered: the bot switches itself off, and says why in the log (and, through the
+   * decision, as an alert) and on the status page. A person switches it back on after checking. */
+  const stopAtLimit = (outcome: "total_position_limit_reached" | "daily_limit_reached" | "allocation_limit_reached", reason: string, detail: Record<string, unknown> = {}): StageResult => {
+    botsStore.update(botId, { enabled: false, needsAttention: true, needsAttentionReason: `${outcome}: ${reason}` });
+    return finish(outcome, `${reason} The bot has been switched off; switch it back on once you've checked it.`, { ...detail, botSwitchedOff: true });
   };
 
   const existingWanted = activePositionsForBot(botId, wanted);
@@ -566,21 +676,57 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("already_in_position", "An active position of the wanted type already exists.");
   }
 
-  const totalActive = activePositionsForBot(botId);
+  const totalActive = activePositionsForBot(botId).filter((p) => !gone.has(p.id));
   rec?.decision(`Bot has fewer than ${limits.totalPositionLimit} open position${limits.totalPositionLimit === 1 ? "" : "s"}`, totalActive.length < limits.totalPositionLimit, `${totalActive.length} open`);
   if (totalActive.length >= limits.totalPositionLimit) {
-    return finish("total_position_limit_reached", "Total active position limit reached.");
+    return stopAtLimit("total_position_limit_reached", "Total active position limit reached.", { limit: limits.totalPositionLimit, active: totalActive.length });
   }
 
   const todayNewPositions = countTodayNewPositions(botId, now, bot.dailyResetAt);
   rec?.decision(`Bot opened fewer than ${limits.dailyNewPositionLimit} new positions today`, todayNewPositions < limits.dailyNewPositionLimit, `${todayNewPositions} opened today`);
   if (todayNewPositions >= limits.dailyNewPositionLimit) {
-    return finish("daily_limit_reached", "Daily new-position limit reached; closing stays allowed, opening does not.");
+    return stopAtLimit("daily_limit_reached", "Daily new-position limit reached.", { limit: limits.dailyNewPositionLimit, openedToday: todayNewPositions });
   }
 
-  const strikes = ctx.strikes ?? planStrikes(wanted, ctx.price ?? 0, staticConfig);
+  // Which price the strikes are built from. The alert's (default), or - for a bot set to "live" - a quote taken now,
+  // as the Open step runs (after a flip's close this can be minutes after the alert). Either way the choice, the
+  // price and its age are logged, and the price-range check runs on the price that is actually used.
+  if (!ctx.manual && signal) {
+    const sourceSetting = staticConfig.strikePriceSource ?? "alert";
+    const elapsedMs = Date.now() - (ctx.runStartedAt ?? Date.now());
+    const seconds = (ms: number) => Math.round(ms / 100) / 10;
+    if (sourceSetting === "alert") {
+      const ageMs = Math.max(0, now - signal.receivedAt) + elapsedMs;
+      sourceDetail = { priceSource: { source: "alert", price: signal.price, ageSeconds: seconds(ageMs) } };
+      sourceNote = `alert price ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old`;
+      rec?.decision("The strikes use the alert's price", true, `Alert price ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old when the Open step ran`);
+    } else {
+      const quote = (ctx.liveQuote ?? feedQuote)(staticConfig.underlying);
+      const maxAgeMs = STRIKE_QUOTE_MAX_AGE_SECONDS * 1000;
+      const usable = !!quote && Number.isFinite(quote.price) && quote.price > 0 && quote.ageMs <= maxAgeMs;
+      const measured = !quote ? `No live ${staticConfig.underlying} quote` : `Live ${staticConfig.underlying} quote ${fmtLevel(quote.price)}, ${seconds(quote.ageMs)}s old${usable ? "" : ` (older than the ${STRIKE_QUOTE_MAX_AGE_SECONDS}s allowed)`}`;
+      rec?.decision("A fresh live quote is available for the strikes", usable, measured);
+      if (!usable || !quote) {
+        const reason = `No usable live ${staticConfig.underlying} quote for the strikes (${!quote ? "none available" : `${seconds(quote.ageMs)}s old, over the ${STRIKE_QUOTE_MAX_AGE_SECONDS}s allowed`}); nothing opened. This bot takes its strike price from a live quote; set the strike price source back to the alert's price to use that instead.`;
+        return finish("no_live_price", reason, { priceSource: { source: "live", price: quote?.price ?? null, ageSeconds: quote ? seconds(quote.ageMs) : null } });
+      }
+      const problem = priceRangeProblem(quote.price, staticConfig);
+      sourceDetail = { priceSource: { source: "live", price: quote.price, ageSeconds: seconds(quote.ageMs), alertPrice: signal.price } };
+      sourceNote = `live quote ${fmtLevel(quote.price)}, ${seconds(quote.ageMs)}s old (alert said ${fmtLevel(signal.price)})`;
+      rec?.decision(
+        staticConfig.priceRange ? `The live price is between ${fmtLevel(staticConfig.priceRange.min)} and ${fmtLevel(staticConfig.priceRange.max)}` : "The live price is a positive number",
+        problem === null,
+        problem ?? measured,
+      );
+      if (problem) return finish("price_out_of_range", problem, { price: quote.price, range: staticConfig.priceRange ?? null });
+      usedPrice = quote.price;
+      usedPlan = planStrikes(wanted, quote.price, staticConfig);
+    }
+  }
+
+  const strikes = ctx.strikes ?? planStrikes(wanted, usedPrice ?? 0, staticConfig);
   const validation = validateStrikes(wanted, strikes, staticConfig);
-  rec?.decision("Strikes pass the checks (order, not equal, on the increment, the right width)", validation.ok, validation.ok ? (ctx.plan ? describePlan(ctx.plan) : `Short ${strikes.shortStrike}, long ${strikes.longStrike}`) : `${validation.reason} (short ${strikes.shortStrike}, long ${strikes.longStrike})`);
+  rec?.decision("Strikes pass the checks (order, not equal, on the increment, the right width)", validation.ok, validation.ok ? (usedPlan ? describePlan(usedPlan) : `Short ${strikes.shortStrike}, long ${strikes.longStrike}`) : `${validation.reason} (short ${strikes.shortStrike}, long ${strikes.longStrike})`);
   if (!validation.ok) {
     recordError(botId, "invalid_strikes", { strikes, reason: validation.reason }, now);
     botsStore.update(botId, { needsAttention: true, needsAttentionReason: `invalid_strikes: ${validation.reason}` });
@@ -588,14 +734,14 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   }
 
   const projectedRisk = maxRisk(staticConfig.widthPoints, staticConfig.quantity, staticConfig.openingCreditEstimate);
-  const currentRisk = sumActiveAllocationRisk(botId, staticConfig.widthPoints, staticConfig.openingCreditEstimate);
+  const currentRisk = sumActiveAllocationRisk(botId, staticConfig.widthPoints, staticConfig.openingCreditEstimate, gone);
   rec?.decision(
     `Opening stays within the $${staticConfig.allocationLimit.toLocaleString("en-US")} allocation`,
     currentRisk + projectedRisk <= staticConfig.allocationLimit,
     `$${Math.round(currentRisk).toLocaleString("en-US")} at risk + $${Math.round(projectedRisk).toLocaleString("en-US")} for this trade`,
   );
   if (currentRisk + projectedRisk > staticConfig.allocationLimit) {
-    return finish("allocation_limit_reached", "Opening this position would exceed the allocation limit.", {
+    return stopAtLimit("allocation_limit_reached", "Opening this position would exceed the allocation limit.", {
       currentRisk,
       projectedRisk,
       allocationLimit: staticConfig.allocationLimit,
@@ -613,7 +759,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     type: wanted,
   });
   const accountBotIds = listBotIds().filter((id) => botAccountId(id) === staticConfig.accountId);
-  const overlap = findOverlap(newLegs, activePositionsForBots(accountBotIds));
+  const overlap = findOverlap(newLegs, activePositionsForBots(accountBotIds).filter((p) => !gone.has(p.id)));
   rec?.decision("No leg collides with an existing position", !overlap, overlap ? `Overlaps ${describeLegs(overlap)}` : "No overlapping legs");
   if (overlap) {
     return finish("overlapping_strikes", "New legs collide with an existing active position.", { overlapPositionId: overlap.id });
@@ -652,7 +798,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     openSignalId: signal?.id ?? null,
     closeSignalId: null,
     brokerOrderRef: null,
-    underlyingAtOpen: ctx.price,
+    underlyingAtOpen: usedPrice,
     manual: ctx.manual,
     venue: executor.venue ?? "mock",
     optionRoot: staticConfig.optionRoot,
@@ -693,7 +839,10 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     finalMs: ctx.openTimeoutMs,
     pollMs: ctx.pollIntervalMs,
     defaultLimit: staticConfig.openingCreditEstimate,
+    quantity: staticConfig.quantity,
   });
+  orderSteps = result.steps;
+  pricingDetail = { ...pricingDetail, steps: result.steps };
   if (!result.ok) {
     return failOpen(result.stage === "place" ? `Open order failed: ${errorMessage(result.error)}` : `Lost track of open order ${result.ref}: ${errorMessage(result.error)}`);
   }
@@ -714,7 +863,14 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     filledQuantity: state.filledQuantity,
     credit: state.averagePrice ?? staticConfig.openingCreditEstimate,
   });
-  return finish("opened", "Opened new position.", { positionId: position.id, filledQuantity: state.filledQuantity, rungsTried: result.rungsTried });
+  const partial = state.filledQuantity < staticConfig.quantity;
+  return finish(
+    "opened",
+    partial
+      ? `Opened new position at the partial size: ${state.filledQuantity} of ${staticConfig.quantity} contracts filled; the rest was canceled.`
+      : "Opened new position.",
+    { positionId: position.id, filledQuantity: state.filledQuantity, requestedQuantity: staticConfig.quantity, partial, rungsTried: result.rungsTried },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -824,7 +980,7 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       now,
       botConfig ? pricingFor(botConfig, "close", options.ladderStepMs) : undefined,
     );
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), outcome: result.outcome, reason: result.reason });
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId, reason: result.reason }, now);
       ensureBotRecord(botId);

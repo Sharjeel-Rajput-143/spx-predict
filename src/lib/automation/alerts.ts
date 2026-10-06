@@ -12,6 +12,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   closed: "close",
 
   // Something went wrong or needs a person.
+  error_failsafe: "error",
   executor_error: "error",
   config_error: "error",
   invalid_strikes: "error",
@@ -22,6 +23,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   close_partial_fill: "error",
 
   // A safeguard stopped a signal the bot would otherwise have acted on.
+  no_live_price: "warning",
   symbol_mismatch: "warning",
   price_out_of_range: "warning",
   allocation_limit_reached: "warning",

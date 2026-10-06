@@ -12,9 +12,9 @@ export type StrikeRounding = "outward" | "nearest";
 
 export type PositionStatus = "opening" | "open" | "closing" | "closed" | "expired" | "rejected";
 
-/** Every check that asks "does an active position exist" must count all three -
- * a position mid-transition is not yet (or no longer) seen as open, but it is
- * still live and must block duplicate entries exactly like `open` does. */
+/** Every check that asks "does a position exist" counts all three, like Option Alpha's "any status":
+ * a position mid-transition is still live, a closing one is not gone yet, and a failed or stuck order keeps
+ * its slot (in the limits, the allocation and the overlap check) until it is cleared. */
 export const ACTIVE_POSITION_STATUSES: readonly PositionStatus[] = ["opening", "open", "closing"];
 
 export type OrderKind = "open" | "close";
@@ -38,6 +38,8 @@ export type DecisionOutcome =
   | "close_timeout"
   | "close_partial_fill"
   | "close_in_flight"
+  /** Strike price from a live quote was asked for, and there wasn't a usable one. */
+  | "no_live_price"
   | "closed"
   | "opened"
   | "open_rejected"
@@ -48,7 +50,14 @@ export type DecisionOutcome =
   | "trigger_disabled"
   | "day_trading_blocked"
   | "position_moved"
+  /** The bot switched itself off: 10 errors in a trading day. */
+  | "error_failsafe"
+  | "eod_sweep"
   | "dry_run";
+
+/** Where the price the strikes are built from comes from: the TradingView alert's price, or a live quote taken when the Open step runs. */
+export type StrikePriceSource = "alert" | "live";
+export const STRIKE_PRICE_SOURCES: readonly StrikePriceSource[] = ["alert", "live"];
 
 export interface BotStaticConfig {
   id: string;
@@ -71,6 +80,8 @@ export interface BotStaticConfig {
   /** The option series root ("NDXP" for NDX dailies). Informational until a
    * real broker executor needs it to build option symbols. */
   optionRoot?: string;
+  /** Default "alert". "live" needs a real-time quote source; with none (or a stale quote) the bot refuses to open rather than guess. */
+  strikePriceSource?: StrikePriceSource;
   /** Default "outward". See StrikeRounding. */
   strikeRounding?: StrikeRounding;
   /** The order price as a percent of the bid/ask, for opening and closing orders
@@ -88,12 +99,21 @@ export interface BotStaticConfig {
    * Unset = 4:05pm ET. Index options can trade later than equities, so a
    * bot on such a series sets its own. */
   eodSweepTime?: string;
+  /** What the sweep does with positions still active at that time. Default "estimate". */
+  eodSweepMode?: EodSweepMode;
   /** Sanity bounds for the signal's price. A price outside is refused, so a
    * signal from the wrong chart can't produce strikes for this underlying. */
   priceRange?: { min: number; max: number };
   /** This bot's own signal window ("HH:MM" ET, inclusive). Unset = the global one. */
   hours?: { start: string; end: string };
 }
+
+/** What the end-of-day sweep does with a position still held near the series' close.
+ * estimate: marks it expired and estimates its P/L from the underlying's price (default).
+ * market: sends a close order at market.
+ * manual: marks it expired and waits for a person to enter its P/L. */
+export type EodSweepMode = "estimate" | "market" | "manual";
+export const EOD_SWEEP_MODES: readonly EodSweepMode[] = ["estimate", "market", "manual"];
 
 /** The inputs a bot trades with - everything in BotStaticConfig except its id. */
 export type BotInputs = Omit<BotStaticConfig, "id">;
@@ -211,8 +231,22 @@ export interface Position {
   venue?: ExecutorVenue;
   /** The option series root it trades ("NDXP", "SPXW"), kept so a broker executor can build option symbols for the close. */
   optionRoot?: string;
+  /** How an expired position's result was settled: estimated from the underlying, or typed in by a person. Unset = no result recorded. */
+  settlement?: PositionSettlement;
   /** Placed by the admin page's Send test alert (the real webhook path, flagged internally). */
   test?: boolean;
+}
+
+/** The result of a position that expired rather than being closed by a fill. */
+export interface PositionSettlement {
+  kind: "estimated" | "manual";
+  /** Total profit or loss in dollars for the whole position. */
+  pl: number;
+  /** Estimated: the underlying's price it was worked out from. */
+  underlyingPrice?: number;
+  /** Estimated: what the spread was worth per share at that price (the debit that would have closed it). */
+  settleValue?: number;
+  at: number;
 }
 
 export interface Order {
@@ -343,6 +377,8 @@ export interface TraceAction {
   summary: string;
   /** A frozen snapshot of the settings the order used. */
   params: { label: string; value: string }[];
+  /** One line per price the order tried (SmartPricing), in order: what was sent, for how long, what happened. */
+  steps?: string[];
   outcome: DecisionOutcome;
   reason: string;
 }

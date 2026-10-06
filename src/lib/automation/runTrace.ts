@@ -37,7 +37,7 @@ export class RunRecorder {
     return result;
   }
 
-  action(node: { action: "open" | "close"; title: string; position?: Position | null; summary?: string; params: { label: string; value: string }[]; outcome: DecisionOutcome; reason: string }): void {
+  action(node: { action: "open" | "close"; title: string; position?: Position | null; summary?: string; params: { label: string; value: string }[]; steps?: string[]; outcome: DecisionOutcome; reason: string }): void {
     this.nodes.push({
       kind: "action",
       action: node.action,
@@ -45,6 +45,7 @@ export class RunRecorder {
       positionId: node.position?.id ?? null,
       summary: node.summary ?? (node.position ? describeLegs(node.position) : ""),
       params: node.params,
+      ...(node.steps && node.steps.length > 0 ? { steps: node.steps } : {}),
       outcome: node.outcome,
       reason: node.reason,
     });
