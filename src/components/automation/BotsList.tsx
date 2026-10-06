@@ -186,9 +186,8 @@ export function BotsList() {
             <Link href="/automation/status" className={headerButtonClass}>
               Testing
             </Link>
-            <Link href="/automations/rules" className={headerButtonClass}>
-              Rules
-            </Link>
+            {/* The older indicator-rule feature (/automations/rules) is left in the code and still opens at its URL, but the
+                NDX system's pages only show the webhook-driven bullish and bearish bot, so it isn't linked from here. */}
             <LibraryMenu />
             <button className={cn(buttonClass.primary, "flex items-center gap-1.5")} onClick={() => setNewBot({})}>
               <IconPlus width={14} height={14} /> New Bot

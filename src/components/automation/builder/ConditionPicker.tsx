@@ -7,6 +7,7 @@ import { Drawer, buttonClass } from "../bot/primitives";
 import {
   CONDITION_CATALOG,
   CONDITION_CATEGORIES,
+  VISIBLE_CONDITIONS,
   conditionMatches,
   isConditionComplete,
   newCondition,
@@ -137,7 +138,7 @@ export function ConditionPicker({
             </section>
           );
         })}
-        {searching && CONDITION_CATALOG.every((t) => !conditionMatches(t, query)) && <p className="text-sm text-muted">No condition matches &ldquo;{query}&rdquo;.</p>}
+        {searching && VISIBLE_CONDITIONS.every((t) => !conditionMatches(t, query)) && <p className="text-sm text-muted">No condition matches &ldquo;{query}&rdquo;.</p>}
       </div>
     </Drawer>
   );

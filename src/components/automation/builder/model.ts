@@ -150,6 +150,8 @@ export const CONDITION_CATALOG: ConditionTemplate[] = [
   { id: "stock_price", category: "Stocks", tokens: [{ t: "select", k: "symbol", options: SYMBOLS }, { t: "text", v: " price is " }, { t: "select", k: "cmp", options: ["above", "below"] }, { t: "text", v: " " }, { t: "input", k: "level", placeholder: "level" }] },
   { id: "stock_change", category: "Stocks", tokens: [{ t: "select", k: "symbol", options: SYMBOLS }, { t: "text", v: " is " }, { t: "select", k: "dir", options: ["up", "down"] }, { t: "text", v: " more than " }, { t: "input", k: "pct", placeholder: "%" }, { t: "text", v: "% today" }] },
   { id: "stock_range", category: "Stocks", tokens: [{ t: "select", k: "symbol", options: SYMBOLS }, { t: "text", v: " is trading between " }, { t: "input", k: "low", placeholder: "low" }, { t: "text", v: " and " }, { t: "input", k: "high", placeholder: "high" }] },
+  // The Indicators conditions stay in the code (a flow saved with one still has to read back) but are not offered:
+  // this platform does not analyse price (see HIDDEN_CONDITION_CATEGORIES).
   { id: "ind_compare", category: "Indicators", tokens: [{ t: "select", k: "a", options: ["EMA(9)", "EMA(20)", "SMA(50)"] }, { t: "text", v: " is " }, { t: "select", k: "rel", options: ["above", "below", "crossing above", "crossing below"] }, { t: "text", v: " " }, { t: "select", k: "b", options: ["EMA(20)", "EMA(9)", "SMA(50)"] }] },
   { id: "ind_rsi", category: "Indicators", tokens: [{ t: "select", k: "ind", options: ["RSI(14)", "RSI(7)"] }, { t: "text", v: " is " }, { t: "select", k: "cmp", options: ["above", "below"] }, { t: "text", v: " " }, { t: "input", k: "value", placeholder: "value" }] },
   { id: "ind_bias", category: "Indicators", tokens: [{ t: "text", v: "Confirmed 5m Heikin Ashi bias is " }, { t: "select", k: "bias", options: ["bullish", "bearish"] }] },
@@ -162,7 +164,15 @@ export const CONDITION_CATALOG: ConditionTemplate[] = [
   { id: "bot_has", category: "Bot", tokens: [{ t: "text", v: "Bot has " }, { t: "select", k: "op", options: ["exactly", "at least", "at most"] }, { t: "text", v: " " }, { t: "select", k: "count", options: ["1 position", "2 positions", "3 positions"] }, { t: "text", v: " with " }, { t: "select", k: "by", options: ["symbol", "type"] }, { t: "text", v: " and expiration (" }, { t: "select", k: "exp", options: ["0 days", "7 days", "30 days"] }, { t: "text", v: ")" }] },
 ];
 
-export const CONDITION_CATEGORIES: ConditionCategory[] = ["Stocks", "Indicators", "Positions", "Bot"];
+/** Categories kept in the code but not shown in the picker: the platform has no indicators and does no price
+ * analysis - the only input to a bot is the TradingView webhook's bullish or bearish call. */
+export const HIDDEN_CONDITION_CATEGORIES: ConditionCategory[] = ["Indicators"];
+
+/** The categories the condition picker offers. */
+export const CONDITION_CATEGORIES: ConditionCategory[] = (["Stocks", "Indicators", "Positions", "Bot"] as ConditionCategory[]).filter((c) => !HIDDEN_CONDITION_CATEGORIES.includes(c));
+
+/** The conditions a person can actually pick. */
+export const VISIBLE_CONDITIONS: ConditionTemplate[] = CONDITION_CATALOG.filter((t) => CONDITION_CATEGORIES.includes(t.category));
 
 export const conditionTemplate = (id: string): ConditionTemplate => CONDITION_CATALOG.find((t) => t.id === id)!;
 

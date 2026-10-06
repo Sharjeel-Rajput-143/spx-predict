@@ -108,7 +108,6 @@ export interface SymbolSettings {
   sort: string;
   positionsFilter: { enabled: boolean; op: string };
   earningsFilter: { enabled: boolean; window: string };
-  indicators: { id: string; indicator: string; cmp: string; value: string }[];
   limit: string;
   excluded: string[];
   notes: string;
@@ -119,7 +118,6 @@ export const DEFAULT_SYMBOL_SETTINGS: SymbolSettings = {
   sort: "None",
   positionsFilter: { enabled: false, op: "1 or more" },
   earningsFilter: { enabled: false, window: "30 days" },
-  indicators: [],
   limit: "10 symbols",
   excluded: [],
   notes: "",

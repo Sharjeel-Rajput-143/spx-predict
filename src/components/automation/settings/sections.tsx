@@ -506,7 +506,7 @@ export function WebhooksSection({
 
       <Section title="Use it in a TradingView alert">
         <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted">
-          <li>On the chart for the bot&apos;s index (SPX or NDX), create an alert on the <span className="text-fg">confirmed</span> bullish or bearish signal - never the raw EMA cross.</li>
+          <li>On the chart for the bot&apos;s index, create an alert for the <span className="text-fg">confirmed</span> bullish signal and another for the bearish one. Only those two alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.</li>
           <li>Under <span className="text-fg">Notifications</span>, tick <span className="text-fg">Webhook URL</span> and paste the matching webhook&apos;s URL. (TradingView only allows webhook alerts on accounts with two-factor authentication on.)</li>
           <li>Under <span className="text-fg">Message</span>, paste the message below. The URL already says which bot and signal it is, so it only needs the price.</li>
           <li>Bullish alert → the Bullish webhook, Bearish alert → the Bearish one. Save, and watch the Automation status page for the first call.</li>

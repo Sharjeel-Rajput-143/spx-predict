@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { IconChevronDown, IconPlus } from "@/components/icons";
+import { IconChevronDown } from "@/components/icons";
 import { Checkbox, Drawer, Dropdown, Field, InfoTip, MenuItem, Pill, buttonClass, inputClass } from "./primitives";
 import { DEFAULT_SYMBOL_SETTINGS, loadRecentSymbols, loadSymbolSettings, saveSymbolSettings, type SymbolSettings } from "../builder/store";
-import { newId } from "../builder/model";
 
 const watchlists = (underlying: string) => [`${underlying} only`, "Index options (SPX, XSP, NDX)", "Mega-cap tech", "My watchlist"];
 const SORTS = ["None", "Alphabetical", "Price: high to low", "Price: low to high", "Volume: high to low", "IV rank: high to low"];
 const LIMITS = ["5 symbols", "10 symbols", "25 symbols", "50 symbols", "100 symbols"];
 const POSITION_OPS = ["1 or more", "none", "exactly 1"];
 const EARNINGS_WINDOWS = ["7 days", "14 days", "30 days", "45 days"];
-const INDICATORS = ["RSI(14)", "EMA(9)", "EMA(20)", "SMA(50)", "MACD", "ATR(14)", "VWAP"];
 const MAX_EXCLUDED = 50;
 
 /** "Bot Symbols": how a scanning bot would build its symbol list. These bots
@@ -102,53 +100,6 @@ export function SymbolsPanel({ botId, underlying = "SPX", onSaved, onClose }: { 
               {s.earningsFilter.enabled && select(s.earningsFilter.window, (v) => set("earningsFilter", { ...s.earningsFilter, window: v }), EARNINGS_WINDOWS, "Earnings window", true)}
             </div>
           </div>
-        </div>
-
-        <div>
-          <div className="mb-2 flex items-center text-xs font-medium text-muted">
-            Indicators <InfoTip text="Keep only symbols where each indicator condition holds." />
-          </div>
-          {s.indicators.length > 0 && (
-            <ul className="mb-2 space-y-2">
-              {s.indicators.map((row) => (
-                <li key={row.id} className="flex flex-wrap items-center gap-2 text-sm">
-                  <span className="rounded-md bg-surface-2 px-2 py-1 font-medium">{row.indicator}</span>
-                  {select(row.cmp, (v) => set("indicators", s.indicators.map((r) => (r.id === row.id ? { ...r, cmp: v } : r))), ["is above", "is below"], "Comparison", true)}
-                  <input
-                    value={row.value}
-                    onChange={(e) => set("indicators", s.indicators.map((r) => (r.id === row.id ? { ...r, value: e.target.value } : r)))}
-                    placeholder="value"
-                    aria-label="Indicator value"
-                    className="w-20 rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent"
-                  />
-                  <button onClick={() => set("indicators", s.indicators.filter((r) => r.id !== row.id))} aria-label={`Remove ${row.indicator}`} className="text-faint hover:text-down">
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Dropdown
-            trigger={({ toggle }) => (
-              <button onClick={toggle} className={`${buttonClass.secondary} flex items-center gap-1.5 !py-1.5`}>
-                <IconPlus width={14} height={14} /> Add indicator <IconChevronDown width={13} height={13} />
-              </button>
-            )}
-          >
-            {(close) =>
-              INDICATORS.map((ind) => (
-                <MenuItem
-                  key={ind}
-                  onClick={() => {
-                    close();
-                    set("indicators", [...s.indicators, { id: newId("ind"), indicator: ind, cmp: "is above", value: "" }]);
-                  }}
-                >
-                  {ind}
-                </MenuItem>
-              ))
-            }
-          </Dropdown>
         </div>
 
         <Field label="Limit">{select(s.limit, (v) => set("limit", v), LIMITS, "Limit")}</Field>
