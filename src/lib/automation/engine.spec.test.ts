@@ -154,15 +154,16 @@ describe("strike invariants through the engine", () => {
   });
 });
 
-describe("kill switch", () => {
-  it("#10 logs automations_off and sends no orders, even with an opposite position open", async () => {
+describe("bot off", () => {
+  it("#10 with the bot off and an opposite position open, the webhook closes it and never opens (Always On, copied only for closes)", async () => {
     botsStore.insert({ id: TEST_BOT_ID, enabled: false, needsAttention: false, needsAttentionReason: null, createdAt: 0 });
     positionsStore.insert(buildPosition({ type: "short_call_spread", status: "open" }));
     await emit("bullish");
 
-    expect(outcomes()).toEqual(["automations_off"]);
-    expect(executor.placedOrders).toHaveLength(0);
-    expect(positionsStore.all()[0].status).toBe("open");
+    expect(outcomes()).toEqual(["bot_off_close_only", "closed", "automations_off"]);
+    expect(executor.placedOrders.map((o) => o.kind)).toEqual(["close"]);
+    expect(positionsStore.all()).toHaveLength(1);
+    expect(positionsStore.all()[0].status).toBe("closed");
   });
 });
 
