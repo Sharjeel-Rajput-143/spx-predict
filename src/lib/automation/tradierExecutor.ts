@@ -1,6 +1,6 @@
 import "server-only";
 import type { LegQuotes } from "./smartPricing";
-import type { BrokerExecutor, BrokerPosition, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position, SpreadQuoteRequest } from "./types";
+import type { BrokerBalances, BrokerExecutor, BrokerPosition, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position, SpreadQuoteRequest } from "./types";
 import { positionsStore } from "./store";
 
 /**
@@ -287,6 +287,20 @@ export class TradierExecutor implements BrokerExecutor {
 
   async cancelOrder(ref: string): Promise<void> {
     await this.call("DELETE", `/orders/${encodeURIComponent(ref)}`);
+  }
+
+  /** The account's balances. TODO(unconfirmed): the field names under `balances` (total_equity, total_cash,
+   * margin.option_buying_power / cash.* by account type) are from memory of Tradier's docs. Anything missing is null. */
+  async getBalances(): Promise<BrokerBalances> {
+    const json = await this.call("GET", "/balances");
+    const b = (json.balances ?? {}) as Record<string, unknown> & { margin?: Record<string, unknown>; cash?: Record<string, unknown>; pdt?: Record<string, unknown> };
+    const num = (v: unknown) => (v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+    return {
+      accountId: this.config.accountId,
+      totalEquity: num(b.total_equity),
+      optionBuyingPower: num(b.margin?.option_buying_power ?? b.cash?.cash_available ?? b.option_buying_power),
+      cash: num(b.total_cash),
+    };
   }
 
   /** What Tradier itself holds. TODO(unconfirmed): the response shape - Tradier answers `"null"` when there are

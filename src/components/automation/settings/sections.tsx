@@ -213,10 +213,47 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
 // Trading accounts
 // ---------------------------------------------------------------------------
 
-export function AccountsSection({ data }: { data: SettingsData }) {
+export interface BrokerView {
+  venue: "mock" | "tradier" | null;
+  sandbox: boolean | null;
+  error: string | null;
+  balances: { accountId: string; totalEquity: number | null; optionBuyingPower: number | null; cash: number | null } | null;
+}
+
+const money = (n: number | null) => (n == null ? "—" : `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
+
+export function AccountsSection({ data, broker, onRefresh }: { data: SettingsData; broker?: BrokerView | null; onRefresh?: () => void }) {
   const x = data.executor;
   return (
     <div className="space-y-4">
+      {x.venue === "tradier" && !x.error && (
+        <Section
+          title="Broker account"
+          hint={x.sandbox ? "Tradier's sandbox: a paper account with a test balance. No real money." : "Tradier PRODUCTION: a real account."}
+          footer={
+            <button className={buttonClass.secondary} onClick={onRefresh} disabled={!onRefresh}>
+              Refresh
+            </button>
+          }
+        >
+          {!broker ? (
+            <p className="text-sm text-muted">Loading...</p>
+          ) : broker.error ? (
+            <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">Couldn&apos;t read the account: {broker.error}</p>
+          ) : broker.balances ? (
+            <KeyValue
+              rows={[
+                ["Account", broker.balances.accountId],
+                ["Total equity", money(broker.balances.totalEquity)],
+                ["Option buying power", money(broker.balances.optionBuyingPower)],
+                ["Cash", money(broker.balances.cash)],
+              ]}
+            />
+          ) : (
+            <p className="text-sm text-muted">No balances reported.</p>
+          )}
+        </Section>
+      )}
       <Section title="Executor" hint="Who places the orders.">
         {x.error ? (
           <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">Not usable: {x.error}</p>
@@ -411,6 +448,8 @@ export function WebhooksSection({
   onCreate = async () => null,
   onToggle = noopHook,
   onDelete = noopHook,
+  onTest,
+  canTest = false,
 }: {
   data: SettingsData;
   origin: string;
@@ -419,6 +458,9 @@ export function WebhooksSection({
   onCreate?: (name: string, botId: string, direction: "bullish" | "bearish") => Promise<string | null>;
   onToggle?: (id: string, active: boolean) => void;
   onDelete?: (id: string) => void;
+  /** Sends this webhook's signal through the real path with a price. Offered on the mock and the Tradier sandbox only. */
+  onTest?: (id: string, price: number) => Promise<string>;
+  canTest?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -454,6 +496,7 @@ export function WebhooksSection({
                   </div>
                 </div>
                 <CopyBox label="Webhook URL (keep it secret)" text={`${origin}${h.path}`} />
+                {canTest && onTest && h.active && <TestCall hook={h} onTest={onTest} />}
               </li>
             ))}
           </ul>
@@ -487,6 +530,37 @@ export function WebhooksSection({
         ))}
       </Section>
       {outbound}
+    </div>
+  );
+}
+
+/** A test call: the same path as TradingView's, with a price you type. */
+function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string, price: number) => Promise<string> }) {
+  const [price, setPrice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const n = Number(price.replace(/,/g, ""));
+  const ok = price.trim() !== "" && Number.isFinite(n) && n > 0;
+  return (
+    <div className="space-y-1.5 border-t border-line pt-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-muted">
+          Test call at {hook.underlying ?? "price"}
+          <input className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="price" aria-label={`Test price for ${hook.name}`} />
+        </label>
+        <button
+          className={buttonClass.secondary}
+          disabled={busy || !ok}
+          onClick={async () => {
+            setBusy(true);
+            setResult(await onTest(hook.id, n));
+            setBusy(false);
+          }}
+        >
+          {busy ? "Sending…" : "Send a test call"}
+        </button>
+      </div>
+      {result && <p className="text-xs text-muted">{result}</p>}
     </div>
   );
 }

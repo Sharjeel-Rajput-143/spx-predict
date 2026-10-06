@@ -19,7 +19,8 @@ export async function POST(req: NextRequest) {
 
   return guarded(async () => {
     const status = executorStatus();
-    if (status.venue !== "mock") return badRequest("Test alerts are only available on the mock executor.", 409);
+    // Test alerts place real (paper) orders on a broker's sandbox, but never on a production account.
+    if (!(status.venue === "mock" || (status.venue === "tradier" && status.sandbox === true))) return badRequest("Test alerts are only available on the mock executor or the Tradier sandbox - never against real money.", 409);
 
     const body = await readJson(req);
     const { bot, signal, price } = body;

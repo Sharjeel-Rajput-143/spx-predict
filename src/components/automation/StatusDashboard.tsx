@@ -250,8 +250,10 @@ function BotCard({
 
   const parsed = Number(price.replace(/,/g, ""));
   const priceOk = price.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
-  const canTest = executor.venue === "mock" && !executor.error && !bot.configError;
-  const why = !canTest ? (executor.venue !== "mock" ? "Test alerts need the mock executor." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
+  // Test alerts run on the mock and on the Tradier sandbox (paper money) - never against a production account.
+  const safeVenue = executor.venue === "mock" || (executor.venue === "tradier" && executor.sandbox === true);
+  const canTest = safeVenue && !executor.error && !bot.configError;
+  const why = !canTest ? (!safeVenue ? "Test alerts never run against real money: they need the mock executor or the Tradier sandbox." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
 
   return (
     <Card className="space-y-3 p-4" >
@@ -312,7 +314,7 @@ function BotCard({
       <div className="space-y-2 border-t border-line pt-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-wide text-faint">Send test alert</span>
-          <TestTag />
+          {executor.venue === "mock" ? <TestTag /> : <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-accent">PAPER</span>}
         </div>
         <label className="flex items-center gap-2 text-xs text-muted">
           {bot.underlying ?? "Index"} price in the alert

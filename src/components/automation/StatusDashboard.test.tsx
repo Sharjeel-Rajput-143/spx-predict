@@ -122,7 +122,11 @@ describe("StatusView", () => {
     const sandbox = render(data({ executor: { kind: "tradier", venue: "tradier", error: null, baseUrl: "https://sandbox.tradier.com/v1", sandbox: true, dryRun: false, testMode: false } }));
     expect(sandbox).toContain("Tradier SANDBOX (paper money)");
     expect(sandbox).not.toContain("Reset test data");
-    expect(sandbox).toContain("Test alerts need the mock executor.");
+    // The sandbox is paper money, so test alerts are allowed there - and labelled PAPER, not TEST.
+    expect(sandbox).not.toContain("Test alerts never run against real money");
+    expect(sandbox).toContain(">PAPER<");
+    const production = render(data({ executor: { kind: "tradier", venue: "tradier", error: null, baseUrl: "https://api.tradier.com/v1", sandbox: false, dryRun: false, testMode: false } }));
+    expect(production).toContain("Test alerts never run against real money");
     const live = render(data({ executor: { kind: "tradier", venue: "tradier", error: null, baseUrl: "https://api.tradier.com/v1", sandbox: false, dryRun: false, testMode: false } }));
     expect(live).toContain("Tradier PRODUCTION");
   });

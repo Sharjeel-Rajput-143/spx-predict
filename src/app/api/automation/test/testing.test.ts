@@ -124,14 +124,18 @@ describe("Send test alert goes through the real webhook path", () => {
     expect(signalsStore.all()).toHaveLength(0);
   });
 
-  it("is mock-only: with a broker executor selected it refuses and sends nothing", async () => {
+  it("never runs against real money: production Tradier refuses and sends nothing", async () => {
     vi.stubEnv("EXECUTOR", "tradier");
     vi.stubEnv("TRADIER_TOKEN", "TEST-TOKEN-not-real");
     vi.stubEnv("TRADIER_ACCOUNT_ID", "ACC-TEST");
+    vi.stubEnv("TRADIER_BASE_URL", "https://api.tradier.com/v1");
+    vi.stubEnv("TRADIER_ALLOW_PRODUCTION", "true");
+    vi.stubEnv("TRADIER_MAX_CONTRACTS_PER_ORDER", "1");
+    vi.stubEnv("TRADIER_MAX_RISK_PER_ORDER", "1000");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const res = await send(NDX_BOT_ID, "bullish", 21_003.7);
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toMatch(/mock executor/);
+    expect((await res.json()).error).toMatch(/never against real money/);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(signalsStore.all()).toHaveLength(0);
     fetchSpy.mockRestore();

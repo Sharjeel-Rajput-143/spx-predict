@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { WebhookSettings } from "@/components/automations/WebhookSettings";
 import { cn } from "@/lib/format";
-import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, type ArchivedBot, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
+import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, type ArchivedBot, type BrokerView, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
 
 const SECTIONS = [
   { key: "general", label: "General" },
@@ -19,6 +19,7 @@ export function SettingsView() {
   const [data, setData] = useState<SettingsData | null>(null);
   const [archived, setArchived] = useState<ArchivedBot[]>([]);
   const [hooks, setHooks] = useState<WebhookView[]>([]);
+  const [broker, setBroker] = useState<BrokerView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showOutbound, setShowOutbound] = useState(false);
 
@@ -53,6 +54,18 @@ export function SettingsView() {
     return null;
   };
 
+  const loadBroker = useCallback(() => {
+    setBroker(null);
+    fetch("/api/automation/broker")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: BrokerView | null) => setBroker(j))
+      .catch(() => undefined);
+  }, []);
+  // Only when the Accounts section is open (and a broker is in use): a read of the account's balances.
+  useEffect(() => {
+    if (section === "accounts" && data?.executor.venue === "tradier") loadBroker();
+  }, [section, data?.executor.venue, loadBroker]);
+
   const createHook = async (name: string, botId: string, direction: "bullish" | "bearish"): Promise<string | null> => {
     const res = await fetch("/api/automation/webhooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, botId, direction }) });
     const json = await res.json().catch(() => ({}));
@@ -83,7 +96,7 @@ export function SettingsView() {
           {error && <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">{error}</p>}
           {!error && !data && <p className="text-sm text-muted">Loading...</p>}
           {data && section === "general" && <GeneralSection data={data} save={save} />}
-          {data && section === "accounts" && <AccountsSection data={data} />}
+          {data && section === "accounts" && <AccountsSection data={data} broker={broker} onRefresh={loadBroker} />}
           {section === "archive" && (
             <ArchiveSection
               bots={archived}
@@ -99,6 +112,14 @@ export function SettingsView() {
               onCreate={createHook}
               onToggle={(id, active) => fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }) }).then(load)}
               onDelete={(id) => fetch(`/api/automation/webhooks/${id}`, { method: "DELETE" }).then(load)}
+              canTest={data.executor.venue === "mock" || (data.executor.venue === "tradier" && data.executor.sandbox === true)}
+              onTest={async (id, price) => {
+                const res = await fetch(`/api/automation/webhooks/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price }) });
+                const j = await res.json().catch(() => ({}));
+                if (!res.ok) return `Not sent: ${j.error ?? res.status}`;
+                const steps = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
+                return `Sent at ${price.toLocaleString("en-US")} → ${steps}${j.finished ? "" : " (still working…)"}. See the Automation status page for the order.`;
+              }}
               outbound={
                 <OutboundGate shown={showOutbound} onShow={() => setShowOutbound(true)}>
                   <WebhookSettings />

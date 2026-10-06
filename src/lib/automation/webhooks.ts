@@ -12,8 +12,9 @@ export const WEBHOOK_MIN_INTERVAL_MS = 60_000;
 
 const TOKEN_BYTES = 24;
 
+/** The short URL TradingView is given (rewritten to /api/webhook/hook/<token>, which also works directly). */
 export function webhookUrlPath(w: Pick<Webhook, "token">): string {
-  return `/api/webhook/hook/${w.token}`;
+  return `/hook/${w.token}`;
 }
 
 export interface NewWebhook {

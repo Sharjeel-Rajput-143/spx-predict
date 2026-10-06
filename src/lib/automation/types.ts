@@ -308,6 +308,16 @@ export interface BrokerExecutor {
   getSpreadQuote?(req: SpreadQuoteRequest): Promise<LegQuotes | null>;
   /** What the broker itself holds, for checking against our records. */
   listBrokerPositions?(): Promise<BrokerPosition[]>;
+  /** The account's balances, for showing the paper (or real) balance next to the bots. */
+  getBalances?(): Promise<BrokerBalances>;
+}
+
+export interface BrokerBalances {
+  accountId: string;
+  totalEquity: number | null;
+  /** Cash that can fund new option positions. */
+  optionBuyingPower: number | null;
+  cash: number | null;
 }
 
 // --- Run trace: what the engine walked through for one signal or manual action ---

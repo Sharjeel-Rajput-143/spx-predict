@@ -280,6 +280,16 @@ describe("quotes, debit closes, positions", () => {
   });
 });
 
+describe("balances", () => {
+  it("reads total equity, option buying power and cash from the balances answer, and leaves the rest null", async () => {
+    const { calls, impl } = fakeFetch([{ body: { balances: { total_equity: 100000, total_cash: 100000, margin: { option_buying_power: 98000 } } } }, { body: { balances: {} } }]);
+    const ex = new TradierExecutor(baseConfig, impl);
+    expect(await ex.getBalances()).toEqual({ accountId: "ACC-TEST", totalEquity: 100000, optionBuyingPower: 98000, cash: 100000 });
+    expect(await ex.getBalances()).toEqual({ accountId: "ACC-TEST", totalEquity: null, optionBuyingPower: null, cash: null });
+    expect(calls[0]).toMatchObject({ method: "GET", url: `${TRADIER_SANDBOX_URL}/accounts/ACC-TEST/balances` });
+  });
+});
+
 describe("hard limits on real money", () => {
   const live = { ...baseConfig, baseUrl: TRADIER_PRODUCTION_URL, sandbox: false, maxContracts: 2, maxRiskPerOrder: 1500 };
   const req = (over: Partial<Parameters<TradierExecutor["placeOpenOrder"]>[0]> = {}) => ({ botId: NDX_BOT_ID, underlying: "NDX", optionRoot: "NDXP", positionType: "short_put_spread" as const, shortStrike: 20_970, longStrike: 20_960, quantity: 1, limitCredit: 3.5, expiry: "2026-10-06", ...over });
@@ -343,6 +353,22 @@ describe("choosing the executor", () => {
     expect(result.status).toBe(503);
     expect(String(result.body.error)).toMatch(/TRADIER_TOKEN/);
     expect(positionsStore.all()).toHaveLength(0);
+  });
+
+  it("the shared executor offers quotes, broker positions and balances exactly when the executor behind it does", () => {
+    vi.stubEnv("EXECUTOR", "mock");
+    expect(sharedExecutor.getSpreadQuote).toBeUndefined();
+    expect(sharedExecutor.listBrokerPositions).toBeUndefined();
+    expect(sharedExecutor.getBalances).toBeUndefined();
+    vi.stubEnv("EXECUTOR", "tradier");
+    vi.stubEnv("TRADIER_TOKEN", "TEST-TOKEN-not-real");
+    vi.stubEnv("TRADIER_ACCOUNT_ID", "ACC-TEST");
+    expect(typeof sharedExecutor.getSpreadQuote).toBe("function");
+    expect(typeof sharedExecutor.listBrokerPositions).toBe("function");
+    expect(typeof sharedExecutor.getBalances).toBe("function");
+    // Misconfigured: nothing is offered (and nothing throws).
+    vi.stubEnv("TRADIER_TOKEN", "");
+    expect(sharedExecutor.getSpreadQuote).toBeUndefined();
   });
 
   it("EXECUTOR=tradier with credentials builds the sandbox executor - and still makes no request", () => {

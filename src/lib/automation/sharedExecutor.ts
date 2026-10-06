@@ -64,8 +64,21 @@ export const sharedExecutor: BrokerExecutor = {
     return executorStatus().venue ?? undefined;
   },
   placeOpenOrder: (req: OpenSpreadRequest) => getExecutor().placeOpenOrder(req),
-  placeCloseOrder: (position: Position) => getExecutor().placeCloseOrder(position),
+  placeCloseOrder: (position: Position, options?: { pricePercent?: number; limitDebit?: number }) => getExecutor().placeCloseOrder(position, options),
   getOrder: (ref: string): Promise<OrderState> => getExecutor().getOrder(ref),
   cancelOrder: (ref: string) => getExecutor().cancelOrder(ref),
   listPositions: (botId: string) => getExecutor().listPositions(botId),
+  // Optional abilities are only there when the executor in use has them (the mock has none of these).
+  get getSpreadQuote() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.getSpreadQuote ? ex.getSpreadQuote.bind(ex) : undefined;
+  },
+  get listBrokerPositions() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.listBrokerPositions ? ex.listBrokerPositions.bind(ex) : undefined;
+  },
+  get getBalances() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.getBalances ? ex.getBalances.bind(ex) : undefined;
+  },
 };
