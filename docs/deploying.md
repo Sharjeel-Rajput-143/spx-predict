@@ -30,6 +30,11 @@ For real trading that matters: a signal could be accepted and never acted on, or
 
 The status page shows a red "This server can't run the engine" banner whenever it is opened on a host that can't write its records.
 
-## Looking at the UI on Vercel without a password (demo only)
+## Looking at the UI on Vercel (demo) - no settings needed
 
-In the Vercel project's environment variables set `AUTOMATION_AUTH_DISABLED=true` and `AUTOMATION_DATA_DIR=/tmp/automation`, then redeploy. The sign-in box disappears and every page opens, with a yellow "Sign-in is switched off" warning at the top. Anyone who finds the address can then use the admin pages, so only do this for a demo with nothing real behind it. The setting is ignored (sign-in stays on) whenever Tradier production is enabled. The `/tmp` data is temporary and not shared between instances, and the engine still cannot take real alerts on Vercel.
+With no environment variables at all, a production deploy now works as a demo: **no sign-in box**, a yellow "Sign-in is off" warning on every page, and the pages keep their data in a temporary folder (so bots and settings can vanish, and differ between instances). The status page also shows a red "can't run the engine" notice: **TradingView alerts and orders are refused on Vercel** - it is serverless, so it may stop working right after it answers an alert.
+
+Sign-in comes back automatically as soon as it matters:
+- set `AUTOMATION_STATUS_PASSWORD` and the password box returns;
+- set `EXECUTOR=tradier` (the broker) with no password and access is denied until you set one - it never runs a broker unprotected;
+- `AUTOMATION_AUTH_DISABLED=true` switches sign-in off even then (sandbox only; ignored for Tradier production).

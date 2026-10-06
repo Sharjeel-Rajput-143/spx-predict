@@ -77,20 +77,30 @@ export function getWebhookSecret(): string {
   return requiredEnvString("WEBHOOK_SECRET", "Set it in .env.local before any TradingView alert can reach the webhook.");
 }
 
-/** Sign-in is required whenever a status-page password is configured. With none
- * set it's skipped for local development - but never in a production build,
- * where a missing password means access is denied rather than open. */
+/** Sign-in is required whenever a status-page password is configured. With none set it is skipped - in local
+ * development, and on a production host running only the mock executor (a demo with nothing real behind it, where the app
+ * shows a warning). It is NEVER skipped once a real broker is configured (EXECUTOR=tradier, sandbox or production): then a
+ * missing password means access is denied rather than open. */
 export function isAuthRequired(): boolean {
   if (isAuthDisabled()) return false;
-  return Boolean(process.env.AUTOMATION_STATUS_PASSWORD) || process.env.NODE_ENV === "production";
+  if (process.env.AUTOMATION_STATUS_PASSWORD) return true;
+  return process.env.NODE_ENV === "production" && brokerConfigured();
 }
 
-/** Sign-in can be switched off on purpose with AUTOMATION_AUTH_DISABLED=true (a demo, or a private network).
- * Then anyone who can reach the address can use every admin page, so the app shows a warning banner - and it
- * is refused outright when real money is in play (Tradier production), where this setting is ignored. */
+const brokerConfigured = () => process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
+
+/** True when sign-in is off in a production build: on purpose (AUTOMATION_AUTH_DISABLED=true) or because no password
+ * was ever set. The app shows a warning on every page. */
+export function isAuthOpenInProduction(): boolean {
+  return process.env.NODE_ENV === "production" && !isAuthRequired();
+}
+
+/** Sign-in can be switched off on purpose with AUTOMATION_AUTH_DISABLED=true (a demo, or a private network). Then
+ * anyone who can reach the address can use every admin page, so the app warns - and the setting is ignored when real
+ * money is in play (Tradier production), where sign-in stays on. */
 export function isAuthDisabled(): boolean {
   if (process.env.AUTOMATION_AUTH_DISABLED !== "true") return false;
-  const realMoney = process.env.EXECUTOR?.trim().toLowerCase() === "tradier" && process.env.TRADIER_ALLOW_PRODUCTION === "true";
+  const realMoney = brokerConfigured() && process.env.TRADIER_ALLOW_PRODUCTION === "true";
   return !realMoney;
 }
 

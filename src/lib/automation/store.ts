@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
 
@@ -9,26 +10,49 @@ import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision
  * (unrelated, outbound) automations feature, and vice versa. Swap this file
  * for a real database later; callers only ever see all/get/query/insert/update.
  */
-// Overridable so the test suite never reads/writes the same files a running
-// dev/prod process uses (see vitest.setup.ts).
-const DATA_DIR = process.env.AUTOMATION_DATA_DIR ?? path.join(process.cwd(), "data", "automation");
+export interface DataDirChoice {
+  dir: string;
+  /** True when the preferred folder wasn't writable and a temporary one is used instead. */
+  temporary: boolean;
+}
 
-let storageChecked: string | null | undefined;
+/** Where the records live: AUTOMATION_DATA_DIR (so tests never touch a running app's files), else ./data/automation.
+ * If that can't be written to (a read-only host such as Vercel) the system's temp folder is used, so the pages still
+ * work for a look around - with data that is temporary and not shared between instances. */
+export function resolveDataDir(env: Record<string, string | undefined> = process.env, canWrite: (dir: string) => boolean = writable): DataDirChoice {
+  const preferred = env.AUTOMATION_DATA_DIR ?? path.join(process.cwd(), "data", "automation");
+  if (canWrite(preferred)) return { dir: preferred, temporary: false };
+  const fallback = path.join(os.tmpdir(), "spx-predict-automation");
+  return canWrite(fallback) ? { dir: fallback, temporary: true } : { dir: preferred, temporary: false };
+}
 
-/** Why this host can't keep the bots' records, or null when it can. The records live in JSON files on disk, so a host with a
- * read-only filesystem (serverless platforms such as Vercel) can't run the engine - saying so beats an opaque 500. */
-export function storageProblem(): string | null {
-  if (storageChecked !== undefined) return storageChecked;
+function writable(dir: string): boolean {
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    const probe = path.join(DATA_DIR, `.write-test-${process.pid}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.write-test-${process.pid}`);
     fs.writeFileSync(probe, "ok");
     fs.rmSync(probe);
-    storageChecked = null;
-  } catch (err) {
-    storageChecked = `This host can't write the bots' records to ${DATA_DIR} (${err instanceof Error ? err.message : String(err)}). The engine keeps its state in files and in memory, so it needs a server that stays running with a writable disk - not a serverless host.`;
+    return true;
+  } catch {
+    return false;
   }
-  return storageChecked;
+}
+
+const CHOICE = resolveDataDir();
+const DATA_DIR = CHOICE.dir;
+
+/** Why this host can't RUN the engine, or null when it can. The engine keeps its state in files and in memory and keeps
+ * working after it has answered an alert, so it needs a server that stays up with a writable disk. A serverless host
+ * (Vercel) can show the pages with temporary data, but must not be trusted with alerts or orders - saying so beats an
+ * opaque 500, or an alert that is accepted and never acted on. */
+export function storageProblem(): string | null {
+  if (process.env.VERCEL) {
+    return "This is Vercel, a serverless host. The pages work here with temporary data, but the engine can't take TradingView alerts or place orders: it keeps its state in files and in memory and keeps working after it answers an alert, which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
+  }
+  if (!writable(DATA_DIR) || CHOICE.temporary) {
+    return `This host can't keep the bots' records on disk${CHOICE.temporary ? ` (it is using a temporary folder, ${DATA_DIR})` : ` at ${DATA_DIR}`}. The engine needs a server that stays running with a writable disk - not a serverless host.`;
+  }
+  return null;
 }
 
 /**

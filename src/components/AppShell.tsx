@@ -181,7 +181,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <main className={cn("mx-auto max-w-5xl px-4 pb-28 pt-4 xl:max-w-none xl:px-8 xl:pb-12 xl:pt-6", collapsed ? "xl:ml-16" : "xl:ml-56")}>
         {auth?.authDisabled && (
           <div className="mb-4 rounded-xl bg-amber-500/10 px-4 py-2.5 text-sm text-amber-500">
-            <span className="font-semibold">Sign-in is switched off</span> (AUTOMATION_AUTH_DISABLED). Anyone who can reach this address can control the bots, see the webhook URLs and change settings. Only leave it off on a private network or a demo with nothing real behind it.
+            <span className="font-semibold">Sign-in is off.</span> Anyone who can reach this address can control the bots, see the webhook URLs and change settings. Fine for a demo with nothing real behind it; set AUTOMATION_STATUS_PASSWORD before connecting a broker.
           </div>
         )}
         {children}
