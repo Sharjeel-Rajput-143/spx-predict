@@ -39,17 +39,13 @@ function EasternClock({ collapsed }: { collapsed: boolean }) {
     return () => clearInterval(id);
   }, []);
   if (!now) return null;
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).formatToParts(now);
-  const time = parts
-    .filter((p) => p.type !== "timeZoneName")
-    .map((p) => p.value)
-    .join("")
-    .trim();
-  // The New York zone's own short name: EST in winter, EDT while daylight saving time is in effect.
-  const zone = parts.find((p) => p.type === "timeZoneName")?.value ?? "ET";
+  // New York time written the way Option Alpha does: "9:14AM EST" (the label is always EST; the time is New York's own).
+  const time = now
+    .toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })
+    .replace(/\s+(AM|PM)/, "$1");
   return (
-    <div className={cn("mx-3 mb-2 rounded-md bg-up-soft px-2 py-1 text-center text-[11px] font-medium text-up", collapsed && "mx-2 px-0")} title="Current time in New York">
-      {collapsed ? time.replace(/\s?(AM|PM)/, "") : `${time} ${zone}`}
+    <div className={cn("mx-3 mb-2 rounded-md bg-up-soft px-2 py-1 text-center text-[11px] font-medium text-up", collapsed && "mx-2 px-0")} title="Current New York (Eastern) time">
+      {collapsed ? time.replace(/(AM|PM)/, "") : `${time} EST`}
     </div>
   );
 }
