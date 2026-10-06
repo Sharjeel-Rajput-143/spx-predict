@@ -8,7 +8,7 @@ import { storageProblem } from "@/lib/automation/store";
 export async function GET(req: NextRequest) {
   return NextResponse.json({
     authRequired: isAuthRequired(),
-    // Sign-in is off in a production build (on purpose, or no password was set): the app warns on every page.
+    // Sign-in is off in a production build (on purpose, or no password was set).
     authDisabled: isAuthOpenInProduction(),
     signedIn: isValidSession(req.cookies.get(SESSION_COOKIE_NAME)?.value),
     // Lets the sign-in dialog say what's actually wrong when no password was ever set, or the host can't keep records.

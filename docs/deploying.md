@@ -32,7 +32,7 @@ The status page shows a red "This server can't run the engine" banner whenever i
 
 ## Looking at the UI on Vercel (demo) - no settings needed
 
-With no environment variables at all, a production deploy now works as a demo: **no sign-in box**, a yellow "Sign-in is off" warning on every page, and the pages keep their data in a temporary folder (so bots and settings can vanish, and differ between instances). The status page also shows a red "can't run the engine" notice: **TradingView alerts and orders are refused on Vercel** - it is serverless, so it may stop working right after it answers an alert.
+With no environment variables at all, a production deploy now works as a demo: **no sign-in box**, and the pages keep their data in a temporary folder (so bots and settings can vanish, and differ between instances). The status page also shows a red "can't run the engine" notice: **TradingView alerts and orders are refused on Vercel** - it is serverless, so it may stop working right after it answers an alert.
 
 Sign-in comes back automatically as soon as it matters:
 - set `AUTOMATION_STATUS_PASSWORD` and the password box returns;
