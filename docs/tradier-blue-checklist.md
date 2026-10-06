@@ -45,7 +45,8 @@ Please answer these in plain words:
 5. **No manual orders.** Please confirm you **will not place orders by hand on positions the bot manages** (not at Tradier, not in another app). If you want out of a position, use the **Close position** button in our app. Hand-placed orders are invisible to the bot and will confuse it.
 6. **Your TradingView alert.** Please confirm:
    - you (or we, with you) will create the alert in TradingView. Webhook alerts need two-step login (2FA) switched on in TradingView;
-   - the alert web address (URL) comes from our app's **Settings > Webhooks**, one for bullish and one for bearish. The web address itself works like a password, so send it the same safe way as the token, not in chat.
+   - the alert web address (URL) comes from our app's **Settings > Webhooks**, one for bullish and one for bearish. The web address itself works like a password, so send it the same safe way as the token, not in chat;
+   - **only the confirmed bullish and bearish alerts should call the webhook.** Do not send any other alert, because extra alerts cause duplicate entries.
 
 ---
 

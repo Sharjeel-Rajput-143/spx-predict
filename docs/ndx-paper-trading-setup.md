@@ -57,7 +57,7 @@ Then BearishNDX: the put spread should close first, then the call spread open.
 - **`config_error`:** a required NDX setting is missing - the status page names it.
 - **`outside_hours` / `price_out_of_range` / `symbol_mismatch`:** the engine refused it on purpose; the decision says why.
 - **A mismatch from "Check broker positions":** the bot is flagged and stops; look at the sandbox account and decide. Nothing is fixed automatically.
-- The bot's on/off switch is the kill switch.
+- The bot's On/Off lets a webhook still close (never open); the separate Kill switch stops every webhook run, closes included.
 
 ## Before this is ever real money
 Everything in `docs/going-live-checklist.md` - in particular weeks of paper trading, the owner's approval, and per-order caps.

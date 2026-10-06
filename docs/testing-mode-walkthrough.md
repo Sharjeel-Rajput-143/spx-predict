@@ -15,7 +15,7 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
 ## What he sees on arrival
 
 - A yellow banner: **Mock executor - test trades only. Nothing reaches a broker.**
-- The NDX bot's card with an **On/Off** switch (the kill switch), the numbers he knows from Option Alpha - **Allocation, Capital at risk, Available, Positions today (of the daily limit), Active positions (of the position limit)** - a line saying how strikes are chosen, and **Send test alert** with a price box and two buttons.
+- The NDX bot's card with an **On/Off** switch and a separate **Kill switch**, the numbers he knows from Option Alpha - **Allocation, Capital at risk, Available, Positions today (of the daily limit), Active positions (of the position limit)** - a line saying how strikes are chosen, and **Send test alert** with a price box and two buttons.
 - An **Activity alerts** list (opened, closed, warning, error). Email is off.
 - Empty tables: Active positions, Closed and expired positions, Orders, and Alerts and the decision for each.
 
@@ -37,7 +37,8 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
 3. **Safeguards (pick any).**
    - Click **Bearish** again straight away: `duplicate_signal` - the engine refuses a repeat inside the window.
    - Type an SPX-sized price (for example 7,720) in the NDX box and send: `price_out_of_range` - a wrong chart can't produce NDX strikes.
-   - Switch the NDX bot **Off**, send an alert: `automations_off`, nothing placed. Switch it back **On**.
+   - Switch the NDX bot **Off** with nothing held and send an alert: `automations_off`, nothing placed. With a position held, send the **opposite** alert: the log says "Bot off, close only", the position closes, and the Open step is blocked ("Bot off"): nothing new opens. This is Option Alpha's "Always On", copied only for closes - **opens always respect the bot switch**. Switch it back **On**.
+   - Turn the **Kill switch** on and send any alert: `kill_switch`, nothing closed, nothing opened. The end-of-day sweep and **Close position** still work with it on. Turn it off.
 4. **A limit switches the bot off.** Open the NDX bot's Settings > Safeguards, set the allocation to a small number (for example 600) and send a bullish alert: the decision is `allocation_limit_reached`, the card shows **Needs attention** with the reason, an *Activity alert* is raised, and the bot is **Off**. Put the allocation back, check the bot, switch it **On**. The position limit and the daily limit do the same. Ten errors in one trading day do it too (`error_failsafe`); the count starts again the next trading day.
    - Say: "When a safeguard trips, the bot stops and tells you why. It doesn't carry on trading and it doesn't keep guessing."
 5. **The end-of-day sweep.** The NDX bot's sweep time is 16:05 ET, ten minutes before its options stop trading (4:15pm). With a position still open, **Settings > Bot inputs > End-of-day sweep** decides what happens: *estimate* (the position expires and its P/L is worked out from the underlying's price, labelled *est.*), *market* (a market close order is sent), or *manual* (it expires and appears under **Waiting for your P/L**, where you type the result in). With no fresh price to estimate from, the position waits there too.

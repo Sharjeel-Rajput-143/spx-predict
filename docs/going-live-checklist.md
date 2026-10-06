@@ -47,7 +47,7 @@ Written from Option Alpha's own documentation (docs.optionalpha.com: SmartPricin
 2. Run signals in dry run; read the decision log's ladders against the broker's own chain.
 3. Turn dry run off in the sandbox. Place test trades; use Check broker positions after each.
 4. Only after the gates above: `TRADIER_BASE_URL=https://api.tradier.com/v1`, `TRADIER_ALLOW_PRODUCTION=true`, the two caps. The page then shows the red LIVE banner.
-5. Keep the bot's on/off switch (the kill switch) and Dry run in reach: both still apply to every executor.
+5. Keep the bot's On/Off, the Kill switch and Dry run in reach: all three still apply to every executor. (Bot off still lets a webhook close the opposite position; the Kill switch blocks every webhook run.)
 
 ## 5. Risks that remain
 
