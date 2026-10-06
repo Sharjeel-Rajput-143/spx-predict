@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   const now = Date.now();
   const botIds = listBotIds();
 
-  const bots = botIds.map((id) => {
+  const bots = botIds.filter((id) => !ensureBotRecord(id).archived).map((id) => {
     const { config, error, missing } = staticConfigSafe(id);
     const record = ensureBotRecord(id);
     const limits = getBotLimits(id);

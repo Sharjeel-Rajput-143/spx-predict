@@ -249,9 +249,23 @@ export function __registerBotForTests(id: string, factory: () => BotStaticConfig
 }
 
 /** Seeds the mutable store row the first time a bot is referenced. */
+/** Built-in bots kept out of sight for now: they start archived (switched off, hidden from the lists, listed under
+ * Settings > Bot Archive, where Restore brings them back). Once someone restores one, `archived: false` is saved on its
+ * record and it stays visible. Show it again for everyone with BOT_SPX_EMA_BIAS_HIDDEN=false. */
+const HIDDEN_BOT_IDS: readonly string[] = ["spx_ema_bias"];
+
+/** Whether a built-in bot starts hidden. Show it again for everyone with BOT_SPX_EMA_BIAS_HIDDEN=false. */
+export const hiddenByDefault = (botId: string): boolean => HIDDEN_BOT_IDS.includes(botId) && envString(`BOT_${botId.replace(/_ema_bias$/, "").toUpperCase()}_EMA_BIAS_HIDDEN`, "true") !== "false";
+
 export function ensureBotRecord(botId: string): Bot {
   const existing = botsStore.get(botId);
-  if (existing) return existing;
+  if (existing) {
+    // A record from before the bot was hidden: archive it once, unless someone has restored it on purpose.
+    if (hiddenByDefault(botId) && existing.archived === undefined) {
+      return botsStore.update(botId, { archived: true, enabled: false }) ?? existing;
+    }
+    return existing;
+  }
   // A bot that can't trade yet starts switched off, so it never shows "ON" while unable to run.
   let ready = true;
   if (isBuiltInBot(botId)) {
@@ -261,7 +275,8 @@ export function ensureBotRecord(botId: string): Bot {
       ready = false;
     }
   }
-  const record: Bot = { id: botId, enabled: ready, needsAttention: false, needsAttentionReason: null, createdAt: Date.now() };
+  const hidden = hiddenByDefault(botId);
+  const record: Bot = { id: botId, enabled: ready && !hidden, needsAttention: false, needsAttentionReason: null, createdAt: Date.now(), ...(hidden ? { archived: true } : {}) };
   return botsStore.insert(record);
 }
 

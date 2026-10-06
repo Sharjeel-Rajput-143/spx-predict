@@ -115,3 +115,7 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 - The older single URL with the secret in the message body still works (Settings > Webhooks > advanced).
 - TradingView only allows webhook alerts on accounts with two-factor authentication on.
 - See `docs/deploying.md`: webhooks only work on a host that stays running and can write its records - not on Vercel as it stands.
+
+## The SPX bot is hidden for now
+
+The built-in SPX bot starts archived and switched off, so it is out of the Automation list, the Testing page and the webhook choices. It is under Settings > Bot Archive: Restore brings it back (and it stays back). Set `BOT_SPX_EMA_BIAS_HIDDEN=false` to show it from the start on a new deployment. A signal that reaches it while hidden is logged as "Bot is off" and does nothing. Its code, settings and history are untouched.

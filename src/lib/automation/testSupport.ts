@@ -19,6 +19,8 @@ export function setTestBotEnv(): void {
   process.env.BOT_SPX_EMA_BIAS_ALLOCATION_LIMIT = "20000";
   process.env.BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE = "2.2";
   process.env.BOT_SPX_EMA_BIAS_ACCOUNT_ID = "test-account";
+  // The SPX bot is hidden by default in the app; the engine tests drive it, so they show it.
+  process.env.BOT_SPX_EMA_BIAS_HIDDEN = "false";
   // The live bot holds up to 3; most tests are about the one-position rules, so they pin it to 1.
   process.env.BOT_SPX_EMA_BIAS_TOTAL_POSITION_LIMIT = "1";
 }
