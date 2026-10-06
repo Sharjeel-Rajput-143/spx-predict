@@ -8,7 +8,7 @@ const data = (over: Partial<StatusResponse> = {}): StatusResponse => ({
   now: Date.UTC(2026, 9, 6, 14, 40),
   executor: { kind: "mock", venue: "mock", error: null, dryRun: false, testMode: true },
   bots: [
-    { id: "ndx_ema_bias", name: "NDX EMA 9/20 Bias", underlying: "NDX", enabled: true, needsAttention: false, needsAttentionReason: null, configError: null, missingSettings: null, errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 2, dailyNewPositionLimit: 10, activePositionCount: 1, closedPositionCount: 1, totalPositionLimit: 1, suggestedPrice: 21_003.7, allocation: 2000, atRisk: 650, available: 1350, settings: { quantity: 1, widthPoints: 10, strikeIncrement: 5, putShortOffset: -0.01, callShortOffset: 0.01, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100, smartPricing: "normal", window: "9:35am - 3:55pm", alerts: { open: true, close: true, warning: true, error: true } } },
+    { id: "ndx_ema_bias", name: "NDX Bias Bot", underlying: "NDX", enabled: true, needsAttention: false, needsAttentionReason: null, configError: null, missingSettings: null, errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 2, dailyNewPositionLimit: 10, activePositionCount: 1, closedPositionCount: 1, totalPositionLimit: 1, suggestedPrice: 21_003.7, allocation: 2000, atRisk: 650, available: 1350, settings: { quantity: 1, widthPoints: 10, strikeIncrement: 5, putShortOffset: -0.01, callShortOffset: 0.01, strikeRounding: "outward", openPricePercent: 100, closePricePercent: 100, smartPricing: "normal", window: "9:35am - 3:55pm", alerts: { open: true, close: true, warning: true, error: true } } },
     { id: "spx_ema_bias", name: "SPX EMA 9/20 Bias", underlying: "SPX", enabled: false, needsAttention: false, needsAttentionReason: null, configError: "SPX needs settings", missingSettings: [{ key: "BOT_SPX_EMA_BIAS_PUT_SHORT_OFFSET", why: "ask the owner" }], errorCountToday: 0, errorFailsafeThreshold: 10, newPositionsToday: 0, dailyNewPositionLimit: 10, activePositionCount: 0, closedPositionCount: 0, totalPositionLimit: 3, suggestedPrice: null, allocation: null, atRisk: 0, available: null, settings: null },
   ],
   positions: [
@@ -23,7 +23,7 @@ const data = (over: Partial<StatusResponse> = {}): StatusResponse => ({
     { id: "s2", botId: "ndx_ema_bias", signal: "bearish", price: 21_003.7, status: "accepted", rejectReason: null, receivedAt: 2, test: true, symbol: "NDX", decisions: [{ id: "d1", outcome: "closed", reason: "Closed short_put_spread position.", createdAt: 2 }, { id: "d2", outcome: "opened", reason: "Opened new position.", createdAt: 3 }] },
     { id: "s3", botId: "ndx_ema_bias", signal: "bullish", price: 0, status: "rejected", rejectReason: "bad_secret", receivedAt: 1, test: false, symbol: null, decisions: [] },
   ],
-  alerts: [{ id: "a1", botId: "ndx_ema_bias", kind: "open", outcome: "opened", message: "NDX EMA 9/20 Bias: Opened new position.", createdAt: 3, email: "off" }],
+  alerts: [{ id: "a1", botId: "ndx_ema_bias", kind: "open", outcome: "opened", message: "NDX Bias Bot: Opened new position.", createdAt: 3, email: "off" }],
   alertEmail: { enabled: false, to: null },
   ...over,
 });
@@ -103,7 +103,7 @@ describe("StatusView", () => {
     const html = render(data());
     expect(html).toContain("Activity alerts");
     expect(html).toContain(">Opened<");
-    expect(html).toContain("NDX EMA 9/20 Bias: Opened new position.");
+    expect(html).toContain("NDX Bias Bot: Opened new position.");
     expect(html).toContain("Email off");
     expect(render(data({ alertEmail: { enabled: true, to: "owner@example.invalid" } }))).toContain("queued only");
   });

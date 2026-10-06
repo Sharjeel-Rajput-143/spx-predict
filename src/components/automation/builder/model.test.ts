@@ -5,6 +5,7 @@ import {
   insertBefore,
   val,
   CONDITION_CATEGORIES,
+  VISIBLE_CONDITIONS,
   STEP_CATALOG,
   appendStep,
   checkFlow,
@@ -30,11 +31,14 @@ describe("catalog", () => {
     expect(STEP_CATALOG.every((s) => s.description.length > 10)).toBe(true);
   });
 
-  it("covers the four condition categories with fill-in-the-blank sentences", () => {
-    expect(CONDITION_CATEGORIES).toEqual(["Stocks", "Indicators", "Positions", "Bot"]);
+  it("offers three condition categories with fill-in-the-blank sentences; Indicators is kept in the code but hidden", () => {
+    expect(CONDITION_CATEGORIES).toEqual(["Stocks", "Positions", "Bot"]); // Indicators is hidden: the platform does no price analysis
     for (const cat of CONDITION_CATEGORIES) expect(CONDITION_CATALOG.some((t) => t.category === cat)).toBe(true);
     // Every template has at least one blank to fill (a select or an input).
     expect(CONDITION_CATALOG.every((t) => t.tokens.some((k) => k.t !== "text"))).toBe(true);
+    // The hidden conditions are still there for a saved flow that uses one, but none is offered.
+    expect(CONDITION_CATALOG.filter((t) => t.category === "Indicators").map((t) => t.id)).toEqual(["ind_compare", "ind_rsi", "ind_bias"]);
+    expect(VISIBLE_CONDITIONS.some((t) => t.category === "Indicators")).toBe(false);
   });
 });
 
@@ -53,10 +57,10 @@ describe("conditions", () => {
   });
 
   it("matches a search against the sentence and the category", () => {
-    expect(conditionMatches(conditionTemplate("ind_rsi"), "rsi")).toBe(true);
-    expect(conditionMatches(conditionTemplate("ind_rsi"), "indicators")).toBe(true);
-    expect(conditionMatches(conditionTemplate("ind_rsi"), "dte")).toBe(false);
-    expect(conditionMatches(conditionTemplate("ind_rsi"), "  ")).toBe(true);
+    expect(conditionMatches(conditionTemplate("stock_price"), "price")).toBe(true);
+    expect(conditionMatches(conditionTemplate("stock_price"), "stocks")).toBe(true);
+    expect(conditionMatches(conditionTemplate("stock_price"), "dte")).toBe(false);
+    expect(conditionMatches(conditionTemplate("stock_price"), "  ")).toBe(true);
   });
 });
 

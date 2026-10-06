@@ -148,11 +148,13 @@ describe("processSignal - active-status counting", () => {
     expect(botDecisions("already_in_position")).toHaveLength(1);
   });
 
-  it("#12 includes a closing-status position when selecting the opposite side to close", async () => {
+  it("#12 a closing-status position counts as held: it isn't closed a second time, and nothing opens until it is gone", async () => {
     positionsStore.insert(buildPosition({ type: "short_call_spread", status: "closing" }));
     await emit("bullish");
     const call = botPositions().find((p) => p.type === "short_call_spread")!;
-    expect(call.status).toBe("closed");
+    expect(call.status).toBe("closing"); // no second close was sent
+    expect(botDecisions("close_in_flight")).toHaveLength(1);
+    expect(botPositions().filter((p) => p.type === "short_put_spread")).toHaveLength(0); // and the other side never opened
   });
 });
 

@@ -14,13 +14,13 @@ beforeEach(() => {
 });
 
 describe("runEndOfDaySweep", () => {
-  it("#19 expires every active position, regardless of expiry date", () => {
+  it("#19 expires every active position, regardless of expiry date", async () => {
     positionsStore.insert(buildPosition({ type: "short_put_spread", status: "open", id: "pos-open" }));
     positionsStore.insert(buildPosition({ type: "short_call_spread", status: "opening", id: "pos-opening" }));
     positionsStore.insert(buildPosition({ type: "short_call_spread", status: "closing", id: "pos-closing" }));
     positionsStore.insert(buildPosition({ type: "short_put_spread", status: "closed", id: "pos-already-closed" }));
 
-    const count = runEndOfDaySweep(BASE_NOW);
+    const count = await runEndOfDaySweep(BASE_NOW, undefined, { underlyingPrice: () => null });
 
     expect(count).toBe(3);
     expect(positionsStore.get("pos-open")?.status).toBe("expired");

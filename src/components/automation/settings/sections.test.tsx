@@ -14,7 +14,7 @@ const data = (over: Partial<SettingsData> = {}): SettingsData => ({
   signInRequired: false,
   executor: { kind: "mock", venue: "mock", error: null, dryRun: false, testMode: true },
   accounts: [{ id: "paper-1", bots: ["SPX EMA 9/20 Bias"] }, { id: "paper-ndx", bots: [] }],
-  webhook: { path: "/api/webhook/tradingview", secretSet: true, bots: [{ id: "spx_ema_bias", name: "SPX EMA 9/20 Bias", underlying: "SPX" }, { id: "ndx_ema_bias", name: "NDX EMA 9/20 Bias", underlying: "NDX" }] },
+  webhook: { path: "/api/webhook/tradingview", secretSet: true, bots: [{ id: "spx_ema_bias", name: "SPX EMA 9/20 Bias", underlying: "SPX" }, { id: "ndx_ema_bias", name: "NDX Bias Bot", underlying: "NDX" }] },
   ...over,
 });
 const save = async () => null;

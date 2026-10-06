@@ -57,7 +57,7 @@ describe("alerts from real runs", () => {
     await emit(NDX_BOT_ID, "bearish", { barTime: "b2", now: BASE_NOW + 200_000 });
     expect(kinds()).toEqual(["open", "close", "open"]);
     expect(alertsStore.all()[0]).toMatchObject({ botId: NDX_BOT_ID, outcome: "opened", email: "off" });
-    expect(alertsStore.all()[0].message).toMatch(/^NDX EMA 9\/20 Bias: Opened new position/);
+    expect(alertsStore.all()[0].message).toMatch(/^NDX Bias Bot: Opened new position/);
   });
 
   it("a safeguard stopping a signal is a warning; a wrong-chart signal too", async () => {

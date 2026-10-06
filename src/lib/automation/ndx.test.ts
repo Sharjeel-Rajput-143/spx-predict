@@ -67,10 +67,10 @@ describe("NDX bot config", () => {
   it("needs no settings at all: with none of the optional ones set it has working defaults", () => {
     for (const k of ["STRIKE_INCREMENT", "OPENING_CREDIT_ESTIMATE", "PRICE_MIN", "PRICE_MAX", "EOD_SWEEP_TIME", "OPTION_ROOT", "PUT_SHORT_OFFSET", "CALL_SHORT_OFFSET"]) vi.stubEnv(`BOT_NDX_EMA_BIAS_${k}`, "");
     const c = getBotStaticConfig(NDX_BOT_ID);
-    expect(c).toMatchObject({ strikeIncrement: 5, openingCreditEstimate: 3.5, eodSweepTime: "16:15", optionRoot: "NDXP", putShortOffset: -0.01, callShortOffset: 0.01 });
+    expect(c).toMatchObject({ strikeIncrement: 5, openingCreditEstimate: 3.5, eodSweepTime: "16:05", eodSweepMode: "estimate", optionRoot: "NDXP", putShortOffset: -0.01, callShortOffset: 0.01 });
     expect(c.priceRange).toBeUndefined();
     const summary = summarizeBot(NDX_BOT_ID);
-    expect(summary).toMatchObject({ name: "NDX EMA 9/20 Bias", enabled: true, configError: null, missingSettings: null });
+    expect(summary).toMatchObject({ name: "NDX Bias Bot", enabled: true, configError: null, missingSettings: null });
   });
 
   it("without a price range there is no sanity check on the price - the other checks still apply", async () => {
@@ -187,8 +187,10 @@ describe("NDX strikes and risk", () => {
     expect(outcomesOf(NDX_BOT_ID)).toEqual(["allocation_limit_reached"]);
     expect(executor.placedOrders).toHaveLength(0);
 
-    // Against the real $2,000 allocation the same signal fits.
+    // The limit switched the bot off, with the reason; against the real $2,000 allocation, switched back on, the same signal fits.
+    expect(botsStore.get(NDX_BOT_ID)?.enabled).toBe(false);
     updateBot(NDX_BOT_ID, { safeguards: { allocationLimit: 2000 } });
+    botsStore.update(NDX_BOT_ID, { enabled: true, needsAttention: false, needsAttentionReason: null });
     await emit(NDX_BOT_ID, "bullish", { barTime: "retry", now: BASE_NOW + 200_000 });
     expect(executor.placedOrders).toHaveLength(1);
   });
@@ -239,6 +241,8 @@ describe("NDX position limits and flips", () => {
   });
 });
 
+const noPrice = { underlyingPrice: () => null };
+
 describe("per-bot hours and sweep", () => {
   it("can have its own signal window", async () => {
     vi.stubEnv("BOT_NDX_EMA_BIAS_HOURS_START", "11:00");
@@ -249,7 +253,7 @@ describe("per-bot hours and sweep", () => {
     expect(outcomesOf(TEST_BOT_ID)).toEqual(["opened"]);
   });
 
-  it("#10 the end-of-day sweep uses each bot's own sweep time", () => {
+  it("#10 the end-of-day sweep uses each bot's own sweep time", async () => {
     expect(sweepMinutesFor(NDX_BOT_ID)).toBe(16 * 60 + 15);
     expect(sweepMinutesFor(TEST_BOT_ID)).toBe(16 * 60 + 5);
 
@@ -257,14 +261,14 @@ describe("per-bot hours and sweep", () => {
     positionsStore.insert(buildPosition({ id: "spx-open", type: "short_put_spread", status: "open" }));
 
     const at = (h: number, m: number) => Date.UTC(2026, 9, 6, h + 4, m); // EDT = UTC-4
-    expect(runDueSweeps(at(16, 0))).toEqual([]); // before either
-    expect(runDueSweeps(at(16, 10))).toEqual([TEST_BOT_ID]); // SPX's 4:05 has passed, NDX's 4:15 has not
+    expect(await runDueSweeps(at(16, 0), noPrice)).toEqual([]); // before either
+    expect(await runDueSweeps(at(16, 10), noPrice)).toEqual([TEST_BOT_ID]); // SPX's 4:05 has passed, NDX's 4:15 has not
     expect(positionsStore.get("spx-open")?.status).toBe("expired");
     expect(positionsStore.get("ndx-open")?.status).toBe("open");
 
-    expect(runDueSweeps(at(16, 20))).toEqual([NDX_BOT_ID]);
+    expect(await runDueSweeps(at(16, 20), noPrice)).toEqual([NDX_BOT_ID]);
     expect(positionsStore.get("ndx-open")?.status).toBe("expired");
-    expect(runDueSweeps(at(16, 30))).toEqual([]); // each bot sweeps once a day
+    expect(await runDueSweeps(at(16, 30), noPrice)).toEqual([]); // each bot sweeps once a day
   });
 });
 

@@ -47,11 +47,12 @@ describe("Add Step panel", () => {
 });
 
 describe("Condition picker", () => {
-  it("has search, the four categories, and sentences with inline blanks (Bot open by default)", () => {
+  it("has search, the three visible categories (no Indicators), and sentences with inline blanks (Bot open by default)", () => {
     const out = html(<ConditionPicker onPick={noop} onClose={noop} />);
-    for (const t of ["Search conditions", "Stocks", "Indicators", "Positions", "Bot", "Current market time is between", "open P/L"]) expect(out, t).toContain(t);
+    for (const t of ["Search conditions", "Stocks", "Positions", "Bot", "Current market time is between", "open P/L"]) expect(out, t).toContain(t);
     expect(out).toContain("<select");
     expect(out).toContain("<input");
+    for (const hidden of ["Indicators", "RSI", "EMA", "SMA", "Heikin"]) expect(out, hidden).not.toContain(hidden);
     // Bot is expanded, Stocks is collapsed.
     expect(out).toContain("Bot has");
     expect(out).not.toContain("price is");
@@ -173,7 +174,7 @@ describe("Automation builder (full page)", () => {
 });
 
 describe("Bot symbols panel", () => {
-  it("has every control from the guide: watchlist, sort, two filters, indicators, limit, excluded symbols with Recents", () => {
+  it("has every control from the guide: watchlist, sort, two filters, limit, excluded symbols with Recents", () => {
     const out = html(<SymbolsPanel botId="b" onSaved={noop} onClose={noop} />);
     for (const t of [
       "Bot symbols",
@@ -185,8 +186,6 @@ describe("Bot symbols panel", () => {
       "Bot has",
       "positions with symbol",
       "Earnings or ex-div in the next",
-      "Indicators",
-      "Add indicator",
       "Limit",
       "10 symbols",
       "Excluded symbols",

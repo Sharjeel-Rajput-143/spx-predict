@@ -12,7 +12,7 @@ const html = (node: React.ReactElement) => renderToStaticMarkup(node);
 
 const config: BotStaticConfig = {
   id: "ndx_ema_bias",
-  name: "NDX EMA 9/20 Bias",
+  name: "NDX Bias Bot",
   accountId: "paper-ndx",
   underlying: "NDX",
   quantity: 1,

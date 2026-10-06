@@ -49,7 +49,9 @@ describe("per-bot safeguards", () => {
     await emit("bearish", { barTime: "b2", now: BASE_NOW + 130_000 }); // closes the put, then hits the limit
     expect(outcomes()).toEqual(["opened", "closed", "daily_limit_reached"]);
 
-    botsStore.update(TEST_BOT_ID, { dailyResetAt: BASE_NOW + 140_000 });
+    // The limit switched the bot off; a person checks it, resets the counter and switches it back on.
+    expect(botsStore.get(TEST_BOT_ID)?.enabled).toBe(false);
+    botsStore.update(TEST_BOT_ID, { dailyResetAt: BASE_NOW + 140_000, enabled: true, needsAttention: false, needsAttentionReason: null });
     await emit("bearish", { barTime: "b3", now: BASE_NOW + 300_000 });
     expect(outcomes().at(-1)).toBe("opened");
   });
