@@ -124,6 +124,15 @@ function ActionCard({ node, exists, onViewPosition }: { node: TraceAction; exist
         <ParamsTip params={node.params} />
       </div>
       {node.summary && <p className="tabular mt-2 text-sm text-muted">{node.summary}</p>}
+      {node.steps && node.steps.length > 0 && (
+        <ol aria-label="Prices tried" className="mt-2 space-y-1 border-l-2 border-line pl-3 text-xs text-muted">
+          {node.steps.map((step, i) => (
+            <li key={i} className="tabular">
+              {step}
+            </li>
+          ))}
+        </ol>
+      )}
       {!ok && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           <Pill tone={outcomeInfo(node.outcome).tone}>{outcomeInfo(node.outcome).label}</Pill>

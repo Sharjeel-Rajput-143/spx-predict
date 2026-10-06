@@ -74,6 +74,7 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   daily_limit_reached: { label: "Daily limit", tone: "warn" },
   allocation_limit_reached: { label: "Allocation limit", tone: "warn" },
   overlapping_strikes: { label: "Strikes overlap", tone: "warn" },
+  no_live_price: { label: "No live price", tone: "warn" },
   invalid_strikes: { label: "Invalid strikes", tone: "error" },
   close_rejected: { label: "Close rejected", tone: "error" },
   close_timeout: { label: "Close timed out", tone: "error" },
@@ -82,6 +83,8 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   open_timeout_no_fill: { label: "Open timed out", tone: "error" },
   executor_error: { label: "Executor error", tone: "error" },
   config_error: { label: "Config missing", tone: "error" },
+  error_failsafe: { label: "Bot switched off", tone: "error" },
+  eod_sweep: { label: "End-of-day sweep", tone: "ok" },
 };
 
 export function outcomeInfo(outcome: string): { label: string; tone: Tone } {

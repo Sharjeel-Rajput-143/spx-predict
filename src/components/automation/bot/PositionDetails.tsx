@@ -6,7 +6,7 @@ import { AccountIcon, accountLabel } from "@/components/automation/accounts";
 import { IconAutomation, IconCopy, IconEdit } from "@/components/icons";
 import { cn } from "@/lib/format";
 import { breakeven, maxLoss, maxProfit, otmFraction, rewardRisk, type Spread } from "@/lib/automation/payoff";
-import { positionPL, positionPremium, positionQuantity, positionRisk } from "@/lib/automation/pnl";
+import { positionPL, positionPLKind, positionPremium, positionQuantity, positionRisk } from "@/lib/automation/pnl";
 import type { Order, Position, Signal } from "@/lib/automation/types";
 import { POSITION_TYPES } from "../builder/model";
 import { PayoffChart } from "./PayoffChart";
@@ -54,6 +54,8 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
   const premium = positionPremium(p, estimate);
   const risk = positionRisk(p, estimate);
   const pl = positionPL(p);
+  const plKind = positionPLKind(p);
+  const plSource = plKind === "estimated" ? "estimated from the underlying's price at the end-of-day sweep" : plKind === "manual" ? "entered by hand" : null;
   const spread: Spread | null = credit != null ? { type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike, credit, quantity } : null;
 
   const openSignal = p.openSignalId ? signals.find((s) => s.id === p.openSignalId) : undefined;
@@ -127,7 +129,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         <div className="grid gap-x-8 sm:grid-cols-2">
           <Rows
             rows={[
-              ["Total P/L", <span key="a" className={plClass(pl)}>{plText(pl)}</span>, NO_PRICE_TIP],
+              ["Total P/L", <span key="a" className={plClass(pl)}>{plText(pl)}{plSource && <span className="ml-1.5 text-[11px] font-medium text-faint">{plKind === "estimated" ? "estimated" : "by hand"}</span>}</span>, plSource ? `This result was ${plSource}, not read from a fill.` : NO_PRICE_TIP],
               ["Return %", <span key="b" className={plClass(pl)}>{pl != null && premium ? pctText(pl / premium) : "—"}</span>, "Total P/L divided by the credit received."],
               ["Credit to open", premium != null ? usd(premium) : "—"],
               ["Market value", "—", NEEDS_CHAIN],

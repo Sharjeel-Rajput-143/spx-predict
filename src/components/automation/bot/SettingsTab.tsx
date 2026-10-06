@@ -51,6 +51,12 @@ function CardHeader({ title, tip, action }: { title: string; tip?: string; actio
   );
 }
 
+const SWEEP_WORDS = {
+  estimate: "Expires the position and estimates its P/L from the underlying's price",
+  market: "Closes the position at market",
+  manual: "Expires the position and waits for you to enter its P/L",
+} as const;
+
 export function SettingsTab({ ctx }: { ctx: BotContext }) {
   const { data } = ctx;
   return (
@@ -374,7 +380,7 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
             </button>
           </div>
           <pre className="mt-1 overflow-x-auto rounded-lg bg-surface-2 p-3 text-xs leading-relaxed">{payloadFor(dir, data.bot.id, data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX")}</pre>
-          <p className="mt-2 text-xs text-muted">Wire only the confirmed alerts to this URL - never the raw EMA cross alerts.</p>
+          <p className="mt-2 text-xs text-muted">Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.</p>
         </div>
 
         <button className={`${buttonClass.secondary} w-full`} onClick={() => { onClose(); openRun(dir); }}>
@@ -415,9 +421,11 @@ function InputsCard({ ctx }: { ctx: BotContext }) {
             ["Short put offset", signed(config.putShortOffset)],
             ["Short call offset", signed(config.callShortOffset)],
             ["Expected credit", usd2(config.openingCreditEstimate)],
+            ["Strike price from", (config.strikePriceSource ?? "alert") === "alert" ? "The alert's price" : "Live quote taken when the Open step runs (do not use until a real time quote source is connected; refuses to open without a fresh one)"],
             ["Strike rounding", (config.strikeRounding ?? "outward") === "outward" ? "Out of the money (put down, call up)" : "Nearest strike"],
-            ["Order price", `${config.openPricePercent ?? 100}% of bid/ask to open, ${config.closePricePercent ?? 100}% to close`],
-            ["SmartPricing", `${(config.smartPricing ?? "normal")[0].toUpperCase()}${(config.smartPricing ?? "normal").slice(1)} - walks from the mid to that price when live quotes exist`],
+            ["Final price", `${config.openPricePercent ?? 100}% of the way from the mid to the bid/ask to open, ${config.closePricePercent ?? 100}% to close`],
+            ["SmartPricing", `${(config.smartPricing ?? "normal")[0].toUpperCase()}${(config.smartPricing ?? "normal").slice(1)} - walks from the mid to the final price when live quotes exist; the last price waits 2 minutes, then cancels`],
+            ["End-of-day sweep", `${SWEEP_WORDS[config.eodSweepMode ?? "estimate"]} at ${config.eodSweepTime ?? "16:05"} ET`],
           ]}
         />
       ) : (

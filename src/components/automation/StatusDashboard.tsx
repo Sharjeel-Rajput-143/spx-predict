@@ -67,6 +67,8 @@ export interface StatusPosition {
   closedAt: number | null;
   venue?: "mock" | "tradier";
   test?: boolean;
+  /** How an expired position's result was settled (estimated from the underlying, or typed in). */
+  settlement?: { kind: "estimated" | "manual"; pl: number; underlyingPrice?: number };
 }
 
 export interface StatusOrder {
@@ -132,6 +134,15 @@ export interface StatusResponse {
 const POLL_MS = 3000;
 const ACTIVE = ["opening", "open", "closing"];
 const fmtNum = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+const signedUsd = (n: number) => `${n < 0 ? "-" : n > 0 ? "+" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** A finished position's result and where it came from; null when it has none (yet). */
+function resultOf(p: StatusPosition): { pl: number; how: "fill" | "estimated" | "manual" } | null {
+  if (p.status === "expired") return p.settlement ? { pl: p.settlement.pl, how: p.settlement.kind } : null;
+  if (p.status === "closed" && p.closePrice != null && p.credit != null) return { pl: (p.credit - p.closePrice) * 100 * (p.filledQuantity || p.requestedQuantity), how: "fill" };
+  return null;
+}
+
 const typeName = (t: string) => (t === "short_put_spread" ? "Short put spread" : t === "short_call_spread" ? "Short call spread" : t);
 
 /** "-20,975 put / +20,965 put" - the short leg sold, the long leg bought. */
@@ -201,6 +212,61 @@ function Table({ headers, rows, empty }: { headers: string[]; rows: ReactNode[][
         </tbody>
       </table>
     </div>
+  );
+}
+
+function ResultCell({ p }: { p: StatusPosition }) {
+  const r = resultOf(p);
+  if (!r) return <span className="text-faint">{p.status === "expired" ? "to enter" : "—"}</span>;
+  return (
+    <span className={cn("tabular", r.pl > 0 && "text-up", r.pl < 0 && "text-down")} title={r.how === "estimated" ? "Estimated from the underlying's price at the end-of-day sweep" : r.how === "manual" ? "Entered by hand" : "From the close order's fill"}>
+      {signedUsd(r.pl)}
+      {r.how !== "fill" && <span className="ml-1 text-[10px] font-medium text-faint">{r.how === "estimated" ? "est." : "by hand"}</span>}
+    </span>
+  );
+}
+
+/** Positions that expired with no result: the sweep was set to manual, or had no price to estimate from. */
+function AwaitingResult({ positions, botName, onEnter }: { positions: StatusPosition[]; botName: (id: string | null) => string; onEnter?: (id: string, pl: number) => Promise<string | null> }) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  if (positions.length === 0) return null;
+  const save = async (id: string) => {
+    const pl = Number((drafts[id] ?? "").replace(/[$,\s]/g, ""));
+    if (!onEnter || !(drafts[id] ?? "").trim() || !Number.isFinite(pl)) return setErrors((e) => ({ ...e, [id]: "Type the result in dollars, e.g. 125 or -310." }));
+    const problem = await onEnter(id, pl);
+    setErrors((e) => ({ ...e, [id]: problem ?? "" }));
+  };
+  return (
+    <Card className="space-y-2 p-4">
+      <SectionTitle>Waiting for your P/L</SectionTitle>
+      <p className="text-xs text-muted">These expired without a fill to price them by. Enter each one&apos;s result (total dollars for the position, negative for a loss) from your broker&apos;s statement.</p>
+      <ul className="divide-y divide-line">
+        {positions.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-sm">
+            <span className="text-muted">{botName(p.botId)}</span>
+            <span className="font-mono text-xs">{legsText(p)}</span>
+            <span className="text-xs text-faint">
+              {p.filledQuantity || p.requestedQuantity} contract{(p.filledQuantity || p.requestedQuantity) === 1 ? "" : "s"}, credit {p.credit != null ? `$${p.credit.toFixed(2)}` : "unknown"} · {p.expiry}
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <input
+                aria-label={`P/L for ${legsText(p)}`}
+                value={drafts[p.id] ?? ""}
+                onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                inputMode="decimal"
+                placeholder="$ result"
+                className="w-28 rounded-lg border border-line bg-surface px-2 py-1 text-sm"
+              />
+              <button onClick={() => save(p.id)} className="rounded-lg border border-line px-3 py-1 text-xs font-medium hover:bg-surface-2">
+                Save
+              </button>
+            </span>
+            {errors[p.id] && <span className="w-full text-xs text-down">{errors[p.id]}</span>}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
@@ -363,6 +429,7 @@ export function StatusView({
   onSend,
   onReset,
   reconcile,
+  onEnterPL,
 }: {
   data: StatusResponse;
   busyBot: string | null;
@@ -372,11 +439,14 @@ export function StatusView({
   onReset: () => void;
   /** Shown only with a broker executor: compare our open positions with what the broker holds. */
   reconcile?: { report: ReconcileView | null; busy: boolean; error: string | null; onRun: () => void };
+  /** Saves a typed-in P/L for an expired position; resolves to a problem to show, or null when it saved. */
+  onEnterPL?: (positionId: string, pl: number) => Promise<string | null>;
 }) {
   const botName = (id: string | null) => data.bots.find((b) => b.id === id)?.name ?? id ?? "—";
   const active = data.positions.filter((p) => ACTIVE.includes(p.status));
   const closed = data.positions.filter((p) => !ACTIVE.includes(p.status));
   const mock = data.executor.venue === "mock";
+  const awaitingResult = closed.filter((p) => p.status === "expired" && !p.settlement);
 
   const positionRow = (p: StatusPosition): ReactNode[] => [
     formatTime(p.openedAt ?? 0),
@@ -390,12 +460,13 @@ export function StatusView({
     `${p.filledQuantity}/${p.requestedQuantity}`,
     p.credit != null ? `$${p.credit.toFixed(2)}` : "—",
     p.closePrice != null ? `$${p.closePrice.toFixed(2)}` : "—",
+    <ResultCell key="pl" p={p} />,
     <Pill key="s" tone={STATUS_TONE[p.status] ?? "neutral"}>
       {p.status}
     </Pill>,
     p.expiry,
   ];
-  const posHeaders = ["Opened", "Bot", "Type", "Legs (short / long)", "Qty", "Credit", "Closed at", "Status", "Expiry"];
+  const posHeaders = ["Opened", "Bot", "Type", "Legs (short / long)", "Qty", "Credit", "Closed at", "P/L", "Status", "Expiry"];
 
   return (
     <div className="space-y-4">
@@ -433,6 +504,10 @@ export function StatusView({
             ))}
         </Card>
       )}
+
+      <p className="rounded-xl border border-line bg-surface-2 px-4 py-3 text-sm text-muted">
+        <span className="font-semibold text-fg">Don&apos;t place manual orders on positions the bot manages.</span> An order placed by hand at the broker (or from another app) is invisible to the bot: it can leave a position the bot thinks is open already closed, or one it has never heard of. To get out of a position, use <span className="font-medium text-fg">Close position</span> here, so the bot, its limits and its log stay in step with the account.
+      </p>
 
       <div className="grid gap-3 md:grid-cols-2">
         {data.bots.map((bot) => (
@@ -474,6 +549,8 @@ export function StatusView({
         <SectionTitle>Closed and expired positions</SectionTitle>
         <Table headers={posHeaders} rows={closed.map(positionRow)} empty="None yet. A flip closes the opposite position — it lands here." />
       </Card>
+
+      <AwaitingResult positions={awaitingResult} botName={botName} onEnter={onEnterPL} />
 
       <Card className="p-4">
         <SectionTitle>Orders</SectionTitle>
@@ -616,6 +693,17 @@ export function StatusDashboard() {
       .finally(() => setReconcileBusy(false));
   };
 
+  const enterPL = async (positionId: string, pl: number): Promise<string | null> => {
+    try {
+      const r = await fetch(`/api/automation/positions/${positionId}/settle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pl }) });
+      const j = await r.json().catch(() => ({}));
+      load();
+      return r.ok ? null : (j.error ?? "Couldn't save it.");
+    } catch {
+      return "Couldn't reach the server.";
+    }
+  };
+
   const reset = () => {
     if (!window.confirm("Reset the test data? This clears every recorded alert, position, order and decision. Bots and their settings stay.")) return;
     fetch("/api/automation/test/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }) })
@@ -625,5 +713,5 @@ export function StatusDashboard() {
 
   if (error) return <Card className="p-4 text-sm text-down">{error}</Card>;
   if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
-  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} reconcile={{ report, busy: reconcileBusy, error: reconcileError, onRun: runReconcile }} />;
+  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} reconcile={{ report, busy: reconcileBusy, error: reconcileError, onRun: runReconcile }} onEnterPL={enterPL} />;
 }

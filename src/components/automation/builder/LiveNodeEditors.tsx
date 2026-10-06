@@ -185,7 +185,7 @@ export function OpenEditor({ direction, ctx, onClose }: { direction: Direction; 
       <Field label="Expected credit" hint="Per spread: the order's limit credit and the risk check. Must be below the width.">
         <input className={inputClass} inputMode="decimal" value={credit} onChange={(e) => setCredit(e.target.value)} aria-label="Expected credit" />
       </Field>
-      <Field label="Price (% of bid/ask)" hint="Exact meaning to be confirmed with the owner. The engine sends one limit price and waits for the fill.">
+      <Field label="Final price (%)" hint="Where the price ladder ends, as a percent of the way from the mid to the bid/ask (100 = the full bid/ask). With live quotes the order walks there in steps (SmartPricing); the last price waits 2 minutes, then cancels.">
         <input className={inputClass} inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} aria-label="Open price percent" />
       </Field>
     </Shell>
@@ -215,7 +215,7 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
         <Row label="Position" value={`${cfg.underlying}, short ${closing} spread`} />
         <Row label="Quantity" value="100% of position" />
       </div>
-      <Field label="Price (% of bid/ask)" hint="Exact meaning to be confirmed with the owner. The engine closes with no limit price yet and waits for the confirmed fill before opening the other side.">
+      <Field label="Final price (%)" hint="Where the closing ladder ends, as a percent of the way from the mid to the bid/ask. The engine waits for the confirmed fill before opening the other side.">
         <input className={inputClass} inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} aria-label="Close price percent" />
       </Field>
     </Shell>
