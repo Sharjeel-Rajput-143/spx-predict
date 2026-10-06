@@ -7,7 +7,10 @@ import "server-only";
  * chain keyed by bot id is enough for a single Node process - no real lock
  * manager needed since this is the only writer.
  */
-const chains = new Map<string, Promise<unknown>>();
+// On globalThis because Next compiles route handlers, server pages and instrumentation as separate module
+// graphs: a lock kept in a plain module variable would not be the same lock for the webhook and the end-of-day sweep.
+const holder = globalThis as typeof globalThis & { __botLockChains?: Map<string, Promise<unknown>> };
+const chains = (holder.__botLockChains ??= new Map<string, Promise<unknown>>());
 
 export function withBotLock<T>(botId: string, fn: () => Promise<T>): Promise<T> {
   const previous = chains.get(botId) ?? Promise.resolve();

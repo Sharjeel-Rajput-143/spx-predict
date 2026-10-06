@@ -1,6 +1,7 @@
 import "server-only";
 import { ensureBotRecord, getBotLimits, getBotStaticConfig, isKnownBot } from "./bots";
 import { logDecision } from "./decisions";
+import { positionQuantity } from "./pnl";
 import { activePositionsForBot } from "./safeguards";
 import { botsStore, positionsStore } from "./store";
 import type { Position } from "./types";
@@ -19,6 +20,40 @@ export function updatePositionMeta(positionId: string, patch: { tags?: string[];
     next.notes = patch.notes.slice(0, 5000);
   }
   return positionsStore.update(positionId, next) ?? position;
+}
+
+/**
+ * Types in the result of a position that expired without a fill to price it by (the end-of-day sweep in manual
+ * mode, a sweep with no price to estimate from, or a position left over from an earlier day). It can replace an
+ * estimate too. The number has to be possible for the trade: no more than the credit kept, no worse than the
+ * most it could lose. Callers hold the bot's lock (see the route).
+ */
+export function enterPositionPL(positionId: string, pl: unknown, now: number = Date.now()): Position {
+  const position = positionsStore.get(positionId);
+  if (!position) throw new Error("Position not found.");
+  if (position.status !== "expired") throw new Error(`Only an expired position takes a P/L by hand (this one is ${position.status}).`);
+  if (typeof pl !== "number" || !Number.isFinite(pl)) throw new Error("The P/L must be a number of dollars, e.g. 125 or -310.");
+
+  const quantity = positionQuantity(position);
+  const credit = position.credit;
+  if (credit != null) {
+    const best = credit * 100 * quantity;
+    const worst = -((Math.abs(position.shortStrike - position.longStrike) - credit) * 100 * quantity);
+    if (pl > best + 0.005 || pl < worst - 0.005) {
+      throw new Error(`That can't be this trade's result: it ranges from ${worst.toFixed(2)} (worst) to +${best.toFixed(2)} (best).`);
+    }
+  }
+  const rounded = Math.round(pl * 100) / 100;
+  const updated = positionsStore.update(positionId, { settlement: { kind: "manual", pl: rounded, at: now } }) ?? position;
+  logDecision({
+    signalId: null,
+    botId: position.botId,
+    outcome: "eod_sweep",
+    reason: `P/L of ${rounded < 0 ? "-" : "+"}$${Math.abs(rounded).toFixed(2)} entered by hand for ${position.underlying} ${position.shortStrike}/${position.longStrike}.`,
+    detail: { positionId, pl: rounded, manual: true },
+    now,
+  });
+  return updated;
 }
 
 const botName = (id: string) => {

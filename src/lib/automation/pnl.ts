@@ -11,8 +11,17 @@ export function positionQuantity(p: Position): number {
 }
 
 export function positionPL(p: Position): number | null {
+  // An expired position has no fill to price it by; its result is what the end-of-day sweep
+  // estimated from the underlying, or what a person typed in - and says so (positionPLKind).
+  if (p.status === "expired") return p.settlement?.pl ?? null;
   if (p.status !== "closed" || p.closePrice == null || p.credit == null) return null;
   return (p.credit - p.closePrice) * 100 * positionQuantity(p);
+}
+
+/** Where a P/L came from: a close order's fill, an estimate from the underlying's price, or a person. */
+export function positionPLKind(p: Position): "fill" | "estimated" | "manual" | null {
+  if (positionPL(p) === null) return null;
+  return p.status === "expired" ? (p.settlement?.kind ?? null) : "fill";
 }
 
 /** Capital at risk on one position: (width - credit) x 100 x quantity. */
@@ -30,8 +39,10 @@ export function positionPremium(p: Position, fallbackCredit?: number): number | 
 export interface PositionStats {
   /** Positions that are no longer active (closed, expired, rejected excluded). */
   finished: number;
-  /** Closed positions with a known P/L. */
+  /** Positions (closed or expired) with a known P/L. */
   priced: number;
+  /** Of those, how many were estimated or typed in rather than filled. */
+  settledWithoutFill: number;
   closedPL: number | null;
   wins: number;
   losses: number;
@@ -57,6 +68,7 @@ export function computeStats(positions: Position[]): PositionStats {
     return {
       finished,
       priced: 0,
+      settledWithoutFill: 0,
       closedPL: null,
       wins: 0,
       losses: 0,
@@ -100,6 +112,7 @@ export function computeStats(positions: Position[]): PositionStats {
   return {
     finished,
     priced: priced.length,
+    settledWithoutFill: priced.filter((x) => positionPLKind(x.p) !== "fill").length,
     closedPL: total,
     wins: wins.length,
     losses: losses.length,
