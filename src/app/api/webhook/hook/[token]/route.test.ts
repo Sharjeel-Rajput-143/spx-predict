@@ -145,6 +145,17 @@ describe("calling a webhook", () => {
   });
 });
 
+describe("a host that can't keep records", () => {
+  it("answers 503 with the reason, not a 500", async () => {
+    const store = await import("@/lib/automation/store");
+    const spy = vi.spyOn(store, "storageProblem").mockReturnValue("This host can't write the bots' records");
+    const res = await call("0".repeat(48), '{"price":21003.7}');
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/can't write/);
+    spy.mockRestore();
+  });
+});
+
 describe("parsing the message", () => {
   it.each([
     ['{"price":21003.7,"bar_time":"t","interval":"5"}', { price: 21_003.7, barTime: "t", interval: "5" }],

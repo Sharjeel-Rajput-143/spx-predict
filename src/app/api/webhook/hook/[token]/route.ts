@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
-import { signalsStore, webhooksStore } from "@/lib/automation/store";
+import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
 import { getLastTick } from "@/lib/marketData/tickStore";
@@ -12,6 +12,10 @@ const MAX_QUOTE_AGE_MS = 5 * 60_000;
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself, so the alert message
  * only needs to carry the price (or nothing, when there is a fresh live quote for the bot's underlying). */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+  // A host that can't keep records can't run the engine: say so before touching any of them.
+  const storage = storageProblem();
+  if (storage) return NextResponse.json({ error: storage }, { status: 503 });
+
   const { token } = await params;
   const hook = findWebhookByToken(token);
   // Unknown or switched-off URLs look exactly the same from outside.
