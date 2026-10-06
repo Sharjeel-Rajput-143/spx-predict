@@ -121,6 +121,13 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
       .finally(() => setPending(false));
   };
 
+  const kill = () => {
+    setPending(true);
+    fetch(`/api/automation/bots/${botId}/kill`, { method: "POST" })
+      .then(load)
+      .finally(() => setPending(false));
+  };
+
   const post = async (path: string, body?: unknown) => {
     const res = await fetch(`/api/automation/bots/${botId}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { ok: res.ok, json: await res.json().catch(() => ({})) };
@@ -217,6 +224,9 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           </HeaderBox>
           <HeaderBox label="Automations">
             <OnOffSwitch on={bot.enabled} onChange={toggle} disabled={pending} label="Bot on/off" />
+          </HeaderBox>
+          <HeaderBox label="Kill switch">
+            <OnOffSwitch on={bot.killSwitch} onChange={kill} disabled={pending} label="Kill switch (blocks every webhook run, closes included)" />
           </HeaderBox>
           <div className="flex items-center pl-4">
             <Dropdown

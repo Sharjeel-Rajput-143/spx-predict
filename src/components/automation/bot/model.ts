@@ -9,6 +9,7 @@ export interface BotDetailData {
     name: string;
     builtIn: boolean;
     enabled: boolean;
+    killSwitch: boolean;
     archived: boolean;
     needsAttention: boolean;
     needsAttentionReason: string | null;
@@ -63,6 +64,8 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   closed: { label: "Closed position", tone: "ok" },
   dry_run: { label: "Dry run", tone: "skip" },
   automations_off: { label: "Bot off", tone: "skip" },
+  kill_switch: { label: "Kill switch", tone: "warn" },
+  bot_off_close_only: { label: "Bot off, close only", tone: "skip" },
   outside_hours: { label: "Outside hours", tone: "skip" },
   duplicate_signal: { label: "Duplicate", tone: "skip" },
   already_in_position: { label: "Already in position", tone: "skip" },

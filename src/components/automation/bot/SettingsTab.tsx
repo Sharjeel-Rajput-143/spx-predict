@@ -18,7 +18,8 @@ import { Checkbox, Drawer, Dropdown, Field, InfoTip, KeyValue, MenuItem, Pill, S
 import { num, usd, usd2, type BotDetailData } from "./model";
 
 const FLOW: { step: string; detail: string; stop?: string }[] = [
-  { step: "Bot switched on?", detail: "The on/off switch is the kill switch.", stop: "Bot off" },
+  { step: "Kill switch off?", detail: "The kill switch stops every webhook run completely, closes included. The end-of-day sweep and Close position are never blocked by it.", stop: "Kill switch" },
+  { step: "Bot switched on?", detail: "With the bot off, a webhook may still close the opposite position (Option Alpha's \"Always On\", copied only for closes) and may never open one.", stop: "Bot off: close only" },
   { step: "Signal's trigger switched on?", detail: "Each direction can be turned off on its own under Triggers.", stop: "Trigger off" },
   { step: "Inside trading hours?", detail: "Weekdays only, within the window below, following the NYSE holiday and early-close calendar.", stop: "Outside hours" },
   { step: "Already handled?", detail: "Same signal for the same bar, or an identical one within the dedupe window.", stop: "Duplicate" },

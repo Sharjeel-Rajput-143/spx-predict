@@ -10,6 +10,7 @@ export interface StatusBot {
   name: string;
   underlying: string | null;
   enabled: boolean;
+  killSwitch?: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
   configError: string | null;
@@ -298,6 +299,7 @@ function BotCard({
   busy,
   result,
   onToggle,
+  onKill,
   onSend,
 }: {
   bot: StatusBot;
@@ -305,6 +307,8 @@ function BotCard({
   busy: boolean;
   result: string | null;
   onToggle: (id: string) => void;
+  /** The kill switch: stops every webhook run for the bot, closes included. */
+  onKill?: (id: string) => void;
   onSend: (bot: StatusBot, signal: "bullish" | "bearish", price: number) => void;
 }) {
   const [price, setPrice] = useState<string>(bot.suggestedPrice != null ? String(bot.suggestedPrice) : "");
@@ -340,6 +344,27 @@ function BotCard({
           {bot.enabled ? "On" : "Off"} — click to {bot.enabled ? "turn off" : "turn on"}
         </button>
       </div>
+
+      {!bot.enabled && !bot.killSwitch && (
+        <p className="rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
+          Bot off: a webhook can still <span className="font-medium text-fg">close</span> the opposite position, but never opens one.
+        </p>
+      )}
+      {onKill && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line px-3 py-2 text-xs">
+          <span className={bot.killSwitch ? "font-semibold text-down" : "text-muted"}>
+            {bot.killSwitch ? "Kill switch ON: every webhook run is blocked, closes included." : "Kill switch off. Turn it on to block every webhook run, closes included."}
+          </span>
+          <button
+            onClick={() => onKill(bot.id)}
+            disabled={busy}
+            aria-label={`Kill switch ${bot.killSwitch ? "on" : "off"}`}
+            className={cn("rounded-lg px-3 py-1.5 font-medium transition-colors", bot.killSwitch ? "bg-down text-white" : "border border-down/40 text-down")}
+          >
+            {bot.killSwitch ? "Turn kill switch off" : "Kill switch"}
+          </button>
+        </div>
+      )}
 
       {bot.configError && (
         <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
@@ -426,6 +451,7 @@ export function StatusView({
   busyBot,
   results,
   onToggle,
+  onKill,
   onSend,
   onReset,
   reconcile,
@@ -435,6 +461,7 @@ export function StatusView({
   busyBot: string | null;
   results: Record<string, string>;
   onToggle: (id: string) => void;
+  onKill?: (id: string) => void;
   onSend: (bot: StatusBot, signal: "bullish" | "bearish", price: number) => void;
   onReset: () => void;
   /** Shown only with a broker executor: compare our open positions with what the broker holds. */
@@ -511,7 +538,7 @@ export function StatusView({
 
       <div className="grid gap-3 md:grid-cols-2">
         {data.bots.map((bot) => (
-          <BotCard key={bot.id} bot={bot} executor={data.executor} busy={busyBot === bot.id} result={results[bot.id] ?? null} onToggle={onToggle} onSend={onSend} />
+          <BotCard key={bot.id} bot={bot} executor={data.executor} busy={busyBot === bot.id} result={results[bot.id] ?? null} onToggle={onToggle} onKill={onKill} onSend={onSend} />
         ))}
       </div>
 
@@ -664,6 +691,19 @@ export function StatusDashboard() {
       .finally(() => setBusyBot(null));
   };
 
+  const killBot = (botId: string) => {
+    setBusyBot(botId);
+    fetch(`/api/automation/bots/${botId}/kill`, { method: "POST" })
+      .then(async (r) => {
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setResults((x) => ({ ...x, [botId]: j.error ?? "Couldn't change the kill switch." }));
+        }
+      })
+      .then(load)
+      .finally(() => setBusyBot(null));
+  };
+
   const sendAlert = (bot: StatusBot, signal: "bullish" | "bearish", price: number) => {
     setBusyBot(bot.id);
     setResults((x) => ({ ...x, [bot.id]: "Sending…" }));
@@ -713,5 +753,5 @@ export function StatusDashboard() {
 
   if (error) return <Card className="p-4 text-sm text-down">{error}</Card>;
   if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
-  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onSend={sendAlert} onReset={reset} reconcile={{ report, busy: reconcileBusy, error: reconcileError, onRun: runReconcile }} onEnterPL={enterPL} />;
+  return <StatusView data={data} busyBot={busyBot} results={results} onToggle={toggleBot} onKill={killBot} onSend={sendAlert} onReset={reset} reconcile={{ report, busy: reconcileBusy, error: reconcileError, onRun: runReconcile }} onEnterPL={enterPL} />;
 }
