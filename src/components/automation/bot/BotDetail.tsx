@@ -26,6 +26,11 @@ export interface BotContext {
   patch: (body: Record<string, unknown>, okText?: string) => Promise<boolean>;
   navigate: (tab: Tab) => void;
   openRun: (signal?: "bullish" | "bearish") => void;
+  /** Jump to the Positions tab with this position's details open. */
+  viewPosition: (positionId: string) => void;
+  /** The position a "View position" asked for, until the Positions tab has opened it. */
+  focusPositionId: string | null;
+  clearFocusPosition: () => void;
 }
 
 export function BotDetail({ botId, initialTab }: { botId: string; initialTab: string | undefined }) {
@@ -38,6 +43,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
   const [run, setRun] = useState<{ signal?: "bullish" | "bearish" } | null>(null);
   const [prompt, setPrompt] = useState<null | "account" | "group" | "template">(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [focusPositionId, setFocusPositionId] = useState<string | null>(null);
   const seen = useRef<Set<string> | null>(null);
   const toastId = useRef(0);
 
@@ -124,7 +130,20 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
   if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
 
   const { bot } = data;
-  const ctx: BotContext = { data, reload: load, notify, patch, navigate, openRun: (signal) => setRun({ signal }) };
+  const ctx: BotContext = {
+    data,
+    reload: load,
+    notify,
+    patch,
+    navigate,
+    openRun: (signal) => setRun({ signal }),
+    viewPosition: (id) => {
+      setFocusPositionId(id);
+      navigate("positions");
+    },
+    focusPositionId,
+    clearFocusPosition: () => setFocusPositionId(null),
+  };
   const tabLabel = (t: Tab) =>
     t === "positions" && data.counts.activePositions > 0 ? (
       <>
@@ -409,3 +428,4 @@ function BotSwitcher({ current }: { current: BotDetailData["bot"] }) {
     </Dropdown>
   );
 }
+

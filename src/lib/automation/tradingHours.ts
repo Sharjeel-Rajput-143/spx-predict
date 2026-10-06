@@ -58,3 +58,30 @@ export function easternDateKey(ms: number, timezone: string = TRADING_HOURS.time
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
+
+const clock12 = (minutes: number) => {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${((h + 11) % 12) + 1}${m ? `:${String(m).padStart(2, "0")}` : ""}${h < 12 ? "am" : "pm"}`.replace(/^(\d+)(am|pm)$/, "$1:00$2");
+};
+
+/** "9:35am - 3:55pm" */
+export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" | "endMinutes"> = TRADING_HOURS): string {
+  return `${clock12(config.startMinutes)} - ${clock12(config.endMinutes)}`;
+}
+
+/** The time of day the engine saw, and - when it's outside the window - why:
+ * "Current time is 9:40am" / "Saturday 3:10pm - the market is closed on weekends". */
+export function describeTradingTime(ms: number, config: TradingHoursConfig = { ...TRADING_HOURS, ...NYSE_CALENDAR }): string {
+  const { weekday, hour, minute } = easternParts(ms, config.timezone);
+  const minutes = hour * 60 + minute;
+  const now = clock12(minutes);
+  const days: Record<string, string> = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+  if (weekday === "Sat" || weekday === "Sun") return `${days[weekday]} ${now} - the market is closed on weekends`;
+  if (config.isHoliday?.(ms)) return `${days[weekday] ?? weekday} ${now} - ${nyseCalendarDay(ms).label ?? "market holiday"}, the market is closed`;
+  const early = config.earlyCloseMinutes?.(ms);
+  if (early !== undefined && minutes > Math.min(config.endMinutes, early - (16 * 60 - config.endMinutes))) {
+    return `Current time is ${now} - early close day, the window ended ${clock12(early - (16 * 60 - config.endMinutes))}`;
+  }
+  return `Current time is ${now}`;
+}

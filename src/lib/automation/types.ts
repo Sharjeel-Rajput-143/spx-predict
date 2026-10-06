@@ -235,3 +235,46 @@ export interface BrokerExecutor {
   cancelOrder(ref: string): Promise<void>;
   listPositions(botId: string): Promise<Position[]>;
 }
+
+// --- Run trace: what the engine walked through for one signal or manual action ---
+
+/** A check the engine made, its result, and the real value it compared. */
+export interface TraceDecision {
+  kind: "decision";
+  /** The condition, in words ("Current market time is between 9:35am - 3:55pm"). */
+  text: string;
+  result: boolean;
+  /** The measured value behind the result ("Current time is 9:40am", "0 positions"). */
+  measured: string;
+}
+
+/** An order the run placed, with the parameters it was placed with. */
+export interface TraceAction {
+  kind: "action";
+  action: "open" | "close";
+  title: string;
+  /** The position it acted on; null when none was created (e.g. a dry run). */
+  positionId: string | null;
+  /** "SPX Short Call Spread Oct 2 / -7,720 call, +7,725 call" */
+  summary: string;
+  /** A frozen snapshot of the settings the order used. */
+  params: { label: string; value: string }[];
+  outcome: DecisionOutcome;
+  reason: string;
+}
+
+export type TraceNode = TraceDecision | TraceAction;
+
+export interface Run {
+  /** The signal's id for a signal run; a generated id for a manual action. */
+  id: string;
+  botId: string;
+  signalId: string | null;
+  source: "webhook" | "manual" | "ui";
+  /** Which automation ran: "Bullish signal", "Bearish signal", "Manual open"... */
+  automation: string;
+  /** What set it off: "Webhook", "Manual run", "Manual action". */
+  trigger: string;
+  startedAt: number;
+  nodes: TraceNode[];
+}

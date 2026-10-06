@@ -14,7 +14,7 @@ import { computeStats } from "@/lib/automation/pnl";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk } from "@/lib/automation/safeguards";
 import { MOCK_PRICING_SIMULATED } from "@/lib/automation/sharedExecutor";
-import { botsStore, decisionsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
+import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
 import { DEFAULT_ALERTS, type BotStaticConfig } from "@/lib/automation/types";
 
 const LOG_LIMIT = 300;
@@ -120,6 +120,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     orders: ordersStore.query((o) => positionIds.has(o.positionId)),
     signals: signalsStore.query((s) => s.botId === id).slice(-LOG_LIMIT).reverse(),
     decisions: decisionsStore.query((d) => d.botId === id).slice(-LOG_LIMIT * 3).reverse(),
+    runs: runsStore.query((r) => r.botId === id).slice(-LOG_LIMIT * 2).reverse(),
   });
 }
 

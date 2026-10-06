@@ -25,6 +25,15 @@ Things that look like bugs but are deliberate for now. Each says why, and what w
 - **Override is disabled.** There is no way to override a position's status in Phase 1.
 - **Move** reassigns an *open* position to another bot on the *same account* that is set up, not archived, and has room under its limits. It moves the position's counts too (the target's "opened today" goes up). Both bots get a "Position moved" decision.
 
+## Automation log (the run replay)
+
+- **Only runs from now on have a trace.** The engine now records, for every signal and manual action, the checks it walked through (each with its Yes/No and the real value it compared) and the orders it placed (with the exact legs and a frozen copy of their settings). Entries from before that was added only have their outcome, and the log says so.
+- **The checks are the engine's own, not Option Alpha's.** A flip reads: bot on, (trigger on), market hours, not a duplicate, opposite side held?, no close in flight, **Close card**, room for the wanted side, position / daily / allocation limits, strikes valid, no leg overlap, **Open card**. A run that stops early shows only the checks it reached.
+- **The "as sent" tooltip lists what the engine actually sends** - for a close that's the quantity and confirm timeout (a close order carries no limit price); for an open it's the limit credit, quantity, expiry, how each strike was derived, and the fill timeout. There is no Memo or Tags field because the engine's orders don't have them.
+- **View position** opens the position's details if it still exists; it's disabled once a bot's history has been deleted.
+- **A crash mid-run is logged too.** An unexpected error leaves an "Unexpected error" decision row and a trace of the steps reached, then still surfaces to the caller.
+- **Clear Log hides, it doesn't delete** - traces stay in the export store and in the engine's duplicate protection.
+
 ## Not built (Phase 1 has nothing behind them)
 
 - **Exit Options** (profit target / stop loss on a position) - needs live option prices.

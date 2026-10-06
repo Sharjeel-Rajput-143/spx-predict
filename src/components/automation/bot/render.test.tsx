@@ -109,6 +109,7 @@ function fixture(over: Partial<BotDetailData> = {}): BotDetailData {
       signal({ id: "sig-1" }),
       signal({ id: "sig-2", signal: "bearish", receivedAt: NOW - 1_000_000, status: "rejected", rejectReason: "bad_secret" } as Partial<Signal> & { id: string }),
     ],
+    runs: [],
     decisions: [
       decision({ id: "d1", signalId: "sig-1", outcome: "opened", detail: { positionId: "pos-closed" } }),
       decision({ id: "d2", signalId: "sig-1", outcome: "closed" }),
@@ -119,7 +120,7 @@ function fixture(over: Partial<BotDetailData> = {}): BotDetailData {
 }
 
 function ctxFor(data: BotDetailData): BotContext {
-  return { data, reload: vi.fn(), notify: vi.fn(), patch: vi.fn(async () => true), navigate: vi.fn(), openRun: vi.fn() };
+  return { data, reload: vi.fn(), notify: vi.fn(), patch: vi.fn(async () => true), navigate: vi.fn(), openRun: vi.fn(), viewPosition: vi.fn(), focusPositionId: null, clearFocusPosition: vi.fn() };
 }
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);

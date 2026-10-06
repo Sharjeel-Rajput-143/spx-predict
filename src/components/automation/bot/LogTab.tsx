@@ -4,9 +4,10 @@ import { useMemo, useState } from "react";
 import { IconInfo, IconSearch } from "@/components/icons";
 import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
-import type { Decision, Signal } from "@/lib/automation/types";
+import type { Decision, Run, Signal } from "@/lib/automation/types";
 import type { BotContext } from "./BotDetail";
 import { DirectionTag, Drawer, KeyValue, Modal, Pill, buttonClass } from "./primitives";
+import { RunTrace } from "./RunTrace";
 import { etDateTime, etDayKey, etTime, groupByDay, num, outcomeInfo, type Tone } from "./model";
 
 type DateFilter = "all" | "today" | "yesterday" | "7d";
@@ -21,6 +22,8 @@ interface Entry {
   signal: Signal | null;
   /** In the order the engine logged them (oldest first). */
   decisions: Decision[];
+  /** The step-by-step record, when the engine kept one (entries from before that don't have it). */
+  run?: Run;
 }
 
 const PROCESSING_WINDOW_MS = 3 * 60_000;
@@ -66,10 +69,11 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       if (!d.signalId) orphans.push(d);
       else byDecision.set(d.signalId, [...(byDecision.get(d.signalId) ?? []), d]);
     }
-    const fromSignals: Entry[] = data.signals.map((s) => ({ key: s.id, at: s.receivedAt, signal: s, decisions: byDecision.get(s.id) ?? [] }));
-    const fromOrphans: Entry[] = orphans.map((d) => ({ key: d.id, at: d.createdAt, signal: null, decisions: [d] }));
+    const runById = new Map(data.runs.map((r) => [r.id, r]));
+    const fromSignals: Entry[] = data.signals.map((s) => ({ key: s.id, at: s.receivedAt, signal: s, decisions: byDecision.get(s.id) ?? [], run: runById.get(s.id) }));
+    const fromOrphans: Entry[] = orphans.map((d) => ({ key: d.id, at: d.createdAt, signal: null, decisions: [d], run: runById.get(String(d.detail?.runId ?? "")) }));
     return [...fromSignals, ...fromOrphans].filter((e) => e.at > cleared).sort((a, b) => b.at - a.at);
-  }, [data.signals, data.decisions, cleared]);
+  }, [data.signals, data.decisions, data.runs, cleared]);
 
   const visible = useMemo(() => {
     const today = etDayKey(data.now);
@@ -150,7 +154,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       </div>
 
       <Card className="overflow-hidden">
-        <div className="grid grid-cols-[110px_220px_1fr] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+        <div className="grid grid-cols-[110px_270px_1fr] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-faint">
           <span>Time</span>
           <span>Automation</span>
           <span>Info</span>
@@ -172,7 +176,23 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       </Card>
       <p className="text-xs text-faint">Times in New York · newest first</p>
 
-      {selectedEntry && <TraceDrawer entry={selectedEntry} onClose={() => setSelected(null)} />}
+      {selectedEntry?.run ? (
+        <RunTrace
+          run={selectedEntry.run}
+          positionExists={(id) => data.positions.some((p) => p.id === id)}
+          onViewPosition={(id) => {
+            setSelected(null);
+            ctx.viewPosition(id);
+          }}
+          onAutomation={() => {
+            setSelected(null);
+            navigate("settings");
+          }}
+          onClose={() => setSelected(null)}
+        />
+      ) : (
+        selectedEntry && <TraceDrawer entry={selectedEntry} onClose={() => setSelected(null)} />
+      )}
       {confirmClear && (
         <Modal
           title="Clear the log?"
@@ -207,7 +227,7 @@ function LogRow({ entry, now, onOpen, onAutomation }: { entry: Entry; now: numbe
   const processing = signal?.status === "accepted" && decisions.length === 0 && now - entry.at < PROCESSING_WINDOW_MS;
 
   return (
-    <div className="grid cursor-pointer grid-cols-[110px_220px_1fr] items-center gap-x-4 gap-y-1.5 border-b border-line px-4 py-3 last:border-b-0 hover:bg-surface-2/60" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+    <div className="grid cursor-pointer grid-cols-[110px_270px_1fr] items-center gap-x-4 gap-y-1.5 border-b border-line px-4 py-3 last:border-b-0 hover:bg-surface-2/60" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
       <span className="tabular text-sm text-muted">{etTime(entry.at)}</span>
       <span className="flex items-center gap-2 text-sm">
         <button
@@ -291,6 +311,7 @@ function TraceDrawer({ entry, onClose }: { entry: Entry; onClose: () => void }) 
           )}
           <TraceNode tone="skip" title="End" />
         </ol>
+        <p className="rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">This entry was recorded before the engine kept a step-by-step trace, so only its outcome is shown.</p>
       </div>
     </Drawer>
   );

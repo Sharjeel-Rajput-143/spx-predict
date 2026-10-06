@@ -57,6 +57,9 @@ export interface PositionsViewProps {
   notify: (tone: ToastItem["tone"], text: string) => void;
   /** Called by "Analyze results" (e.g. to scroll/focus). Optional. */
   initialClosedOpen?: boolean;
+  /** Open this position's details as soon as it's in the list ("View position"). */
+  focusPositionId?: string | null;
+  onFocusHandled?: () => void;
 }
 
 export function PositionsTab({ ctx }: { ctx: BotContext }) {
@@ -72,6 +75,8 @@ export function PositionsTab({ ctx }: { ctx: BotContext }) {
       newPosition={data.config ? { botId: data.bot.id, config: data.config } : undefined}
       onChanged={ctx.reload}
       notify={ctx.notify}
+      focusPositionId={ctx.focusPositionId}
+      onFocusHandled={ctx.clearFocusPosition}
     />
   );
 }
@@ -107,6 +112,14 @@ export function PositionsView(props: PositionsViewProps) {
   const [showTags, setShowTags] = useState(false);
   const [status, setStatus] = useState<"all" | "closed" | "expired" | "rejected">("all");
   const last = useSpxLast();
+
+  // "View position" from the Log: open that position once it's here.
+  useEffect(() => {
+    if (!props.focusPositionId) return;
+    const target = positions.find((p) => p.id === props.focusPositionId);
+    if (target) setSelected(target);
+    props.onFocusHandled?.();
+  }, [props.focusPositionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = positions.filter((p) => ACTIVE_POSITION_STATUSES.includes(p.status));
   const closed = positions.filter((p) => !ACTIVE_POSITION_STATUSES.includes(p.status)).filter((p) => status === "all" || p.status === status);

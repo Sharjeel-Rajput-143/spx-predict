@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
-import { ensureBotRecord, getBotLimits, getBotStaticConfig, listBotIds } from "./bots";
+import { botAccountId, ensureBotRecord, getBotLimits, getBotStaticConfig, listBotIds } from "./bots";
 import {
   DEDUPE_WINDOW_SECONDS,
   ORDER_POLL_INTERVAL_MS,
@@ -23,7 +23,8 @@ import {
 } from "./safeguards";
 import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
 import { computeStrikes, maxRisk, validateStrikes, type StrikePair } from "./strikes";
-import { easternDateKey, isWithinTradingHours } from "./tradingHours";
+import { RunRecorder, describeLegs, typeName } from "./runTrace";
+import { describeTradingTime, describeWindow, easternDateKey, isWithinTradingHours } from "./tradingHours";
 import type { BotStaticConfig, BrokerExecutor, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
 
 export interface ReceiveSignalInput {
@@ -187,7 +188,43 @@ async function closePosition(
  * invoked through withBotLock so two signals for the same bot never run at
  * once. Takes an already-persisted signal row (see receiveAndSaveSignal).
  */
+const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
+
+/** The settings a close order is sent with - a snapshot for the run log. */
+function closeParamsFor(p: Position, timeoutMs: number): { label: string; value: string }[] {
+  const qty = p.filledQuantity || p.requestedQuantity;
+  return [
+    { label: "Price", value: "Close order with no limit price set" },
+    { label: "Quantity", value: `${qty} contract${qty === 1 ? "" : "s"} (100% of position)` },
+    { label: "Confirm timeout", value: `${Math.round(timeoutMs / 1000)}s` },
+  ];
+}
+
 export async function processSignal(signal: Signal, options: ProcessSignalOptions): Promise<void> {
+  const manual = (signal.raw as { source?: string } | null)?.source === "manual";
+  const rec = new RunRecorder({
+    id: signal.id,
+    botId: signal.botId,
+    signalId: signal.id,
+    source: manual ? "manual" : "webhook",
+    automation: `${signal.signal === "bullish" ? "Bullish" : signal.signal === "bearish" ? "Bearish" : "Unknown"} signal`,
+    trigger: manual ? "Manual run" : "Webhook",
+    startedAt: options.now ?? Date.now(),
+  });
+  try {
+    await runSignal(signal, options, rec);
+  } catch (err) {
+    // An unexpected crash must still leave a decision row (every run writes one), then surface as before.
+    const reason = `Unexpected error: ${errorMessage(err)}`;
+    rec.decision("Run finished without an unexpected error", false, errorMessage(err));
+    logDecision({ signalId: signal.id, botId: signal.botId, outcome: "executor_error", reason, detail: { unexpected: true }, now: options.now ?? Date.now() });
+    throw err;
+  } finally {
+    rec.save(); // even a run that threw keeps the steps it got through
+  }
+}
+
+async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: RunRecorder): Promise<void> {
   const now = options.now ?? Date.now();
   const closeTimeoutMs = options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000;
   const openTimeoutMs = options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000;
@@ -206,6 +243,7 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
   } catch (err) {
     ensureBotRecord(botId);
     botsStore.update(botId, { needsAttention: true, needsAttentionReason: errorMessage(err) });
+    rec.decision("Bot has its required trading inputs", false, errorMessage(err));
     log("config_error", errorMessage(err));
     return;
   }
@@ -215,25 +253,33 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
 
   // Step 1: kill switch.
   const bot = ensureBotRecord(botId);
+  rec.decision("Bot is switched on", bot.enabled, bot.enabled ? "Bot is on" : "Bot is off");
   if (!bot.enabled) {
     log("automations_off", "Bot is switched off.");
     return;
   }
 
   // Each direction can be switched off on its own (Settings > Triggers).
-  if (bot.triggers && bot.triggers[signal.signal as SignalDirection] === false) {
-    log("trigger_disabled", `The ${signal.signal} trigger is switched off for this bot.`);
-    return;
+  if (bot.triggers) {
+    const on = bot.triggers[signal.signal as SignalDirection] !== false;
+    rec.decision(`The ${signal.signal} trigger is switched on`, on, on ? "Trigger is on" : "Trigger is off");
+    if (!on) {
+      log("trigger_disabled", `The ${signal.signal} trigger is switched off for this bot.`);
+      return;
+    }
   }
 
   // Step 2: hours guard.
-  if (!isWithinTradingHours(now)) {
+  const inHours = isWithinTradingHours(now);
+  rec.decision(`Current market time is between ${describeWindow()}`, inHours, describeTradingTime(now));
+  if (!inHours) {
     log("outside_hours", "Outside the configured trading window.");
     return;
   }
 
   // Step 3: dedupe.
   const duplicate = findDuplicateSignal(signal);
+  rec.decision("Signal isn't a duplicate", !duplicate, duplicate ? duplicate.reason : `No identical signal in the last ${DEDUPE_WINDOW_SECONDS}s, and none for this bar_time`);
   if (duplicate) {
     log("duplicate_signal", duplicate.reason, { matchedSignalId: duplicate.signalId });
     return;
@@ -252,6 +298,7 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
   const cooldownSeconds = getFlipCooldownSeconds();
   if (cooldownSeconds > 0) {
     const held = opposingPositions.find((p) => p.openedAt != null && now - p.openedAt < cooldownSeconds * 1000);
+    rec.decision(`Position has been held at least ${cooldownSeconds}s`, !held, held ? `Held ${Math.round((now - (held.openedAt ?? now)) / 1000)}s` : "No position inside the cooldown");
     if (held) {
       log("cooldown_active", `Position held under ${cooldownSeconds}s; flip ignored.`, { positionId: held.id });
       return;
@@ -263,27 +310,38 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
   if (!getBotLimits(botId).dayTradingAllowed) {
     const today = easternDateKey(now);
     const sameDay = opposingPositions.find((p) => p.openedAt != null && easternDateKey(p.openedAt) === today);
+    rec.decision("Day trading is allowed", !sameDay, sameDay ? "The position was opened today" : "No position opened today");
     if (sameDay) {
       log("day_trading_blocked", "Day trading is not allowed for this bot, so a position opened today isn't closed. It is held to expiry.", { positionId: sameDay.id });
       return;
     }
   }
 
+  rec.decision(
+    `Bot has exactly or more than 1 position with ${typeName(opposite)} type and any status`,
+    opposingPositions.length > 0,
+    `${opposingPositions.length} position${opposingPositions.length === 1 ? "" : "s"}`,
+  );
+
   for (const position of opposingPositions) {
     const inFlight = ordersStore.query(
       (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
     );
+    rec.decision("No close order is already in flight for it", inFlight.length === 0, inFlight.length === 0 ? "No working close order" : `${inFlight.length} working close order`);
     if (inFlight.length > 0) {
       log("close_in_flight", "A close order for this position is already in flight; nothing sent.", { positionId: position.id });
       continue;
     }
 
+    const closeParams = closeParamsFor(position, closeTimeoutMs);
     if (dryRun) {
+      rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: nothing sent." });
       log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id });
       continue;
     }
 
     const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now);
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParams, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
@@ -295,6 +353,7 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
 
   // Stage B: open the wanted side - re-read fresh right before acting.
   await openStage({
+    rec,
     botId,
     staticConfig,
     wanted,
@@ -310,6 +369,7 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
 }
 
 interface OpenStageContext {
+  rec?: RunRecorder;
   botId: string;
   staticConfig: BotStaticConfig;
   wanted: PositionType;
@@ -339,28 +399,79 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   const limits = getBotLimits(botId);
   const bot = ensureBotRecord(botId);
 
+  const rec = ctx.rec;
+  let created: Position | null = null;
+  let actionRecorded = false;
+  const side = wanted === "short_put_spread" ? "put" : "call";
+
+  /** Records the open as an action card, once, when the run reaches its end. */
+  const recordOpenAction = (outcome: DecisionOutcome, reason: string, strikes?: StrikePair) => {
+    if (!rec || actionRecorded) return;
+    actionRecorded = true;
+    const position = created ? (positionsStore.get(created.id) ?? created) : null;
+    const k = strikes ?? (position ? { shortStrike: position.shortStrike, longStrike: position.longStrike } : null);
+    if (!k) return;
+    const offset = wanted === "short_put_spread" ? staticConfig.putShortOffset : staticConfig.callShortOffset;
+    rec.action({
+      action: "open",
+      title: `Open ${staticConfig.underlying} ${typeName(wanted)}`,
+      position,
+      summary: position ? undefined : describeLegs({ underlying: staticConfig.underlying, type: wanted, expiry: easternDateKey(now), shortStrike: k.shortStrike, longStrike: k.longStrike }),
+      params: [
+        { label: "Price", value: `Limit credit $${staticConfig.openingCreditEstimate.toFixed(2)}` },
+        { label: "Quantity", value: `${staticConfig.quantity} contract${staticConfig.quantity === 1 ? "" : "s"}` },
+        { label: "Expiration", value: `${easternDateKey(now)} (same day)` },
+        {
+          label: `Short ${side}`,
+          value: ctx.manual || ctx.price == null ? `${k.shortStrike} (entered by hand)` : `${k.shortStrike} (${ctx.price} ${offset < 0 ? "-" : "+"} ${Math.abs(offset)}, rounded to ${staticConfig.strikeIncrement})`,
+        },
+        { label: `Long ${side}`, value: `${k.longStrike} (${staticConfig.widthPoints} points ${side === "put" ? "below" : "above"} the short ${side})` },
+        { label: "Fill timeout", value: `${Math.round(ctx.openTimeoutMs / 1000)}s` },
+      ],
+      outcome,
+      reason,
+    });
+  };
+
   const finish = (outcome: DecisionOutcome, reason: string, detail: Record<string, unknown> = {}): StageResult => {
-    logDecision({ signalId: signal?.id ?? null, botId, outcome, reason, detail: { ...detail, ...(ctx.manual ? { manual: true } : {}) }, now });
+    // Any run that ended after the position was created (filled, rejected, timed out, errored) gets its action card.
+    if (created) recordOpenAction(outcome, reason);
+    logDecision({
+      signalId: signal?.id ?? null,
+      botId,
+      outcome,
+      reason,
+      detail: { ...detail, ...(ctx.manual ? { manual: true } : {}), ...(rec && !signal ? { runId: rec.id } : {}) },
+      now,
+    });
     return { ok: outcome === "opened" || outcome === "dry_run", outcome, reason };
   };
 
   const existingWanted = activePositionsForBot(botId, wanted);
+  rec?.decision(
+    `Bot holds fewer than ${limits.maxPositionsPerType} ${typeName(wanted)} position${limits.maxPositionsPerType === 1 ? "" : "s"}`,
+    existingWanted.length < limits.maxPositionsPerType,
+    `${existingWanted.length} position${existingWanted.length === 1 ? "" : "s"}`,
+  );
   if (existingWanted.length >= limits.maxPositionsPerType) {
     return finish("already_in_position", "An active position of the wanted type already exists.");
   }
 
   const totalActive = activePositionsForBot(botId);
+  rec?.decision(`Bot has fewer than ${limits.totalPositionLimit} open position${limits.totalPositionLimit === 1 ? "" : "s"}`, totalActive.length < limits.totalPositionLimit, `${totalActive.length} open`);
   if (totalActive.length >= limits.totalPositionLimit) {
     return finish("total_position_limit_reached", "Total active position limit reached.");
   }
 
   const todayNewPositions = countTodayNewPositions(botId, now, bot.dailyResetAt);
+  rec?.decision(`Bot opened fewer than ${limits.dailyNewPositionLimit} new positions today`, todayNewPositions < limits.dailyNewPositionLimit, `${todayNewPositions} opened today`);
   if (todayNewPositions >= limits.dailyNewPositionLimit) {
     return finish("daily_limit_reached", "Daily new-position limit reached; closing stays allowed, opening does not.");
   }
 
   const strikes = ctx.strikes ?? computeStrikes(wanted, ctx.price ?? 0, staticConfig);
   const validation = validateStrikes(wanted, strikes, staticConfig);
+  rec?.decision("Strikes pass the checks (order, not equal, on the increment, the right width)", validation.ok, validation.ok ? `Short ${strikes.shortStrike}, long ${strikes.longStrike}` : `${validation.reason} (short ${strikes.shortStrike}, long ${strikes.longStrike})`);
   if (!validation.ok) {
     recordError(botId, "invalid_strikes", { strikes, reason: validation.reason }, now);
     botsStore.update(botId, { needsAttention: true, needsAttentionReason: `invalid_strikes: ${validation.reason}` });
@@ -369,6 +480,11 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
 
   const projectedRisk = maxRisk(staticConfig.widthPoints, staticConfig.quantity, staticConfig.openingCreditEstimate);
   const currentRisk = sumActiveAllocationRisk(botId, staticConfig.widthPoints, staticConfig.openingCreditEstimate);
+  rec?.decision(
+    `Opening stays within the $${staticConfig.allocationLimit.toLocaleString("en-US")} allocation`,
+    currentRisk + projectedRisk <= staticConfig.allocationLimit,
+    `$${Math.round(currentRisk).toLocaleString("en-US")} at risk + $${Math.round(projectedRisk).toLocaleString("en-US")} for this trade`,
+  );
   if (currentRisk + projectedRisk > staticConfig.allocationLimit) {
     return finish("allocation_limit_reached", "Opening this position would exceed the allocation limit.", {
       currentRisk,
@@ -385,13 +501,15 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     longStrike: strikes.longStrike,
     type: wanted,
   });
-  const accountBotIds = listBotIds().filter((id) => getBotStaticConfig(id).accountId === staticConfig.accountId);
+  const accountBotIds = listBotIds().filter((id) => botAccountId(id) === staticConfig.accountId);
   const overlap = findOverlap(newLegs, activePositionsForBots(accountBotIds));
+  rec?.decision("No leg collides with an existing position", !overlap, overlap ? `Overlaps ${describeLegs(overlap)}` : "No overlapping legs");
   if (overlap) {
     return finish("overlapping_strikes", "New legs collide with an existing active position.", { overlapPositionId: overlap.id });
   }
 
   if (ctx.dryRun) {
+    recordOpenAction("dry_run", "Dry run: nothing sent.", strikes);
     return finish("dry_run", `Dry run: would open ${wanted} at ${strikes.shortStrike}/${strikes.longStrike}.`, { strikes, wanted });
   }
 
@@ -416,6 +534,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     manual: ctx.manual,
   };
   positionsStore.insert(position);
+  created = position;
 
   // An executor exception leaves the position "opening" on purpose: the
   // order may have reached the broker, so it keeps blocking duplicate entries
@@ -509,29 +628,37 @@ export async function manualOpen(
 ): Promise<StageResult> {
   const now = options.now ?? Date.now();
   const staticConfig = getBotStaticConfig(botId);
+  const rec = new RunRecorder({ botId, signalId: null, source: "ui", automation: "Manual position", trigger: "Manual action", startedAt: now });
   const log = (outcome: DecisionOutcome, reason: string): StageResult => {
-    logDecision({ signalId: null, botId, outcome, reason, detail: { manual: true }, now });
+    logDecision({ signalId: null, botId, outcome, reason, detail: { manual: true, runId: rec.id }, now });
     return { ok: false, outcome, reason };
   };
 
-  expireStalePositions(botId, now);
-  if (!isWithinTradingHours(now)) return log("outside_hours", "Outside the configured trading window.");
+  try {
+    expireStalePositions(botId, now);
+    const inHours = isWithinTradingHours(now);
+    rec.decision(`Current market time is between ${describeWindow()}`, inHours, describeTradingTime(now));
+    if (!inHours) return log("outside_hours", "Outside the configured trading window.");
 
-  const longStrike = input.type === "short_put_spread" ? input.shortStrike - staticConfig.widthPoints : input.shortStrike + staticConfig.widthPoints;
-  return openStage({
-    botId,
-    staticConfig,
-    wanted: input.type,
-    strikes: { shortStrike: input.shortStrike, longStrike },
-    signal: null,
-    price: input.underlyingPrice ?? null,
-    executor: options.executor,
-    now,
-    dryRun: options.dryRun ?? isDryRun(),
-    openTimeoutMs: options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000,
-    pollIntervalMs: options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
-    manual: true,
-  });
+    const longStrike = input.type === "short_put_spread" ? input.shortStrike - staticConfig.widthPoints : input.shortStrike + staticConfig.widthPoints;
+    return await openStage({
+      rec,
+      botId,
+      staticConfig,
+      wanted: input.type,
+      strikes: { shortStrike: input.shortStrike, longStrike },
+      signal: null,
+      price: input.underlyingPrice ?? null,
+      executor: options.executor,
+      now,
+      dryRun: options.dryRun ?? isDryRun(),
+      openTimeoutMs: options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000,
+      pollIntervalMs: options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
+      manual: true,
+    });
+  } finally {
+    rec.save();
+  }
 }
 
 /** Closes one active position now. A failed close is handled exactly like a
@@ -541,32 +668,47 @@ export async function manualClose(positionId: string, options: ManualOptions & {
   const position = positionsStore.get(positionId);
   if (!position) throw new Error("Position not found.");
   const { botId } = position;
+  const rec = new RunRecorder({ botId, signalId: null, source: "ui", automation: "Manual close", trigger: "Manual action", startedAt: now });
   const log = (outcome: DecisionOutcome, reason: string, ok = false): StageResult => {
-    logDecision({ signalId: null, botId, outcome, reason, detail: { manual: true, positionId }, now });
+    logDecision({ signalId: null, botId, outcome, reason, detail: { manual: true, positionId, runId: rec.id }, now });
     return { ok, outcome, reason };
   };
 
   if (position.status !== "open" && position.status !== "closing") {
     throw new Error(`A position that is ${position.status} can't be closed.`);
   }
-  const inFlight = ordersStore.query(
-    (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
-  );
-  if (inFlight.length > 0) return log("close_in_flight", "A close order for this position is already in flight; nothing sent.");
-  if (options.dryRun ?? isDryRun()) return log("dry_run", `Dry run: would close ${position.type} position.`, true);
 
-  const result = await closePosition(
-    position,
-    { id: null, price: options.underlyingPrice ?? null },
-    options.executor,
-    options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000,
-    options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
-    now,
-  );
-  if (!result.ok) {
-    recordError(botId, "close_failed", { positionId, reason: result.reason }, now);
-    ensureBotRecord(botId);
-    botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
+  try {
+    rec.decision("Position is open", true, `Status is ${position.status}`);
+    const inFlight = ordersStore.query(
+      (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
+    );
+    rec.decision("No close order is already in flight for it", inFlight.length === 0, inFlight.length === 0 ? "No working close order" : `${inFlight.length} working close order`);
+    if (inFlight.length > 0) return log("close_in_flight", "A close order for this position is already in flight; nothing sent.");
+
+    const closeTimeoutMs = options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000;
+    const params = closeParamsFor(position, closeTimeoutMs);
+    if (options.dryRun ?? isDryRun()) {
+      rec.action({ action: "close", title: closeTitle(position), position, params, outcome: "dry_run", reason: "Dry run: nothing sent." });
+      return log("dry_run", `Dry run: would close ${position.type} position.`, true);
+    }
+
+    const result = await closePosition(
+      position,
+      { id: null, price: options.underlyingPrice ?? null },
+      options.executor,
+      closeTimeoutMs,
+      options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
+      now,
+    );
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params, outcome: result.outcome, reason: result.reason });
+    if (!result.ok) {
+      recordError(botId, "close_failed", { positionId, reason: result.reason }, now);
+      ensureBotRecord(botId);
+      botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
+    }
+    return log(result.outcome, result.reason, result.ok);
+  } finally {
+    rec.save();
   }
-  return log(result.outcome, result.reason, result.ok);
 }

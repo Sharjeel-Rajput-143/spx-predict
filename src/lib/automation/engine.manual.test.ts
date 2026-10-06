@@ -3,7 +3,7 @@ import { MockExecutor, simulatedCloseDebit } from "./executor";
 import { manualClose, manualOpen, processSignal, receiveAndSaveSignal } from "./engine";
 import { botsStore, decisionsStore, errorsStore, positionsStore } from "./store";
 import { BASE_NOW, TEST_BOT_ID, buildPosition, resetAutomationStores, setTestBotEnv } from "./testSupport";
-import { updateBot } from "./bots";
+import { createEmptyBot, updateBot } from "./bots";
 import type { SignalDirection } from "./types";
 
 setTestBotEnv();
@@ -165,5 +165,23 @@ describe("day trading switched off", () => {
 
   it("rejects a non-boolean setting", () => {
     expect(() => updateBot(TEST_BOT_ID, { safeguards: { dayTrading: "yes" as unknown as boolean } })).toThrow(/Day trading/);
+  });
+});
+
+describe("a bot that is still waiting for its inputs doesn't break the others", () => {
+  it("a signal, a manual open and a close still work with an empty bot on the same account", async () => {
+    // The overlap check asks every bot for its account; an empty bot used to make that throw.
+    const empty = createEmptyBot({ name: "Blank", accountId: "test-account", allocationLimit: 1000 });
+    expect(empty.draftInputs?.accountId).toBe("test-account");
+
+    await emit("bullish", { barTime: "b1" });
+    expect(outcomes()).toEqual(["opened"]);
+
+    const pos = positionsStore.all()[0];
+    const closed = await manualClose(pos.id, { executor, now: BASE_NOW, ...fast });
+    expect(closed.outcome).toBe("closed");
+
+    const manual = await manualOpen(TEST_BOT_ID, { type: "short_call_spread", shortStrike: 7740 }, { executor, now: BASE_NOW, ...fast });
+    expect(manual.outcome).toBe("opened");
   });
 });

@@ -7,6 +7,7 @@ import {
   errorsStore,
   ordersStore,
   positionsStore,
+  runsStore,
   signalsStore,
   templatesStore,
 } from "./store";
@@ -58,6 +59,17 @@ export function listBotIds(): string[] {
   const ids = new Set(Object.keys(STATIC_CONFIGS));
   for (const b of botsStore.all()) if (isUserBot(b)) ids.add(b.id);
   return [...ids];
+}
+
+/** The account a bot trades on, or null if it can't be determined. Never throws:
+ * a bot still waiting for its inputs has no complete config, and that must not
+ * stop any *other* bot from checking which bots share its account. */
+export function botAccountId(botId: string): string | null {
+  try {
+    return getBotStaticConfig(botId).accountId;
+  } catch {
+    return botsStore.get(botId)?.draftInputs?.accountId ?? null;
+  }
 }
 
 export function isKnownBot(botId: string): boolean {
@@ -378,4 +390,5 @@ export function deleteBot(botId: string): void {
   signalsStore.removeWhere((s) => s.botId === botId);
   errorsStore.removeWhere((e) => e.botId === botId);
   botsStore.remove(botId);
+  runsStore.removeWhere((r) => r.botId === botId);
 }

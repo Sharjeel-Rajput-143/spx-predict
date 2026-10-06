@@ -1,5 +1,5 @@
 import type { PositionStats } from "@/lib/automation/pnl";
-import type { BotAlerts, BotSafeguards, BotStaticConfig, Decision, Order, Position, Signal } from "@/lib/automation/types";
+import type { BotAlerts, BotSafeguards, BotStaticConfig, Decision, Order, Position, Run, Signal } from "@/lib/automation/types";
 
 /** Shape of GET /api/automation/bots/[id]. */
 export interface BotDetailData {
@@ -50,6 +50,8 @@ export interface BotDetailData {
   orders: Order[];
   signals: Signal[];
   decisions: Decision[];
+  /** Step-by-step records of each run, newest first. Older entries have none. */
+  runs: Run[];
 }
 
 export type Tone = "ok" | "skip" | "warn" | "error";

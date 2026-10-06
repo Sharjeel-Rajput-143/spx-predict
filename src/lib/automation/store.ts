@@ -1,7 +1,7 @@
 import "server-only";
 import fs from "node:fs";
 import path from "node:path";
-import type { Bot, BotTemplate, Decision, ErrorRecord, Order, Position, Signal } from "./types";
+import type { Bot, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
 
 /**
  * Tiny JSON-file-backed store, same shape as automations/store.ts's JsonStore
@@ -124,6 +124,7 @@ export const ordersStore = new JsonStore<Order>("orders");
 export const decisionsStore = new JsonStore<Decision>("decisions");
 export const errorsStore = new JsonStore<ErrorRecord>("errors");
 export const templatesStore = new JsonStore<BotTemplate>("templates");
+export const runsStore = new JsonStore<Run>("runs");
 
 export function __resetAllStores(): void {
   botsStore.__reset();
@@ -133,4 +134,5 @@ export function __resetAllStores(): void {
   decisionsStore.__reset();
   errorsStore.__reset();
   templatesStore.__reset();
+  runsStore.__reset();
 }
