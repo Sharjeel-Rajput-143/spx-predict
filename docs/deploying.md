@@ -29,3 +29,7 @@ For real trading that matters: a signal could be accepted and never acted on, or
 **Not recommended for money: make it serverless-compatible.** It would need an external database for the records, locks that work across instances, background work that survives the response (and a long enough function time limit), and a re-think of the timers. That is a rewrite of the storage and execution layers, with real risk.
 
 The status page shows a red "This server can't run the engine" banner whenever it is opened on a host that can't write its records.
+
+## Looking at the UI on Vercel without a password (demo only)
+
+In the Vercel project's environment variables set `AUTOMATION_AUTH_DISABLED=true` and `AUTOMATION_DATA_DIR=/tmp/automation`, then redeploy. The sign-in box disappears and every page opens, with a yellow "Sign-in is switched off" warning at the top. Anyone who finds the address can then use the admin pages, so only do this for a demo with nothing real behind it. The setting is ignored (sign-in stays on) whenever Tradier production is enabled. The `/tmp` data is temporary and not shared between instances, and the engine still cannot take real alerts on Vercel.

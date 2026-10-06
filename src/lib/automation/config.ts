@@ -81,7 +81,17 @@ export function getWebhookSecret(): string {
  * set it's skipped for local development - but never in a production build,
  * where a missing password means access is denied rather than open. */
 export function isAuthRequired(): boolean {
+  if (isAuthDisabled()) return false;
   return Boolean(process.env.AUTOMATION_STATUS_PASSWORD) || process.env.NODE_ENV === "production";
+}
+
+/** Sign-in can be switched off on purpose with AUTOMATION_AUTH_DISABLED=true (a demo, or a private network).
+ * Then anyone who can reach the address can use every admin page, so the app shows a warning banner - and it
+ * is refused outright when real money is in play (Tradier production), where this setting is ignored. */
+export function isAuthDisabled(): boolean {
+  if (process.env.AUTOMATION_AUTH_DISABLED !== "true") return false;
+  const realMoney = process.env.EXECUTOR?.trim().toLowerCase() === "tradier" && process.env.TRADIER_ALLOW_PRODUCTION === "true";
+  return !realMoney;
 }
 
 export function getStatusPagePassword(): string {
