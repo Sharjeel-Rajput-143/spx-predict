@@ -15,9 +15,10 @@ export function WebhookIntro() {
         Webhooks allow you to trigger automations in your bots from outside this app, for example from a TradingView alert. Each webhook gives you a unique URL which you call to trigger it. Any time a webhook is triggered it runs the bot&apos;s automation immediately, unless the bot is already busy with another run, in which case it waits for its turn.
       </p>
       <p className="font-medium text-down">Each webhook can be triggered a maximum of 1 time per minute. Calls made more than once per minute are ignored.</p>
-      <div className="rounded-xl border border-line bg-surface-2 px-4 py-3 text-muted">
-        <span className="font-semibold text-fg">Keep your webhooks secret and safe.</span> Each webhook URL is unique and can be used by anyone who has it. Don&apos;t share them online, including via public version control repositories.
+      <div className="rounded-xl border border-accent/20 bg-accent/5 px-4 py-3 text-muted">
+        <span className="font-semibold text-fg">Keep your webhooks secret and safe.</span> Each webhook URL is unique and contains a secret code. Don&apos;t share it online, including via public version control repositories.
       </div>
+      <p className="text-muted">Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.</p>
     </div>
   );
 }
@@ -70,18 +71,16 @@ export function NewWebhookDrawer({ onCreate, onClose }: { onCreate: (name: strin
   );
 }
 
-/** The pencil: rename a webhook, switch it on or off, or delete it. */
+/** The pencil: rename a webhook, or switch it on or off. (Deleting is the trash can on its row, offered only when nothing uses it.) */
 export function EditWebhookDrawer({
   hook,
   onRename,
   onToggle,
-  onDelete,
   onClose,
 }: {
   hook: WebhookView;
   onRename: (id: string, name: string) => Promise<string | null>;
   onToggle: (id: string, active: boolean) => void;
-  onDelete: (id: string) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(hook.name);
@@ -120,73 +119,90 @@ export function EditWebhookDrawer({
               {hook.active ? "Switch off" : "Switch on"}
             </button>
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-muted">A TradingView alert using its URL stops working.</span>
-            <button
-              className={buttonClass.secondary}
-              onClick={() => {
-                if (window.confirm(`Delete the webhook "${hook.name}"? A TradingView alert using its URL will stop working.`)) {
-                  onDelete(hook.id);
-                  onClose();
-                }
-              }}
-            >
-              Delete
-            </button>
-          </div>
         </div>
       </div>
     </Drawer>
   );
 }
 
-/** One webhook, laid out like Option Alpha's list: name, Test Hook, a pencil, "Usages", then the URL. */
+const IconTrash = (p: React.SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...p}>
+    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+  </svg>
+);
+
+/**
+ * One webhook, laid out like Option Alpha's list: the name, "Test Hook" (grey when it can't be used), a pencil, and a trash
+ * can only when nothing uses it; then "Usages: N bots" (opens to show where); then "URL:" with a copy icon.
+ */
 export function WebhookRow({
   hook,
   origin,
   testSlot,
   onEdit,
+  onDelete,
 }: {
   hook: WebhookView;
   origin: string;
   /** The test form, shown under the row when "Test Hook" is opened (mock and Tradier sandbox only). */
   testSlot?: ReactNode;
   onEdit: () => void;
+  /** Offered only while the webhook is attached to nothing. */
+  onDelete?: (id: string) => void;
 }) {
   const [testing, setTesting] = useState(false);
-  const usage = hook.attached ? `1 trigger` : "not attached";
+  const used = hook.attached ? 1 : 0;
   return (
-    <li className={cn("space-y-2 border-t border-line py-4", !hook.active && "opacity-60")}>
+    <li className={cn("space-y-2.5 border-t border-line py-5", !hook.active && "opacity-60")}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="text-base font-semibold">{hook.name}</span>
         {!hook.active && <Pill tone="neutral">off</Pill>}
-        {testSlot && (
-          <button type="button" className="text-sm text-accent hover:underline" onClick={() => setTesting((t) => !t)} aria-expanded={testing}>
+        {testSlot ? (
+          <button type="button" className="text-sm hover:text-accent" onClick={() => setTesting((t) => !t)} aria-expanded={testing}>
             Test Hook
           </button>
+        ) : (
+          <span className="text-sm text-faint" title="A test call needs the webhook switched on and attached to a trigger, on the mock executor or the Tradier sandbox">
+            Test Hook
+          </span>
         )}
-        <button type="button" onClick={onEdit} aria-label={`Edit ${hook.name}`} title="Rename, switch off or delete" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
+        <button type="button" onClick={onEdit} aria-label={`Edit ${hook.name}`} title="Rename or switch on or off" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
           <IconEdit width={15} height={15} />
         </button>
+        {used === 0 && onDelete && (
+          <button
+            type="button"
+            aria-label={`Delete ${hook.name}`}
+            title="Delete this webhook"
+            onClick={() => {
+              if (window.confirm(`Delete the webhook "${hook.name}"? A TradingView alert using its URL will stop working.`)) onDelete(hook.id);
+            }}
+            className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-down"
+          >
+            <IconTrash width={15} height={15} />
+          </button>
+        )}
       </div>
-      <details className="group text-sm">
-        <summary className="inline-flex list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
-          <span className="text-muted">Usages:</span>
-          <span className="font-medium">{usage}</span>
-          <span className="text-faint transition-transform group-open:rotate-180" aria-hidden>
-            ⌄
-          </span>
-        </summary>
-        <div className="mt-1.5 rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
-          {hook.attached
-            ? `Attached to the ${hook.direction === "bullish" ? "Bullish" : "Bearish"} trigger of ${hook.botName}`
-            : "Not attached: attach it from a bot's trigger (the gear icon). Until then a call to its URL is refused."}
-          {" · "}
-          {hook.triggerCount} call{hook.triggerCount === 1 ? "" : "s"}
-          {hook.lastTriggeredAt ? `, last ${new Date(hook.lastTriggeredAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ", never called"}
+      {used === 0 ? (
+        <div className="text-sm" title="Attach it from a bot's trigger (the gear icon). Until then a call to its URL is refused.">
+          <span className="text-muted">Usages:</span> 0 bots
         </div>
-      </details>
-      <SecretUrl webhookId={hook.id} maskedPath={hook.path} origin={origin} />
+      ) : (
+        <details className="group text-sm">
+          <summary className="inline-flex list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+            <span>Usages:</span>
+            <span className="font-medium">1 bot</span>
+            <span className="text-faint transition-transform group-open:rotate-180" aria-hidden>
+              ⌄
+            </span>
+          </summary>
+          <div className="mt-1.5 rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
+            Attached to the {hook.direction === "bullish" ? "Bullish" : "Bearish"} trigger of {hook.botName} · {hook.triggerCount} call{hook.triggerCount === 1 ? "" : "s"}
+            {hook.lastTriggeredAt ? `, last ${new Date(hook.lastTriggeredAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ", never called"}
+          </div>
+        </details>
+      )}
+      <SecretUrl inline webhookId={hook.id} maskedPath={hook.path} origin={origin} />
       {testing && testSlot}
     </li>
   );

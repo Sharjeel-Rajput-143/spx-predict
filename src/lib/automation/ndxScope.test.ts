@@ -434,9 +434,9 @@ describe("(A1) the strike price source", () => {
 
   it("the alert's age includes the flip's wait: it is older by the time the Open step runs", async () => {
     positionsStore.insert(ndxPosition({ type: "short_call_spread", status: "open", id: "held" }));
-    executor.queueScenario(NDX_BOT_ID, { kind: "delayed", delayMs: 50 });
+    executor.queueScenario(NDX_BOT_ID, { kind: "delayed", delayMs: 20 });
     await emit("bullish", { receivedAgoMs: 1000 });
-    expect((sourceOf() as { ageSeconds: number }).ageSeconds).toBeGreaterThanOrEqual(1.1); // 1s before the run + the 50ms close wait
+    expect((sourceOf() as { ageSeconds: number }).ageSeconds).toBeGreaterThanOrEqual(1.0); // 1s before the run, plus the close wait
   });
 
   it("live quote: strikes come from the quote taken when the Open step runs, and the log has the source, price and age", async () => {

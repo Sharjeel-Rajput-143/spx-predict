@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SettingsView } from "../SettingsView";
-import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, alertBody, type SettingsData } from "./sections";
+import { AccountsSection, ArchiveSection, GeneralSection, WebhooksSection, type SettingsData } from "./sections";
 
 const noop = () => undefined;
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
@@ -75,26 +75,19 @@ describe("Bot Archive", () => {
 });
 
 describe("Webhooks", () => {
-  it("shows the URL, the secret's state, and a ready alert message per bot and direction with a placeholder secret", () => {
-    const out = html(<WebhooksSection data={data()} origin="http://localhost:3000" outbound={null} />);
-    expect(out).toContain("http://localhost:3000/api/webhook/tradingview");
-    expect(out).toContain(">Set<");
-    expect(out).toContain('{&quot;secret&quot;:&quot;&lt;SECRET&gt;&quot;,&quot;bot&quot;:&quot;ndx_ema_bias&quot;,&quot;signal&quot;:&quot;bullish&quot;,&quot;symbol&quot;:&quot;NDX&quot;');
-    expect((out.match(/Bullish alert message/g) ?? []).length).toBe(2);
-    expect((out.match(/Bearish alert message/g) ?? []).length).toBe(2);
-    expect(html(<WebhooksSection data={data({ webhook: { ...data().webhook, secretSet: false } })} origin="" outbound={null} />)).toContain("Not set - alerts are refused until WEBHOOK_SECRET is set");
+  it("has only the webhook page: no TradingView guide, no shared-URL box, no per-bot alert messages", () => {
+    const out = html(<WebhooksSection data={data()} origin="http://localhost:3000" />);
+    expect(out).toContain("Webhooks allow you to trigger automations");
+    expect(out).toContain(">New Webhook<");
+    for (const gone of ["Use it in a TradingView alert", "One shared URL with a secret", "/api/webhook/tradingview", "Bullish alert message", "Bearish alert message", "&lt;SECRET&gt;", "WEBHOOK_SECRET", "Alert message"]) {
+      expect(out, gone).not.toContain(gone);
+    }
+    expect(out).toContain("extra alerts cause duplicate entries"); // the one warning that stays
   });
 
-  it("builds the TradingView body from the addendum, field for field", () => {
-    expect(alertBody({ id: "ndx_ema_bias", underlying: "NDX" }, "bearish")).toBe('{"secret":"<SECRET>","bot":"ndx_ema_bias","signal":"bearish","symbol":"NDX","price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}');
-    expect(alertBody({ id: "x", underlying: null }, "bullish")).not.toContain("symbol");
-  });
-
-  it("keeps the outbound Option Alpha feature behind a button", () => {
-    const hidden = html(<OutboundGate shown={false} onShow={noop}><p>OUTBOUND CONTENT</p></OutboundGate>);
-    expect(hidden).toContain("Show connections");
-    expect(hidden).not.toContain("OUTBOUND CONTENT");
-    expect(html(<OutboundGate shown onShow={noop}><p>OUTBOUND CONTENT</p></OutboundGate>)).toContain("OUTBOUND CONTENT");
+  it("has no Option Alpha outbound connections section (no Show connections, no Rules webhooks)", () => {
+    const out = html(<WebhooksSection data={data()} origin="" />);
+    for (const gone of ["Option Alpha connections", "Show connections", "Outgoing connections", "Incoming - TradingView signals", "Add connection"]) expect(out, gone).not.toContain(gone);
   });
 });
 

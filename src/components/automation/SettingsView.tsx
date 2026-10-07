@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { WebhookSettings } from "@/components/automations/WebhookSettings";
 import { cn } from "@/lib/format";
-import { AccountsSection, ArchiveSection, GeneralSection, OutboundGate, WebhooksSection, type ArchivedBot, type BrokerView, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
+import { AccountsSection, ArchiveSection, GeneralSection, WebhooksSection, type ArchivedBot, type BrokerView, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
 
 const SECTIONS = [
   { key: "general", label: "General" },
@@ -21,7 +20,6 @@ export function SettingsView() {
   const [hooks, setHooks] = useState<WebhookView[]>([]);
   const [broker, setBroker] = useState<BrokerView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showOutbound, setShowOutbound] = useState(false);
 
   const load = useCallback(() => {
     fetch("/api/automation/settings")
@@ -126,11 +124,6 @@ export function SettingsView() {
                 const steps = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
                 return `Sent at ${price.toLocaleString("en-US")} → ${steps}${j.finished ? "" : " (still working…)"}. See the Automation status page for the order.`;
               }}
-              outbound={
-                <OutboundGate shown={showOutbound} onShow={() => setShowOutbound(true)}>
-                  <WebhookSettings />
-                </OutboundGate>
-              }
             />
           )}
         </div>

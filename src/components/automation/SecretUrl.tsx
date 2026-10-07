@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { IconCopy } from "@/components/icons";
 
 /**
  * A webhook URL with its secret hidden. The page only ever has the masked path; the full URL is fetched when a
@@ -12,12 +13,15 @@ export function SecretUrl({
   origin,
   onCopied,
   onProblem,
+  inline = false,
 }: {
   webhookId: string;
   maskedPath: string;
   origin: string;
   onCopied?: () => void;
   onProblem?: (message: string) => void;
+  /** One line like Option Alpha's list: "URL: https://.../hook/•••• [copy icon]" (Reveal is a small link). */
+  inline?: boolean;
 }) {
   const [full, setFull] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -54,6 +58,24 @@ export function SecretUrl({
       onProblem?.("Couldn't copy it.");
     }
   };
+
+  if (inline) {
+    return (
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <span className="shrink-0">URL:</span>
+        <span className="min-w-0 truncate font-mono text-[13px]" aria-label="Webhook URL">
+          {origin}
+          {full ?? maskedPath}
+        </span>
+        <button type="button" className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50" disabled={busy} onClick={full ? () => setFull(null) : reveal}>
+          {full ? "Hide" : "Reveal"}
+        </button>
+        <button type="button" aria-label="Copy webhook URL" title={copied ? "Copied" : "Copy the webhook URL"} disabled={busy} onClick={copy} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg disabled:opacity-50">
+          <IconCopy width={16} height={16} className={copied ? "text-up" : undefined} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-1">

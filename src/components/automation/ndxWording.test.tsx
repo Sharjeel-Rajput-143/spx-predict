@@ -25,7 +25,7 @@ describe("the NDX bot has no EMA wording", () => {
   it("the duplicate-entry warning replaces every 'never the raw EMA cross' line", () => {
     expect(read("docs/ndx-paper-trading-setup.md")).toContain(WARNING);
     expect(read(".env.example")).toContain("Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.");
-    expect(read("src/components/automation/settings/sections.tsx")).toContain("extra alerts cause duplicate entries");
+    expect(read("src/components/automation/settings/WebhookList.tsx")).toContain("extra alerts cause duplicate entries");
     for (const file of ["docs/ndx-paper-trading-setup.md", ".env.example", "src/components/automation/bot/SettingsTab.tsx", "src/components/automation/settings/sections.tsx"]) {
       expect(read(file), file).not.toMatch(/raw EMA/i);
     }
@@ -42,8 +42,8 @@ describe("the NDX bot has no EMA wording", () => {
       accounts: [],
       webhook: { path: "/api/webhook/tradingview", secretSet: true, bots: [{ id: "ndx_ema_bias", name: "NDX Bias Bot", underlying: "NDX" }] },
     } as unknown as SettingsData;
-    const out = html(<WebhooksSection data={data} origin="http://localhost:3000" outbound={null} />);
-    expect(out).toContain("Only those two alerts should call the webhook");
+    const out = html(<WebhooksSection data={data} origin="http://localhost:3000" />);
+    expect(out).toContain("Only the confirmed bullish and bearish alerts should call the webhook");
     expect(out).toContain("extra alerts cause duplicate entries");
     expect(out).not.toMatch(/EMA/);
   });

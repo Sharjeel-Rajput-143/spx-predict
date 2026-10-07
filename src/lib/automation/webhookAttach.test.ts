@@ -342,12 +342,12 @@ describe("secrets", () => {
       { id: "wh-2", name: "Spare", path: `/hook/${"•".repeat(12)}beef`, attached: false, botId: null, botName: null, underlying: null, direction: null, active: true, createdAt: 2, lastTriggeredAt: null, triggerCount: 0 },
     ];
     const settings = { webhook: { path: "/api/webhook/tradingview", secretSet: true, bots: [{ id: NDX_BOT_ID, name: "NDX Bias Bot", underlying: "NDX" }] }, executor: { venue: "mock" } } as unknown as SettingsData;
-    const out = renderToStaticMarkup(createElement(WebhooksSection, { data: settings, origin: "http://localhost:3000", outbound: null, hooks }));
+    const out = renderToStaticMarkup(createElement(WebhooksSection, { data: settings, origin: "http://localhost:3000", hooks }));
     expect(out).toContain("http://localhost:3000/hook/••••••••••••c0de");
     expect(out).toContain(">Reveal<");
-    expect(out).toContain(">Copy<");
+    expect(out).toContain('aria-label="Copy webhook URL"');
     expect(out).toContain("Attached to the Bullish trigger of NDX Bias Bot");
-    expect(out).toContain("not attached");
+    expect(out).toContain("0 bots"); // the spare, attached to nothing
     expect(out).not.toMatch(/[0-9a-f]{32}/); // no token-sized hex string anywhere in the page
 
     const url = renderToStaticMarkup(createElement(SecretUrl, { webhookId: "wh-1", maskedPath: "/hook/••••••••••••c0de", origin: "https://example.test" }));

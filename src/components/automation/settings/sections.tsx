@@ -5,7 +5,6 @@ import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import { Checkbox, Field, KeyValue, Pill, buttonClass, inputClass } from "../bot/primitives";
 import { clock12 } from "../builder/builtin";
-import { SecretUrl } from "../SecretUrl";
 import { EditWebhookDrawer, NewWebhookDrawer, WebhookIntro, WebhookRow } from "./WebhookList";
 
 /** Shape of GET /api/automation/settings. */
@@ -342,35 +341,6 @@ export function ArchiveSection({ bots, onRestore, onDelete }: { bots: ArchivedBo
 // Webhooks
 // ---------------------------------------------------------------------------
 
-/** The alert message TradingView sends for one bot and direction. The secret is a placeholder - the real one is never shown. */
-export function alertBody(bot: { id: string; underlying: string | null }, signal: "bullish" | "bearish"): string {
-  const symbol = bot.underlying ? `"symbol":"${bot.underlying}",` : "";
-  return `{"secret":"<SECRET>","bot":"${bot.id}","signal":"${signal}",${symbol}"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}`;
-}
-
-function CopyBox({ label, text }: { label: string; text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted">{label}</span>
-        <button
-          className="text-xs text-accent hover:underline"
-          onClick={() => {
-            navigator.clipboard?.writeText(text).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-        >
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <pre className="overflow-x-auto rounded-lg border border-line bg-bg px-3 py-2 font-mono text-xs">{text}</pre>
-    </div>
-  );
-}
-
 export interface WebhookView {
   id: string;
   name: string;
@@ -387,13 +357,9 @@ export interface WebhookView {
   triggerCount: number;
 }
 
-/** What each TradingView alert sends to a named webhook: the URL already says which bot and signal, so only the price (and bar time) are needed. */
-export const HOOK_MESSAGE = '{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}';
-
 export function WebhooksSection({
   data,
   origin,
-  outbound,
   hooks = [],
   onCreate = async () => null,
   onToggle = noopHook,
@@ -404,7 +370,6 @@ export function WebhooksSection({
 }: {
   data: SettingsData;
   origin: string;
-  outbound: ReactNode;
   hooks?: WebhookView[];
   onCreate?: (name: string) => Promise<string | null>;
   onToggle?: (id: string, active: boolean) => void;
@@ -427,45 +392,17 @@ export function WebhooksSection({
             New Webhook
           </button>
         </div>
-        {hooks.length === 0 ? (
-          <p className="border-t border-line pt-4 text-sm text-muted">No webhooks yet. Create one with New Webhook, for example BullishNDX and BearishNDX, then attach each to its trigger (the gear icon on the bot&apos;s Bullish or Bearish trigger).</p>
-        ) : (
+        {hooks.length > 0 && (
           <ul>
             {hooks.map((h) => (
-              <WebhookRow key={h.id} hook={h} origin={origin} onEdit={() => setEditing(h.id)} testSlot={canTest && onTest && h.active && h.attached ? <TestCall hook={h} onTest={onTest} /> : undefined} />
+              <WebhookRow key={h.id} hook={h} origin={origin} onEdit={() => setEditing(h.id)} onDelete={onDelete} testSlot={canTest && onTest && h.active && h.attached ? <TestCall hook={h} onTest={onTest} /> : undefined} />
             ))}
           </ul>
         )}
         {creating && <NewWebhookDrawer onCreate={onCreate} onClose={() => setCreating(false)} />}
-        {editingHook && <EditWebhookDrawer key={editingHook.id} hook={editingHook} onRename={onRename} onToggle={onToggle} onDelete={onDelete} onClose={() => setEditing(null)} />}
+        {editingHook && <EditWebhookDrawer key={editingHook.id} hook={editingHook} onRename={onRename} onToggle={onToggle} onClose={() => setEditing(null)} />}
       </Section>
 
-      <Section title="Use it in a TradingView alert">
-        <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted">
-          <li>On the chart for the bot&apos;s index, create an alert for the <span className="text-fg">confirmed</span> bullish signal and another for the bearish one. Only those two alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.</li>
-          <li>Under <span className="text-fg">Notifications</span>, tick <span className="text-fg">Webhook URL</span> and paste the matching webhook&apos;s URL. (TradingView only allows webhook alerts on accounts with two-factor authentication on.)</li>
-          <li>Under <span className="text-fg">Message</span>, paste the message below. The webhook is attached to a trigger, which already says which bot and signal it is, so the message only needs the price.</li>
-          <li>Bullish alert → the webhook attached to the Bullish trigger, Bearish alert → the one attached to the Bearish trigger. Save, and watch the Automation status page for the first call.</li>
-        </ol>
-        <CopyBox label="Alert message" text={HOOK_MESSAGE} />
-        <p className="text-xs text-muted">If the message has no price, the bot uses its underlying&apos;s live quote when it is fresh (under 5 minutes old), and refuses the call otherwise.</p>
-      </Section>
-
-      <Section title="One shared URL with a secret (advanced)" hint="The older way: a single URL, with the secret and the bot in the message body. Use it if you'd rather not manage one URL per signal.">
-        <CopyBox label="Webhook URL" text={`${origin}${data.webhook.path}`} />
-        <KeyValue rows={[["Secret", data.webhook.secretSet ? <Pill key="s" tone="ok">Set</Pill> : <Pill key="s" tone="error">Not set - alerts are refused until WEBHOOK_SECRET is set</Pill>], ["Repeats", "An identical alert within 2 minutes is ignored (duplicate protection)"]]} />
-        <p className="text-xs text-muted">Replace &lt;SECRET&gt; with your WEBHOOK_SECRET in TradingView - it is never shown here.</p>
-        {data.webhook.bots.map((b) => (
-          <div key={b.id} className="space-y-2 rounded-xl border border-line p-3">
-            <div className="text-sm font-medium">
-              {b.name} <span className="text-xs text-faint">{b.id}</span>
-            </div>
-            <CopyBox label="Bullish alert message" text={alertBody(b, "bullish")} />
-            <CopyBox label="Bearish alert message" text={alertBody(b, "bearish")} />
-          </div>
-        ))}
-      </Section>
-      {outbound}
     </div>
   );
 }
@@ -502,12 +439,3 @@ function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string, pr
 }
 
 function noopHook() {}
-
-/** The old outbound feature (rules that call Option Alpha webhooks) stays behind a button, so opening Settings never loads it. */
-export function OutboundGate({ shown, onShow, children }: { shown: boolean; onShow: () => void; children: ReactNode }) {
-  return (
-    <Section title="Option Alpha connections (outbound)" hint="The separate Rules feature: webhooks this app calls, not the alerts it receives. It loads only when you open it.">
-      {shown ? children : <button className={buttonClass.secondary} onClick={onShow}>Show connections</button>}
-    </Section>
-  );
-}

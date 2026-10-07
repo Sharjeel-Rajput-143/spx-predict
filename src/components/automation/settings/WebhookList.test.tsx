@@ -36,11 +36,11 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
   });
 
   it("has a New Webhook button, and no inline create form any more", () => {
-    const out = html(<WebhooksSection data={settings} origin="http://localhost:3000" outbound={null} hooks={[]} />);
+    const out = html(<WebhooksSection data={settings} origin="http://localhost:3000" hooks={[]} />);
     expect(out).toContain(">New Webhook<");
     expect(out).not.toContain("Create webhook");
     expect(out).not.toContain("A call means");
-    expect(out).toContain("No webhooks yet");
+    expect(out).not.toContain("No webhooks yet");
   });
 
   it("New Webhook is a slide-over with Name, its helper line, and Create", () => {
@@ -49,33 +49,39 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
     expect(out).toMatch(/<button[^>]*disabled=""[^>]*>Create<\/button>/); // nothing typed yet
   });
 
-  it("each webhook shows its name, Test Hook, a pencil, Usages, and the URL (masked)", () => {
-    const out = html(<WebhookRow hook={hook()} origin="http://localhost:3000" onEdit={noop} testSlot={<span>TEST-FORM</span>} />);
+  it("each webhook shows its name, Test Hook, a pencil, Usages, and the URL line with a copy icon (masked)", () => {
+    const out = html(<WebhookRow hook={hook()} origin="http://localhost:3000" onEdit={noop} onDelete={noop} testSlot={<span>TEST-FORM</span>} />);
     expect(out).toContain("BullishNDX");
     expect(out).toContain(">Test Hook<");
     expect(out).toContain('aria-label="Edit BullishNDX"');
     expect(out).toContain("Usages:");
-    expect(out).toContain("1 trigger");
+    expect(out).toContain("1 bot");
     expect(out).toContain("Attached to the Bullish trigger of NDX Bias Bot");
+    expect(out).toContain("URL:");
     expect(out).toContain("http://localhost:3000/hook/••••••••••••c0de");
+    expect(out).toContain('aria-label="Copy webhook URL"');
     expect(out).not.toContain("TEST-FORM"); // the test form opens on click
+    expect(out).not.toContain("Delete BullishNDX"); // no trash can while it is in use
   });
 
-  it("an unattached webhook says so under Usages, and offers no Test Hook", () => {
-    const out = html(<WebhookRow hook={hook({ attached: false, botId: null, botName: null, direction: null })} origin="" onEdit={noop} />);
-    expect(out).toContain("not attached");
-    expect(out).toContain("Not attached: attach it from a bot&#x27;s trigger");
-    expect(out).not.toContain("Test Hook");
+  it("an unused webhook shows 'Usages: 0 bots', a grey Test Hook that isn't a button, and a trash can", () => {
+    const out = html(<WebhookRow hook={hook({ attached: false, botId: null, botName: null, direction: null })} origin="" onEdit={noop} onDelete={noop} />);
+    expect(out).toContain("0 bots");
+    expect(out).not.toContain("<details");
+    expect(out).toMatch(/<span class="text-sm text-faint"[^>]*>Test Hook<\/span>/);
+    expect(out).not.toMatch(/<button[^>]*>Test Hook<\/button>/);
+    expect(out).toContain('aria-label="Delete BullishNDX"');
   });
 
-  it("the pencil opens Edit Webhook: rename, switch on or off, delete", () => {
-    const out = html(<EditWebhookDrawer hook={hook()} onRename={async () => null} onToggle={noop} onDelete={noop} onClose={noop} />);
-    for (const t of ["Edit Webhook", 'value="BullishNDX"', ">Save<", ">Switch off<", ">Delete<"]) expect(out, t).toContain(t);
-    expect(html(<EditWebhookDrawer hook={hook({ active: false })} onRename={async () => null} onToggle={noop} onDelete={noop} onClose={noop} />)).toContain(">Switch on<");
+  it("the pencil opens Edit Webhook: rename, and switch on or off (delete is the trash can on an unused row)", () => {
+    const out = html(<EditWebhookDrawer hook={hook()} onRename={async () => null} onToggle={noop} onClose={noop} />);
+    for (const t of ["Edit Webhook", 'value="BullishNDX"', ">Save<", ">Switch off<"]) expect(out, t).toContain(t);
+    expect(out).not.toContain(">Delete<");
+    expect(html(<EditWebhookDrawer hook={hook({ active: false })} onRename={async () => null} onToggle={noop} onClose={noop} />)).toContain(">Switch on<");
   });
 
   it("the list never contains a full token", () => {
-    const out = html(<WebhooksSection data={settings} origin="http://localhost:3000" outbound={null} hooks={[hook(), hook({ id: "wh-2", name: "BearishNDX", direction: "bearish" })]} />);
+    const out = html(<WebhooksSection data={settings} origin="http://localhost:3000" hooks={[hook(), hook({ id: "wh-2", name: "BearishNDX", direction: "bearish" })]} />);
     expect(out).not.toMatch(/[0-9a-f]{32}/);
   });
 });
