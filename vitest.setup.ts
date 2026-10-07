@@ -9,3 +9,6 @@ process.env.AUTOMATION_DATA_DIR = path.join(os.tmpdir(), `spx-predict-automation
 // Orders on the mock executor fill instantly, so poll for the fill quickly
 // instead of waiting the production 2s between checks.
 process.env.AUTOMATION_ORDER_POLL_INTERVAL_MS = "10";
+
+// Flushing every write to disk is for real hosts; the test suite writes thousands of small files.
+process.env.AUTOMATION_STORAGE_FSYNC = "false";

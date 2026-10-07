@@ -2,13 +2,14 @@ import "server-only";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { JsonFileBackend } from "./storage/jsonFileBackend";
+import type { CollectionName, Repository } from "./storage/repository";
 import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
 
 /**
- * Tiny JSON-file-backed store, same shape as automations/store.ts's JsonStore
- * but copied rather than imported - this module must not reach into the
- * (unrelated, outbound) automations feature, and vice versa. Swap this file
- * for a real database later; callers only ever see all/get/query/insert/update.
+ * The engine's records. This module is the only place that knows where they live; everything else calls the
+ * repositories exported at the bottom (all / get / query / insert / update / remove). It does not reach into the
+ * (unrelated, outbound) automations feature, and that feature does not reach into this.
  */
 export interface DataDirChoice {
   dir: string;
@@ -56,125 +57,34 @@ export function storageProblem(): string | null {
   if (broker && CHOICE.temporary) {
     return `A broker is configured but this host's disk is read-only, so the bots' records are in a temporary folder (${DATA_DIR}) that will be lost. Use a server with a writable disk.`;
   }
-  return null;
+  // A damaged, missing or too-new data file stops the engine with a message naming it - never an empty start.
+  return storage.check();
 }
 
-/**
- * One in-memory cache per file, shared by every copy of this module. Next
- * bundles route handlers and server-rendered pages as separate module graphs,
- * so a plain per-instance cache would let a page keep serving what it read
- * before a route wrote something new (e.g. a bot just created through the API
- * 404ing on its own page).
- */
-const globalForStores = globalThis as typeof globalThis & { __automationStoreCaches?: Map<string, unknown[]> };
-const caches = (globalForStores.__automationStoreCaches ??= new Map<string, unknown[]>());
+/** The one storage backend: JSON files in DATA_DIR (storage/jsonFileBackend.ts). The engine, the routes and the pages
+ * only use the repositories below - nothing else opens a file - so a database implementation of the same
+ * Repository interface can replace this one later without any engine change. */
+export const storage = new JsonFileBackend(DATA_DIR);
 
-class JsonStore<T extends { id: string }> {
-  private file: string;
+const repo = <T extends { id: string }>(name: CollectionName): Repository<T> => storage.repository<T>(name);
 
-  constructor(name: string) {
-    this.file = path.join(DATA_DIR, `${name}.json`);
-  }
-
-  private get cache(): T[] | null {
-    return (caches.get(this.file) as T[] | undefined) ?? null;
-  }
-
-  private set cache(rows: T[] | null) {
-    if (rows) caches.set(this.file, rows);
-    else caches.delete(this.file);
-  }
-
-  private load(): T[] {
-    const cached = this.cache;
-    if (cached) return cached;
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    let rows: T[];
-    try {
-      rows = JSON.parse(fs.readFileSync(this.file, "utf8")) as T[];
-    } catch {
-      rows = [];
-    }
-    this.cache = rows;
-    return rows;
-  }
-
-  private persist() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    // Write-then-rename so a crash mid-write can't leave a truncated file
-    // (which load() would read as "empty" and silently forget every position).
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.cache, null, 2));
-    fs.renameSync(tmp, this.file);
-  }
-
-  all(): T[] {
-    return [...this.load()];
-  }
-
-  get(id: string): T | undefined {
-    return this.load().find((r) => r.id === id);
-  }
-
-  query(pred: (r: T) => boolean): T[] {
-    return this.load().filter(pred);
-  }
-
-  insert(record: T): T {
-    const rows = this.load();
-    rows.push(record);
-    this.persist();
-    return record;
-  }
-
-  update(id: string, patch: Partial<T>): T | undefined {
-    const rows = this.load();
-    const idx = rows.findIndex((r) => r.id === id);
-    if (idx === -1) return undefined;
-    rows[idx] = { ...rows[idx], ...patch };
-    this.persist();
-    return rows[idx];
-  }
-
-  remove(id: string): boolean {
-    const rows = this.load();
-    const idx = rows.findIndex((r) => r.id === id);
-    if (idx === -1) return false;
-    rows.splice(idx, 1);
-    this.persist();
-    return true;
-  }
-
-  removeWhere(pred: (r: T) => boolean): number {
-    const rows = this.load();
-    const kept = rows.filter((r) => !pred(r));
-    const removed = rows.length - kept.length;
-    if (removed > 0) {
-      this.cache = kept;
-      this.persist();
-    }
-    return removed;
-  }
-
-  /** Test-only escape hatch: resets this store to empty, in memory and on disk. */
-  __reset(): void {
-    this.cache = [];
-    this.persist();
-  }
-}
-
-export const botsStore = new JsonStore<Bot>("bots");
-export const signalsStore = new JsonStore<Signal>("signals");
-export const positionsStore = new JsonStore<Position>("positions");
-export const ordersStore = new JsonStore<Order>("orders");
-export const decisionsStore = new JsonStore<Decision>("decisions");
-export const errorsStore = new JsonStore<ErrorRecord>("errors");
-export const templatesStore = new JsonStore<BotTemplate>("templates");
-export const runsStore = new JsonStore<Run>("runs");
-export const alertsStore = new JsonStore<ActivityAlert>("alerts");
-export const webhooksStore = new JsonStore<Webhook>("webhooks");
+export const botsStore = repo<Bot>("bots");
+export const signalsStore = repo<Signal>("signals");
+export const positionsStore = repo<Position>("positions");
+export const ordersStore = repo<Order>("orders");
+export const decisionsStore = repo<Decision>("decisions");
+export const errorsStore = repo<ErrorRecord>("errors");
+export const templatesStore = repo<BotTemplate>("templates");
+export const runsStore = repo<Run>("runs");
+export const alertsStore = repo<ActivityAlert>("alerts");
+export const webhooksStore = repo<Webhook>("webhooks");
 /** One row (id "app"): the app-wide settings from the Settings page. */
-export const settingsStore = new JsonStore<AppSettingsRow>("settings");
+export const settingsStore = repo<AppSettingsRow>("settings");
+
+/** Test hook: forget what is in memory so the next read comes from the files, as after a restart. */
+export function __simulateRestart(): void {
+  storage.dropCaches();
+}
 
 export function __resetAllStores(): void {
   botsStore.__reset();
