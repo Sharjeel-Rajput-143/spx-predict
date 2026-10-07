@@ -4,10 +4,12 @@ import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, isAttached, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
-import { getLastTick } from "@/lib/marketData/tickStore";
+import { waitForTick } from "@/lib/marketData/tickStore";
 
 /** A live quote older than this isn't a price to trade on. */
 const MAX_QUOTE_AGE_MS = 5 * 60_000;
+/** A server that has only just started has no quote yet; give its first one a few seconds. */
+const FIRST_QUOTE_WAIT_MS = 6_000;
 
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself, so the alert message
  * only needs to carry the price (or nothing, when there is a fresh live quote for the bot's underlying). */
@@ -45,10 +47,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     return NextResponse.json({ received: true, ignored: "A webhook can only be triggered once a minute." }, { status: 200 });
   }
 
-  // The price: the alert's own, else the live quote of the bot's underlying if it is fresh.
+  // The price: the alert's own, else the live quote of the bot's underlying if it is fresh. The alert may carry no
+  // message at all (as with Option Alpha, the call itself is the trigger).
   let price = payload.price;
   if (price === null && underlying) {
-    const tick = getLastTick(underlying);
+    const tick = await waitForTick(underlying, FIRST_QUOTE_WAIT_MS);
     if (tick && now - tick.t <= MAX_QUOTE_AGE_MS) price = tick.price;
   }
   if (price === null) {

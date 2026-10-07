@@ -107,6 +107,24 @@ export function getLastTick(symbol: string): Tick | null {
   return state.ticks[state.ticks.length - 1] ?? null;
 }
 
+/**
+ * The latest tick, waiting up to `timeoutMs` for the first one when the poller has only just been started (a cold server
+ * has no tick yet; the first poll takes a moment). Resolves to null if the feed gives nothing in time.
+ */
+export function waitForTick(symbol: string, timeoutMs: number): Promise<Tick | null> {
+  const last = getLastTick(symbol);
+  if (last || timeoutMs <= 0) return Promise.resolve(last);
+  return new Promise((resolve) => {
+    const done = (tick: Tick | null) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(tick);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    const unsubscribe = subscribeTicks(symbol, (tick) => done(tick));
+  });
+}
+
 export interface FeedStatus {
   healthy: boolean;
   /** Which upstream actually served the last successful tick. Seeing this

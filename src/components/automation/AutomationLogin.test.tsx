@@ -11,7 +11,7 @@ describe("what the sign-in dialog says", () => {
   it("with no password set it blocks the form and says how to fix it", () => {
     const r = loginNotices({ authRequired: true, signedIn: false, passwordConfigured: false });
     expect(r.blocked).toBe(true);
-    expect(r.messages[0]).toMatch(/AUTOMATION_STATUS_PASSWORD is not set/);
+    expect(r.messages[0]).toMatch(/APP_LOGIN_PASSWORD is not set/);
     expect(r.messages[0]).toMatch(/Environment Variables/);
   });
 
@@ -29,7 +29,7 @@ describe("what the sign-in dialog says", () => {
     const base = renderToStaticMarkup(<AutomationLogin next="/automations" />);
     expect(base).toContain("Sign in");
     expect(base).toContain('name="password"');
-    expect(renderToStaticMarkup(<AutomationLogin next="/automations" error />)).toContain("Wrong password.");
-    expect(renderToStaticMarkup(<AutomationLogin next="/automations" error="config" />)).toContain("AUTOMATION_STATUS_PASSWORD is not set");
+    expect(renderToStaticMarkup(<AutomationLogin next="/automations" error />)).toContain("Wrong email or password.");
+    expect(renderToStaticMarkup(<AutomationLogin next="/automations" error="config" />)).toContain("APP_LOGIN_PASSWORD is not set");
   });
 });

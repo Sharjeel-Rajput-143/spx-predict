@@ -19,6 +19,13 @@ export default async function AutomationStatusPage({
         </div>
         <form action="/api/automation/status/login" method="POST" className="space-y-3">
           <input
+            type="email"
+            name="email"
+            placeholder="Email"
+            autoComplete="username"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-fg"
+          />
+          <input
             type="password"
             name="password"
             placeholder="Password"
@@ -28,7 +35,7 @@ export default async function AutomationStatusPage({
           <button type="submit" className="w-full rounded-lg bg-fg px-3 py-2 text-sm font-medium text-bg">
             Sign in
           </button>
-          {error === "config" ? <p className="text-xs text-down">Sign-in isn&apos;t set up on this server: AUTOMATION_STATUS_PASSWORD is not set. Set it in the host&apos;s environment settings and redeploy.</p> : error && <p className="text-xs text-down">Wrong password.</p>}
+          {error === "config" ? <p className="text-xs text-down">Sign-in isn&apos;t set up on this server: APP_LOGIN_PASSWORD is not set. Set it in the host&apos;s environment settings and redeploy.</p> : error && <p className="text-xs text-down">Wrong email or password.</p>}
         </form>
       </div>
     );

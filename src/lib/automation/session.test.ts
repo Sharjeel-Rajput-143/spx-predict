@@ -34,6 +34,7 @@ describe("isValidSession", () => {
 
   it("a password always turns sign-in on, with either executor", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AUTH_SECRET", "s".repeat(48));
     vi.stubEnv("AUTOMATION_STATUS_PASSWORD", "pw");
     vi.stubEnv("EXECUTOR", "");
     expect(isValidSession(undefined)).toBe(false);

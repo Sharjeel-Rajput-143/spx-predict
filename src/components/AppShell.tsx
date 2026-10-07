@@ -84,12 +84,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const logOut = async () => {
     await fetch("/api/automation/logout", { method: "POST" });
-    router.push("/automations");
+    router.push("/login");
     router.refresh();
     setAuth((a) => (a ? { ...a, signedIn: false } : a));
   };
   const ThemeIcon = theme === "dark" ? IconSun : IconMoon;
   const themeLabel = `Switch to ${theme === "dark" ? "light" : "dark"} mode`;
+
+  // The sign-in page stands alone: no sidebar or tabs.
+  if (pathname === "/login") return <>{children}</>;
 
   return (
     <div className="min-h-dvh">

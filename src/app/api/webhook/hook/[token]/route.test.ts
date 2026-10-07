@@ -8,6 +8,10 @@ import { GET as list, POST as create } from "../../../automation/webhooks/route"
 import { DELETE as remove, PATCH as patch } from "../../../automation/webhooks/[id]/route";
 import { POST } from "./route";
 
+// The live feed is never reached from a test: a cold server has no quote, unless a test gives one.
+const feed = vi.hoisted(() => ({ tick: null as { t: number; price: number } | null }));
+vi.mock("@/lib/marketData/tickStore", () => ({ waitForTick: async () => feed.tick, getLastTick: () => feed.tick, isLiveSymbol: () => false }));
+
 // Named webhooks, through the route handlers, on the mock executor. No network.
 
 setTestBotEnv();
@@ -17,6 +21,7 @@ const call = (token: string, body?: string) => POST(new NextRequest(`http://loca
 const settle = () => new Promise((r) => setTimeout(r, 80));
 
 beforeEach(() => {
+  feed.tick = null;
   resetAutomationStores();
   setNdxTestEnv();
   vi.stubEnv("AUTOMATION_TEST_MODE", "");
@@ -88,6 +93,20 @@ describe("calling a webhook", () => {
       expect((await call(w.token, body)).status, body).toBe(200);
       expect(signalsStore.all()[0].price, body).toBe(21_003.7);
     }
+  });
+
+  it("a bare call, with no message at all (as Option Alpha's is), runs on the live quote", async () => {
+    feed.tick = { t: Date.now(), price: 21_050.5 };
+    const w = createWebhook({ name: "Bare", botId: NDX_BOT_ID, direction: "bullish" });
+    expect((await call(w.token, "")).status).toBe(200);
+    expect((await call(w.token, "Bullish signal, confirmed cross or opening bias")).status).toBe(200);
+    expect(signalsStore.all()[0].price).toBe(21_050.5);
+  });
+
+  it("a plain-text alert message with no price is refused when the quote is stale", async () => {
+    feed.tick = { t: Date.now() - 10 * 60_000, price: 21_050.5 };
+    const w = createWebhook({ name: "Stale", botId: NDX_BOT_ID, direction: "bullish" });
+    expect((await call(w.token, "Bullish signal")).status).toBe(400);
   });
 
   it("with no price anywhere (and no fresh quote) it is refused with a message, and nothing is saved", async () => {

@@ -82,7 +82,7 @@ export const DEFAULT_EOD_SWEEP_MINUTES = EOD_SWEEP_HOUR_ET * 60 + EOD_SWEEP_MINU
  * missing password means access is denied rather than open. */
 export function isAuthRequired(): boolean {
   if (isAuthDisabled()) return false;
-  if (process.env.AUTOMATION_STATUS_PASSWORD) return true;
+  if (process.env.APP_LOGIN_PASSWORD || process.env.AUTOMATION_STATUS_PASSWORD) return true;
   return process.env.NODE_ENV === "production" && isBrokerConfigured();
 }
 
@@ -102,7 +102,9 @@ export function isAuthDisabled(): boolean {
 }
 
 export function getStatusPagePassword(): string {
-  return requiredEnvString("AUTOMATION_STATUS_PASSWORD", "Set it in .env.local to protect the bot status page.");
+  const password = process.env.APP_LOGIN_PASSWORD || process.env.AUTOMATION_STATUS_PASSWORD;
+  if (!password) throw new Error("APP_LOGIN_PASSWORD is required and not set. Set it in .env.local to protect the app.");
+  return password;
 }
 
 export function isDryRun(): boolean {
