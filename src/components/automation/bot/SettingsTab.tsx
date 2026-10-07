@@ -145,7 +145,6 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
     setBuilder({
       readOnly: true,
       builtIn: dir,
-      note: "Live: this is what the engine does for this signal. Click a node to edit its values - they save straight to this bot's settings and apply to the next signal. The shape of the flow is the engine's logic, so steps can't be added or removed here. Duplicate protection, the position, daily and allocation limits, the strike checks and the error failsafe also apply and aren't drawn.",
       draft: builtInDraft(dir),
     });
 
@@ -153,7 +152,6 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
     setBuilder({
       readOnly: true,
       monitor,
-      note: "Live: this is what the Close Monitor does each minute inside the trading window while it is switched on. It is off for now (the bot's flip already closes the opposite side; monitors get attached to the triggers later). The first check is Option Alpha's; the second is added so it can never close the side the latest signal wants. Click Close Position to set its memo and tags.",
       draft: monitorDraft(monitor),
     });
 
@@ -171,7 +169,7 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
     id: `builtin-${dir}`,
     name: `${dir === "bullish" ? "Bullish" : "Bearish"} signal`,
     folder: "Built-in",
-    steps: builtInFlow(dir, data.config, data.config?.hours ?? data.limits.hours, data.limits.maxPositionsPerType),
+    steps: builtInFlow(dir, data.config, data.config?.hours ?? data.limits.hours, data.limits.maxPositionsPerType, data.bot.positionChecks?.[dir]),
     inputs: [],
     updatedAt: 0,
   });

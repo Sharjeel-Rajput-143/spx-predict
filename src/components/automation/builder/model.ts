@@ -5,6 +5,8 @@
  * so wherever it can be mistaken for something that runs.
  */
 
+import { CHECK_MAX_COUNT, CHECK_OPS, CHECK_STATUSES, CHECK_TYPES } from "@/lib/automation/positionChecks";
+
 export type StepKind =
   | "decision"
   | "conditional"
@@ -132,7 +134,7 @@ export function val(s: Step, key: string, inputs: BotInput[] = []): string {
 
 export type Token =
   | { t: "text"; v: string }
-  | { t: "select"; k: string; options: string[] }
+  | { t: "select"; k: string; options: string[]; value?: string }
   | { t: "input"; k: string; placeholder: string; value?: string };
 
 export type ConditionCategory = "Stocks" | "Indicators" | "Positions" | "Bot";
@@ -159,7 +161,7 @@ export const CONDITION_CATALOG: ConditionTemplate[] = [
   { id: "pos_pl", category: "Positions", tokens: [{ t: "text", v: "Position P/L is " }, { t: "select", k: "cmp", options: CMP }, { t: "text", v: " " }, { t: "input", k: "value", placeholder: "value" }, { t: "text", v: "% of risk" }] },
   { id: "pos_dte", category: "Positions", tokens: [{ t: "text", v: "Position days to expiry is " }, { t: "select", k: "cmp", options: CMP }, { t: "text", v: " " }, { t: "input", k: "days", placeholder: "days" }] },
   { id: "bot_time", category: "Bot", tokens: [{ t: "text", v: "Current market time is between " }, { t: "input", k: "from", placeholder: "start", value: "9:35am" }, { t: "text", v: " and " }, { t: "input", k: "to", placeholder: "end", value: "3:55pm" }] },
-  { id: "bot_has_type", category: "Bot", tokens: [{ t: "text", v: "Bot has " }, { t: "select", k: "op", options: ["exactly or more than", "less than"] }, { t: "text", v: " " }, { t: "select", k: "count", options: ["1 position", "2 positions", "3 positions"] }, { t: "text", v: " with " }, { t: "select", k: "type", options: ["Short put spread", "Short call spread"] }, { t: "text", v: " type and any status" }] },
+  { id: "bot_has_type", category: "Bot", tokens: [{ t: "text", v: "Bot has " }, { t: "select", k: "op", options: [...CHECK_OPS], value: "exactly or more than" }, { t: "text", v: " " }, { t: "select", k: "count", options: Array.from({ length: CHECK_MAX_COUNT + 1 }, (_, n) => `${n} position${n === 1 ? "" : "s"}`), value: "1 position" }, { t: "text", v: " with " }, { t: "select", k: "type", options: [...CHECK_TYPES], value: "Short put spread" }, { t: "text", v: " type and " }, { t: "select", k: "status", options: [...CHECK_STATUSES] }, { t: "text", v: " status" }] },
   { id: "bot_latest_signal", category: "Bot", tokens: [{ t: "text", v: "The latest confirmed signal is " }, { t: "select", k: "signal", options: ["bullish", "bearish"] }] },
   { id: "bot_pl", category: "Bot", tokens: [{ t: "text", v: "Bot " }, { t: "select", k: "metric", options: ["open P/L", "closed P/L today"] }, { t: "text", v: " is " }, { t: "select", k: "cmp", options: CMP }, { t: "text", v: " " }, { t: "input", k: "value", placeholder: "value" }] },
   { id: "bot_has", category: "Bot", tokens: [{ t: "text", v: "Bot has " }, { t: "select", k: "op", options: ["exactly", "at least", "at most"] }, { t: "text", v: " " }, { t: "select", k: "count", options: ["1 position", "2 positions", "3 positions"] }, { t: "text", v: " with " }, { t: "select", k: "by", options: ["symbol", "type"] }, { t: "text", v: " and expiration (" }, { t: "select", k: "exp", options: ["0 days", "7 days", "30 days"] }, { t: "text", v: ")" }] },
@@ -181,7 +183,7 @@ export const conditionTemplate = (id: string): ConditionTemplate => CONDITION_CA
 export function newCondition(templateId: string): Condition {
   const values: Record<string, string> = {};
   for (const tok of conditionTemplate(templateId).tokens) {
-    if (tok.t === "select") values[tok.k] = tok.options[0];
+    if (tok.t === "select") values[tok.k] = tok.value ?? tok.options[0];
     if (tok.t === "input") values[tok.k] = tok.value ?? "";
   }
   return { templateId, values };

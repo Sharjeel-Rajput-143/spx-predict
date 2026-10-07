@@ -196,6 +196,10 @@ export interface Bot {
    * Copied only for closes: with the bot off, an Always On trigger may still close the opposite position and never opens.
    * Off = with the bot off the trigger does nothing at all. */
   alwaysOn?: { bullish: boolean; bearish: boolean };
+  /** The position checks edited on each trigger's canvas (see positionChecks.ts). Unset = the engine's defaults. */
+  positionChecks?: import("./positionChecks").PositionChecks;
+  /** The Memo and Tags on each trigger's Close Position step: written on the position that step closes. */
+  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
   /** Close Monitors, by key. Unset = off. */
   monitors?: Partial<Record<MonitorKey, CloseMonitorSettings>>;
   alerts?: BotAlerts;

@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Drawer, Field, buttonClass, inputClass } from "../bot/primitives";
+import { IconLink } from "@/components/icons";
+import { Drawer, Field, Modal, buttonClass, inputClass } from "../bot/primitives";
+import type { SmartPricingMode } from "@/lib/automation/smartPricing";
 import type { BotContext } from "../bot/BotDetail";
 import type { BotInputs, MonitorKey, StrikeRounding } from "@/lib/automation/types";
+import { CHECK_MAX_COUNT, CHECK_OPS, CHECK_STATUSES, CHECK_TYPES, defaultCheck, positionsWord, type CheckOp, type CheckSlot, type CheckStatus, type CheckType, type PositionCheck } from "@/lib/automation/positionChecks";
 import { clock12 } from "./builtin";
 import type { Step } from "./model";
 
@@ -45,12 +48,9 @@ function useSave(ctx: BotContext, onClose: () => void) {
 const num = (v: string) => (v.trim() === "" ? NaN : Number(v));
 
 function Shell({ title, ctx, onClose, footer, children }: { title: string; ctx: BotContext; onClose: () => void; footer?: ReactNode; children: ReactNode }) {
-  const live = ctx.data.counts.activePositions > 0;
   return (
     <Drawer title={title} onClose={onClose} footer={footer}>
       <div className="space-y-5">
-        <p className="rounded-lg bg-accent/10 px-3 py-2 text-xs text-accent">Live: these values are this bot&apos;s real settings. Saving applies to the next signal, not to a position that is already open.</p>
-        {live && <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">There is an open position. It keeps the values it was opened with.</p>}
         {children}
       </div>
     </Drawer>
@@ -100,7 +100,7 @@ export function TimeWindowEditor({ ctx, onClose }: { ctx: BotContext; onClose: (
         </div>
       }
     >
-      <Field label="Current market time is between" hint="New York time. Signals outside this window do nothing.">
+      <Field label="Current market time is between">
         <div className="flex items-center gap-2">
           <select className={inputClass} value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Start time">
             {withCurrent(MARKS, from).map((m) => (
@@ -120,7 +120,6 @@ export function TimeWindowEditor({ ctx, onClose }: { ctx: BotContext; onClose: (
         </div>
       </Field>
       {bad && <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">The start has to be before the end.</p>}
-      <p className="text-xs text-muted">This window is shared by the Bullish and Bearish automations. Weekdays only, and the NYSE holiday and early-close calendar still apply.</p>
     </Shell>
   );
 }
@@ -167,66 +166,208 @@ export function OpenEditor({ direction, ctx, onClose }: { direction: Direction; 
         <Row label="Symbol" value={cfg.underlying} />
         <Row label="Expiration" value="Exactly 0 days (same day)" />
       </div>
-      <Field label={`Short ${side} strike`} hint={`Points ${put ? "below" : "above"} the underlying price: a signed number, ${put ? "negative" : "positive"} for the out-of-the-money side. Decimals are fine (e.g. ${put ? "-0.01" : "0.01"}).`}>
+      <Field label={`Short ${side} strike`}>
         <input className={inputClass} inputMode="decimal" value={offset} onChange={(e) => setOffset(e.target.value)} aria-label={`Short ${side} offset`} />
       </Field>
-      <Field label="Rounding" hint="How that target lands on a real strike. Out of the money: the put rounds down, the call rounds up. (To verify against Option Alpha.) Shared by both automations.">
+      <Field label="Rounding">
         <select className={inputClass} value={rounding} onChange={(e) => setRounding(e.target.value as StrikeRounding)} aria-label="Strike rounding">
           <option value="outward">Out of the money</option>
           <option value="nearest">Nearest strike</option>
         </select>
       </Field>
-      <Field label={`Long ${side} strike`} hint={`Points ${put ? "below" : "above"} the short ${side}. Shared by both automations: the spread width.`}>
+      <Field label={`Long ${side} strike`}>
         <input className={inputClass} inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} aria-label="Spread width" />
       </Field>
-      <Field label="Position size" hint="Contracts. Shared by both automations.">
+      <Field label="Position size">
         <input className={inputClass} inputMode="numeric" value={quantity} onChange={(e) => setQuantity(e.target.value)} aria-label="Contracts" />
       </Field>
-      <Field label="Expected credit" hint="Per spread: the order's limit credit and the risk check. Must be below the width.">
+      <Field label="Expected credit">
         <input className={inputClass} inputMode="decimal" value={credit} onChange={(e) => setCredit(e.target.value)} aria-label="Expected credit" />
       </Field>
-      <Field label="Final price (%)" hint="Where the price ladder ends, as a percent of the way from the mid to the bid/ask (100 = the full bid/ask). With live quotes the order walks there in steps (SmartPricing); the last price waits 2 minutes, then cancels.">
+      <Field label="Final price (%)">
         <input className={inputClass} inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} aria-label="Open price percent" />
       </Field>
     </Shell>
   );
 }
 
-/** "Close Position". */
-export function CloseEditor({ direction, ctx, onClose }: { direction: Direction; ctx: BotContext; onClose: () => void }) {
-  const cfg = ctx.data.config;
-  const closing = direction === "bullish" ? "call" : "put";
-  const [percent, setPercent] = useState(cfg ? String(cfg.closePricePercent ?? 100) : "100");
-  const { busy, save } = useSave(ctx, onClose);
-  if (!cfg) return <NeedsInputs ctx={ctx} onClose={onClose} />;
+const SMART_MODES: { mode: SmartPricingMode; label: string }[] = [
+  { mode: "normal", label: "Normal - up to 4 prices, 10 seconds each" },
+  { mode: "fast", label: "Fast - up to 3 prices, 5 seconds each" },
+  { mode: "patient", label: "Patient - up to 5 prices, 20 seconds each" },
+  { mode: "off", label: "Off - 1 limit price" },
+];
 
+/** Option Alpha's SmartPricing dialog: the ladder preset and the final price. Both are the bot's real settings. */
+function SmartPricingModal({ mode, percent, onApply, onClose }: { mode: SmartPricingMode; percent: string; onApply: (mode: SmartPricingMode, percent: string) => void; onClose: () => void }) {
+  const [m, setM] = useState(mode);
+  const [pct, setPct] = useState(percent);
+  const bad = !(num(pct) > 0 && num(pct) <= 100);
   return (
-    <Shell
-      title="Close position"
-      ctx={ctx}
-      onClose={onClose}
-      footer={
-        <button className={`${buttonClass.primary} w-full`} disabled={busy} onClick={() => save({ closePricePercent: num(percent) })}>
-          {busy ? "Saving..." : "Save"}
-        </button>
-      }
-    >
-      <div className="space-y-2">
-        <Row label="Position" value={`${cfg.underlying}, short ${closing} spread`} />
-        <Row label="Quantity" value="100% of position" />
+    <Modal title="SmartPricing" onClose={onClose} footer={<button className={`${buttonClass.primary} px-8`} disabled={bad} onClick={() => onApply(m, pct)}>Save</button>}>
+      <div className="space-y-5">
+        <p className="text-sm text-muted">The bot places timed, limit orders traversing the bid/ask spread to the final price set below.</p>
+        <select className={inputClass} value={m} onChange={(e) => setM(e.target.value as SmartPricingMode)} aria-label="SmartPricing">
+          {SMART_MODES.map((o) => (
+            <option key={o.mode} value={o.mode}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <div>
+          <div className="text-sm font-semibold">Final Price</div>
+          <p className="mt-1 text-sm text-muted">The price for the final order placed by your bot: the worst price it will accept when closing. The last price waits for the order timeout, then cancels.</p>
+          <div className="mt-3 flex items-center gap-2 text-sm">
+            <input className={`${inputClass} !w-24`} inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} aria-label="Final price percent" />
+            <span>% of bid/ask spread</span>
+          </div>
+          {bad && <p className="mt-2 text-xs text-down">Enter a percent above 0, up to 100.</p>}
+        </div>
       </div>
-      <Field label="Final price (%)" hint="Where the closing ladder ends, as a percent of the way from the mid to the bid/ask. The engine waits for the confirmed fill before opening the other side.">
-        <input className={inputClass} inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} aria-label="Close price percent" />
-      </Field>
-    </Shell>
+    </Modal>
   );
 }
 
-function FixedStep({ title, text, onClose }: { title: string; text: string; onClose: () => void }) {
+/** "Close Position", laid out like Option Alpha's form. Price (SmartPricing and the final price) is the bot's own close setting;
+ * Memo and Tags are written on the position this trigger closes. The position is the opposite side's spread and the quantity is all of it. */
+export function CloseEditor({ direction, ctx, onClose }: { direction: Direction; ctx: BotContext; onClose: () => void }) {
+  const cfg = ctx.data.config;
+  const spread = direction === "bullish" ? "Short call spread" : "Short put spread";
+  const saved = ctx.data.bot.closeSettings?.[direction];
+  const [percent, setPercent] = useState(cfg ? String(cfg.closePricePercent ?? 100) : "100");
+  const [mode, setMode] = useState<SmartPricingMode>(cfg?.smartPricing ?? "normal");
+  const [memo, setMemo] = useState(saved?.memo ?? "");
+  const [tags, setTags] = useState((saved?.tags ?? []).join(", "));
+  const [pricing, setPricing] = useState(false);
+  const [lookup, setLookup] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!cfg) return <NeedsInputs ctx={ctx} onClose={onClose} />;
+
+  const save = async () => {
+    setBusy(true);
+    const ok = await ctx.patch(
+      { inputs: inputsWith(cfg, { closePricePercent: num(percent), smartPricing: mode }), closeSettings: { [direction]: { memo, tags: tags.split(",").map((t) => t.trim()).filter(Boolean) } } },
+      "Saved to the bot's settings. It applies to the next signal.",
+    );
+    setBusy(false);
+    if (ok) onClose();
+  };
+
   return (
-    <Drawer title={title} onClose={onClose} footer={<button className={`${buttonClass.secondary} w-full`} onClick={onClose}>Close</button>}>
-      <p className="text-sm text-muted">{text}</p>
-    </Drawer>
+    <>
+      <Shell title="Close Position" ctx={ctx} onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy || !(num(percent) > 0 && num(percent) <= 100)} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
+        <div className="grid grid-cols-[5.5rem_1fr] items-center gap-x-3 gap-y-5 text-sm">
+          <span>Position</span>
+          <button onClick={() => setLookup(true)} className="inline-flex w-fit max-w-full items-center gap-2 rounded-lg border border-dashed border-accent/50 bg-accent/5 px-3 py-1.5 text-accent" title="Open the position lookup">
+            <IconLink width={14} height={14} className="shrink-0" />
+            <span className="truncate">{`Position (${cfg.underlying}, ${spread})`}</span>
+          </button>
+          <span>Price</span>
+          <button onClick={() => setPricing(true)} className={`${inputClass} flex items-center justify-between text-left`} aria-label="Price">
+            <span>{percent}% of bid/ask</span>
+            <span className="text-faint">▾</span>
+          </button>
+          <span>Quantity</span>
+          <select className={inputClass} value="100" onChange={() => undefined} aria-label="Quantity">
+            <option value="100">100% of position</option>
+          </select>
+          <span>Memo</span>
+          <textarea className={`${inputClass} min-h-24`} value={memo} onChange={(e) => setMemo(e.target.value)} aria-label="Memo" maxLength={500} />
+          <span>Tags</span>
+          <div>
+            <input className={inputClass} value={tags} onChange={(e) => setTags(e.target.value)} aria-label="Tags" />
+            <div className="mt-1 text-xs text-faint">Added immediately after the trade is filled. Separate with commas.</div>
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-sm font-semibold">Options</div>
+          <label className="flex items-center gap-2 text-sm text-faint" title="Not applicable: a spread is closed as one multi-leg order, and NDX options are cash settled.">
+            <input type="checkbox" disabled /> Discard expiring OTM long leg(s) with no bid price
+          </label>
+        </div>
+      </Shell>
+      {pricing && (
+        <SmartPricingModal
+          mode={mode}
+          percent={percent}
+          onApply={(m, p) => {
+            setMode(m);
+            setPercent(p);
+            setPricing(false);
+          }}
+          onClose={() => setPricing(false)}
+        />
+      )}
+      {lookup && (
+        <Drawer title="Position Lookup" onClose={() => setLookup(false)} footer={<button className={`${buttonClass.secondary} w-full`} onClick={() => setLookup(false)}>Close</button>}>
+          <div className="space-y-4 text-sm">
+            <p className="text-muted">Finds the positions that match these filters:</p>
+            <Row label="Symbol" value={cfg.underlying} />
+            <Row label="Position Type" value={spread} />
+          </div>
+        </Drawer>
+      )}
+    </>
+  );
+}
+
+/** A position check on the canvas: "Bot has <op> <count> with <type> type and <status> status". Saved on the bot, for this trigger,
+ * and read by the engine at that step on the next signal. This bot only holds short put and short call spreads, so any other type
+ * counts zero positions. `slot`: "close" is the check in front of Close Position (the opposite side), "open" the one in front of Open
+ * (the wanted side: yes = already held, so nothing is opened). Unedited, the open check follows Settings > Safeguards > Per type. */
+export function PositionCheckEditor({ slot, direction, type, ctx, onClose }: { slot: CheckSlot; direction: Direction; type: string; ctx: BotContext; onClose: () => void }) {
+  const saved = ctx.data.bot.positionChecks?.[direction]?.[slot];
+  const fallback = defaultCheck(slot === "open" ? ctx.data.limits.maxPositionsPerType : 1);
+  const [check, setCheck] = useState<PositionCheck>(saved ?? fallback);
+  const [busy, setBusy] = useState(false);
+  const save = async (value: PositionCheck | null) => {
+    setBusy(true);
+    const ok = await ctx.patch({ positionChecks: { [direction]: { [slot]: value } } }, value ? "Saved to the bot's settings. It applies to the next signal." : "Back to the default check.");
+    setBusy(false);
+    if (ok) onClose();
+  };
+  const select = <T extends string | number>(value: T, onChange: (v: string) => void, options: readonly T[], label: string, text?: (v: T) => string) => (
+    <select className={`${inputClass} !w-auto`} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {text ? text(o) : o}
+        </option>
+      ))}
+    </select>
+  );
+  return (
+    <Shell
+      title="Decision"
+      ctx={ctx}
+      onClose={onClose}
+      footer={
+        <div className="space-y-2">
+          <button className={`${buttonClass.primary} w-full`} disabled={busy} onClick={() => save(check)}>
+            {busy ? "Saving..." : "Save"}
+          </button>
+          {saved && (
+            <button className={`${buttonClass.secondary} w-full`} disabled={busy} onClick={() => save(null)}>
+              Back to the default{slot === "open" ? ` (${positionsWord(ctx.data.limits.maxPositionsPerType)}, the Per type safeguard)` : ""}
+            </button>
+          )}
+        </div>
+      }
+    >
+      <Field
+        label="Follow the “Yes” path if…"
+      >
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span>Bot has</span>
+          {select(check.op, (v) => setCheck({ ...check, op: v as CheckOp }), CHECK_OPS, "Operator")}
+          {select(check.count, (v) => setCheck({ ...check, count: Number(v) }), Array.from({ length: CHECK_MAX_COUNT + 1 }, (_, n) => n), "Positions", (n) => positionsWord(n))}
+          <span>with</span>
+          {select(check.type ?? type, (v) => setCheck({ ...check, type: v as CheckType }), CHECK_TYPES, "Type")}
+          <span>type and</span>
+          {select(check.status, (v) => setCheck({ ...check, status: v as CheckStatus }), CHECK_STATUSES, "Status")}
+          <span>status</span>
+        </div>
+      </Field>
+    </Shell>
   );
 }
 
@@ -238,14 +379,9 @@ export function liveNodeEditor({ step, direction, ctx, onClose }: { step: Step; 
     const t = step.conditions?.[0]?.templateId;
     if (t === "bot_time") return <TimeWindowEditor key={step.id} ctx={ctx} onClose={onClose} />;
     if (t === "bot_has_type") {
-      return (
-        <FixedStep
-          key={step.id}
-          title="Position check"
-          text="Fixed by the engine: if a spread of the opposite type is held it is closed (and the close confirmed) before anything opens, and the wanted side is only opened when it isn't already held. How many positions the bot may hold is set under Settings > Safeguards."
-          onClose={onClose}
-        />
-      );
+      const wantedType = direction === "bullish" ? "Short put spread" : "Short call spread";
+      const type = step.conditions?.[0]?.values.type ?? wantedType;
+      return <PositionCheckEditor key={step.id} slot={type === wantedType ? "open" : "close"} direction={direction} type={type} ctx={ctx} onClose={onClose} />;
     }
   }
   return null;
@@ -279,8 +415,7 @@ export function MonitorCloseEditor({ monitor, ctx, onClose }: { monitor: Monitor
           <span>Quantity</span>
           <span className="rounded-lg border border-line bg-surface-2/60 px-3 py-2.5">100% of position</span>
         </div>
-        <p className="-mt-2 text-xs text-muted">Price and quantity are the bot&apos;s own close settings (Final price, SmartPricing); they aren&apos;t edited here.</p>
-        <Field label="Memo" hint="Written on the position this monitor closes.">
+        <Field label="Memo">
           <textarea className={`${inputClass} min-h-24`} value={memo} onChange={(e) => setMemo(e.target.value)} aria-label="Memo" maxLength={500} />
         </Field>
         <Field label="Tags" hint="Added immediately after the trade is filled. Separate with commas.">

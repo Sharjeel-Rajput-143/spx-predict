@@ -24,6 +24,8 @@ export interface BotDetailData {
     notes: string;
     triggers: { bullish: boolean; bearish: boolean };
     alwaysOn?: { bullish: boolean; bearish: boolean };
+    positionChecks?: import("@/lib/automation/positionChecks").PositionChecks;
+    closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
     monitors?: Partial<Record<"bullishClose" | "bearishClose", { enabled: boolean; memo?: string; tags?: string[] }>>;
     alerts: BotAlerts;
     safeguards: BotSafeguards;

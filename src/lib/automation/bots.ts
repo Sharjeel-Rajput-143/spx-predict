@@ -1,4 +1,5 @@
 import "server-only";
+import { validateCheck, type PositionCheck, type PositionChecks } from "./positionChecks";
 import crypto from "node:crypto";
 import { ownerUserId } from "@/lib/auth/users";
 import { currentUserId } from "./userContext";
@@ -469,6 +470,10 @@ export interface BotPatch {
   safeguards?: BotSafeguards;
   triggers?: { bullish: boolean; bearish: boolean };
   alwaysOn?: { bullish: boolean; bearish: boolean };
+  /** Replaces the check(s) given for each direction; a direction or slot left out keeps what it had. `null` returns a slot to the default. */
+  positionChecks?: Partial<Record<"bullish" | "bearish", Partial<Record<"close" | "open", PositionCheck | null>>>>;
+  /** Replaces the Memo and Tags of the direction(s) given. */
+  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
   monitors?: Partial<Record<MonitorKey, Partial<CloseMonitorSettings>>>;
   alerts?: Partial<Bot["alerts"]>;
   accountId?: string;
@@ -528,6 +533,34 @@ export function updateBot(botId: string, patch: BotPatch): Bot {
       };
     }
     next.monitors = merged;
+  }
+  if (patch.positionChecks !== undefined) {
+    const merged: PositionChecks = { bullish: { ...record.positionChecks?.bullish }, bearish: { ...record.positionChecks?.bearish } };
+    for (const dir of ["bullish", "bearish"] as const) {
+      for (const slot of ["close", "open"] as const) {
+        const change = patch.positionChecks[dir]?.[slot];
+        if (change === undefined) continue;
+        if (change === null) {
+          delete merged[dir]![slot];
+          continue;
+        }
+        const checked = validateCheck(change);
+        if (!checked.ok) throw new Error(checked.reason);
+        merged[dir]![slot] = checked.check;
+      }
+    }
+    next.positionChecks = merged;
+  }
+  if (patch.closeSettings !== undefined) {
+    const merged: NonNullable<Bot["closeSettings"]> = { ...record.closeSettings };
+    for (const dir of ["bullish", "bearish"] as const) {
+      const change = patch.closeSettings[dir];
+      if (!change) continue;
+      const memo = typeof change.memo === "string" ? change.memo.trim().slice(0, 500) : "";
+      const tags = cleanTags(change.tags);
+      merged[dir] = { ...(memo ? { memo } : {}), ...(tags.length ? { tags } : {}) };
+    }
+    next.closeSettings = merged;
   }
   if (patch.alwaysOn !== undefined) next.alwaysOn = { bullish: patch.alwaysOn.bullish !== false, bearish: patch.alwaysOn.bearish !== false };
   if (patch.alerts !== undefined) next.alerts = { ...DEFAULT_ALERTS, ...record.alerts, ...patch.alerts };

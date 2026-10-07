@@ -35,9 +35,9 @@ function ctxFor(over: { config?: BotStaticConfig | null; activePositions?: numbe
   return {
     data: {
       config: over.config === undefined ? config : over.config,
-      limits: { hours: { start: "09:35", end: "15:55", timezone: "America/New_York" } },
+      limits: { hours: { start: "09:35", end: "15:55", timezone: "America/New_York" }, maxPositionsPerType: 1 },
       counts: { activePositions: over.activePositions ?? 0 },
-      bot: { configError: "NDX bot cannot start - required setting not set: X" },
+      bot: { configError: "NDX bot cannot start - required setting not set: X", safeguards: {} },
     },
     reload: noop,
     notify: noop,
@@ -61,23 +61,44 @@ const timeStep = () => stepOf("decision", (s) => s.conditions?.[0]?.templateId =
 const holdsStep = () => stepOf("decision", (s) => s.conditions?.[0]?.templateId === "bot_has_type");
 
 describe("live editors on a built-in flow", () => {
-  it("each editable node opens its own editor; a position check is explained, not editable", () => {
+  it("each editable node opens its own editor, and both position checks are editable", () => {
     const ctx = ctxFor();
     const render = (step: Step) => html(<>{liveNodeEditor({ step, direction: "bullish", ctx, onClose: noop })}</>);
     expect(render(timeStep())).toContain("Market time window");
     expect(render(stepOf("open_position"))).toContain("Open short put spread");
-    expect(render(stepOf("close_position"))).toContain("Close position");
-    const fixed = render(holdsStep());
-    expect(fixed).toContain("Position check");
-    expect(fixed).toContain("Fixed by the engine");
-    expect(fixed).not.toContain(">Save<");
+    expect(render(stepOf("close_position"))).toContain("Close Position");
+    const wanted = render(stepOf("decision", (x) => x.conditions?.[0]?.templateId === "bot_has_type" && x.conditions[0].values.type === "Short put spread"));
+    expect(wanted).toContain("Decision");
+    expect(wanted).toContain("Short put spread");
+    expect(wanted).toContain(">Save<");
+    const opposite = render(holdsStep());
+    expect(opposite).toContain("Follow the");
+    expect(opposite).toContain("Short call spread");
+    expect(opposite).toContain(">Save<");
   });
 
-  it("says plainly that the values are live, and warns when a position is open", () => {
+  it("the Bearish flow edits its own side (calls) and the opposite side (puts) the same way", () => {
+    const ctx = ctxFor();
+    const pick = (type: string) => {
+      let found: Step | undefined;
+      walk(builtInFlow("bearish", config), (x) => {
+        if (!found && x.kind === "decision" && x.conditions?.[0]?.templateId === "bot_has_type" && x.conditions[0].values.type === type) found = x;
+      });
+      return found!;
+    };
+    const render = (step: Step) => html(<>{liveNodeEditor({ step, direction: "bearish", ctx, onClose: noop })}</>);
+    const wanted = render(pick("Short call spread"));
+    expect(wanted).toContain("Short call spread");
+    expect(wanted).toContain(">Save<");
+    const opposite = render(pick("Short put spread"));
+    expect(opposite).toContain("Short put spread");
+    expect(opposite).toContain(">Save<");
+  });
+
+  it("carries no explanatory banners: the values are live without being announced", () => {
     const out = html(<TimeWindowEditor ctx={ctxFor({ activePositions: 1 })} onClose={noop} />);
-    expect(out).toContain("Live: these values are this bot&#x27;s real settings");
-    expect(out).toContain("It keeps the values it was opened with.");
-    expect(html(<TimeWindowEditor ctx={ctxFor()} onClose={noop} />)).not.toContain("It keeps the values");
+    expect(out).not.toContain("Live:");
+    expect(out).not.toContain("It keeps the values");
   });
 
   it("the time editor offers the 5-minute marks and starts on the bot's window", () => {
@@ -107,9 +128,12 @@ describe("live editors on a built-in flow", () => {
 
   it("the close editor shows the close side and its price", () => {
     const out = html(<CloseEditor direction="bullish" ctx={ctxFor()} onClose={noop} />);
-    expect(out).toContain("NDX, short call spread");
+    expect(out).toContain("Position (NDX, Short call spread)");
     expect(out).toContain("100% of position");
-    expect(out).toContain('aria-label="Close price percent" value="100"');
+    expect(out).toContain("100% of bid/ask");
+    expect(out).toContain('aria-label="Memo"');
+    expect(out).toContain('aria-label="Tags"');
+    expect(out).toContain(">Save<");
   });
 
   it("a bot without its inputs says so instead of offering fields", () => {

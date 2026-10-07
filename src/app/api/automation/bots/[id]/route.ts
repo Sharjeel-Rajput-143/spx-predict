@@ -88,6 +88,8 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       notes: record.notes ?? "",
       triggers: record.triggers ?? { bullish: true, bearish: true },
       alwaysOn: record.alwaysOn ?? { bullish: true, bearish: true },
+      positionChecks: record.positionChecks ?? {},
+      closeSettings: record.closeSettings ?? {},
       monitors: record.monitors ?? {},
       alerts: { ...DEFAULT_ALERTS, ...record.alerts },
       safeguards: record.safeguards ?? {},

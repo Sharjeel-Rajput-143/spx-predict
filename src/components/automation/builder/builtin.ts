@@ -1,12 +1,13 @@
+import { defaultCheck, positionsWord, type PositionCheck } from "@/lib/automation/positionChecks";
 import type { BotStaticConfig } from "@/lib/automation/types";
 import { appendStep, cloneStep, newCondition, newStep, type Condition, type Step } from "./model";
 
 const TYPE_NAME = { put: "Short put spread", call: "Short call spread" } as const;
 const TYPE_KEY = { put: "short_put_spread", call: "short_call_spread" } as const;
 
-const holds = (type: "put" | "call", count = 1): Condition => {
+const holds = (type: "put" | "call", check: PositionCheck = defaultCheck()): Condition => {
   const c = newCondition("bot_has_type");
-  return { ...c, values: { ...c.values, type: TYPE_NAME[type], count: `${count} position${count === 1 ? "" : "s"}` } };
+  return { ...c, values: { ...c.values, op: check.op, type: check.type ?? TYPE_NAME[type], count: positionsWord(check.count), status: check.status } };
 };
 
 export interface FlowWindow {
@@ -26,11 +27,11 @@ export function clock12(hhmm: string): string {
  * The engine's real logic for one signal direction, drawn as a flow so it can
  * be read alongside flows you design: inside market hours -> close the
  * opposite side if held -> open the wanted side unless already held.
- * "Already holding the wanted side?" counts as many positions as the bot's per-type limit allows (`perTypeLimit`), so it
- * reads the same as the check the engine runs. (Duplicate protection, the position/daily/allocation limits, the strike
+ * "Already holding the wanted side?" reads the same as the check the engine runs: the checks edited on the canvas (`checks`), or by
+ * default as many positions as the bot's per-type limit allows (`perTypeLimit`). (Duplicate protection, the position/daily/allocation limits, the strike
  * checks and the error failsafe apply on top of this and aren't drawn, as in Option Alpha, where they are bot-level safeguards.)
  */
-export function builtInFlow(direction: "bullish" | "bearish", cfg: BotStaticConfig | null, window?: FlowWindow, perTypeLimit = 1): Step[] {
+export function builtInFlow(direction: "bullish" | "bearish", cfg: BotStaticConfig | null, window?: FlowWindow, perTypeLimit = 1, checks: { close?: PositionCheck; open?: PositionCheck } = {}): Step[] {
   const wanted = direction === "bullish" ? "put" : "call";
   const opposite = wanted === "put" ? "call" : "put";
   const offset = cfg ? (wanted === "put" ? cfg.putShortOffset : cfg.callShortOffset) : 0;
@@ -49,12 +50,12 @@ export function builtInFlow(direction: "bullish" | "bearish", cfg: BotStaticConf
   };
 
   /** "Already holding the wanted side? yes: do nothing. no: open it." Each use gets fresh step ids. */
-  const holdsWanted = (): Step => ({ ...newStep("decision", [holds(wanted, perTypeLimit)]), yes: [], no: [cloneStep(open)] });
+  const holdsWanted = (): Step => ({ ...newStep("decision", [holds(wanted, checks.open ?? defaultCheck(perTypeLimit))]), yes: [], no: [cloneStep(open)] });
 
   const timeCondition = newCondition("bot_time");
   if (window) timeCondition.values = { ...timeCondition.values, from: clock12(window.start), to: clock12(window.end) };
   const hours = newStep("decision", [timeCondition]);
-  const hasOpposite = newStep("decision", [holds(opposite)]);
+  const hasOpposite = newStep("decision", [holds(opposite, checks.close)]);
   const close = newStep("close_position");
   close.config = { ...close.config, type: TYPE_KEY[opposite], symbol: cfg?.underlying ?? "SPX", price: `${cfg?.closePricePercent ?? 100}% of bid/ask, waits for the fill`, qty: "100% of position" };
 

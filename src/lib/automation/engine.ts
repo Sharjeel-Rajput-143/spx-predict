@@ -29,6 +29,7 @@ import {
 } from "./safeguards";
 import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
 import { describePlan, maxRisk, planStrikes, roundingWords, validateStrikes, type StrikePair, type StrikePlan } from "./strikes";
+import { checkHolds, defaultCheck, describeCheck, isDefaultForm, matching, positionsWord, typeLabel } from "./positionChecks";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
 import { describeTradingTime, describeWindow, easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
 import type { BotStaticConfig, BrokerExecutor, SpreadQuoteRequest, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
@@ -492,13 +493,18 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     }
   }
 
+  // The check in front of the Close step, as edited on the canvas (unset: one or more of the opposite side, any status).
+  const closeCheck = bot.positionChecks?.[direction]?.close ?? defaultCheck();
+  const closeSide = typeLabel(opposite);
+  const closeCounted = matching(activePositionsForBot(botId), closeCheck, closeSide).length;
+  const closeYes = checkHolds(closeCheck, closeCounted);
   rec.decision(
-    `Bot has exactly or more than 1 position with ${typeName(opposite)} type and any status`,
-    opposingPositions.length > 0,
-    `${opposingPositions.length} position${opposingPositions.length === 1 ? "" : "s"}`,
+    isDefaultForm(closeCheck, closeSide) ? `Bot has exactly or more than ${positionsWord(closeCheck.count)} with ${typeName(opposite)} type and any status` : describeCheck(closeCheck, closeSide),
+    closeYes,
+    positionsWord(closeCounted),
   );
 
-  for (const position of opposingPositions) {
+  for (const position of closeYes ? opposingPositions : []) {
     if (closeOnly) log("bot_off_close_only", "Bot off, close only: handling the opposite position; nothing will be opened.", { positionId: position.id });
     const inFlight = ordersStore.query(
       (o) => o.positionId === position.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled"),
@@ -541,7 +547,16 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     }
 
     const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, pricingFor(staticConfig, "close", options.ladderStepMs));
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
+    // The Memo and Tags set on this trigger's Close Position step go on the position it closed.
+    const stepNote = bot.closeSettings?.[direction];
+    if (stepNote?.memo || stepNote?.tags?.length) {
+      const now2 = positionsStore.get(position.id) ?? position;
+      positionsStore.update(position.id, {
+        ...(stepNote.memo ? { notes: [now2.notes, stepNote.memo].filter(Boolean).join("\n") } : {}),
+        ...(stepNote.tags?.length ? { tags: [...new Set([...(now2.tags ?? []), ...stepNote.tags])] } : {}),
+      });
+    }
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [...closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), ...(stepNote?.memo ? [{ label: "Memo", value: stepNote.memo }] : []), ...(stepNote?.tags?.length ? [{ label: "Tags", value: stepNote.tags.join(", ") }] : [])], steps: result.steps, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
@@ -691,13 +706,18 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish(outcome, `${reason} The bot has been switched off; switch it back on once you've checked it.`, { ...detail, botSwitchedOff: true });
   };
 
-  const existingWanted = activePositionsForBot(botId, wanted);
-  rec?.decision(
-    `Bot holds fewer than ${limits.maxPositionsPerType} ${typeName(wanted)} position${limits.maxPositionsPerType === 1 ? "" : "s"}`,
-    existingWanted.length < limits.maxPositionsPerType,
-    `${existingWanted.length} position${existingWanted.length === 1 ? "" : "s"}`,
-  );
-  if (existingWanted.length >= limits.maxPositionsPerType) {
+  // The check in front of the Open step, as edited on the canvas (unset: already held up to the bot's per-type limit).
+  // A position placed by hand always uses the per-type limit; only a signal follows the canvas.
+  const openCheck = (!ctx.manual && bot.positionChecks?.[wanted === "short_put_spread" ? "bullish" : "bearish"]?.open) || defaultCheck(limits.maxPositionsPerType);
+  const wantedSide = typeLabel(wanted);
+  const existingWanted = matching(activePositionsForBot(botId), openCheck, wantedSide);
+  const alreadyHeld = checkHolds(openCheck, existingWanted.length);
+  if (isDefaultForm(openCheck, wantedSide)) {
+    rec?.decision(`Bot holds fewer than ${openCheck.count} ${typeName(wanted)} position${openCheck.count === 1 ? "" : "s"}`, !alreadyHeld, positionsWord(existingWanted.length));
+  } else {
+    rec?.decision(describeCheck(openCheck, wantedSide), alreadyHeld, positionsWord(existingWanted.length));
+  }
+  if (alreadyHeld) {
     return finish("already_in_position", "An active position of the wanted type already exists.");
   }
 

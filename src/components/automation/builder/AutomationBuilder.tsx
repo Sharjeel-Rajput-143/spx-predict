@@ -292,10 +292,12 @@ export function AutomationBuilder({
         </aside>
 
         <main className="flex-1 overflow-auto p-6">
-          <p className={cn("mb-4 rounded-lg px-3 py-2 text-xs", readOnly ? "bg-accent/10 text-accent" : "bg-amber-500/10 text-amber-500")}>
-            {note ??
-              "Preview: flows you save here live in this browser and aren't connected to the signal engine yet - they can't place orders or send anything."}
-          </p>
+          {(note || !readOnly) && (
+            <p className={cn("mb-4 rounded-lg px-3 py-2 text-xs", readOnly ? "bg-accent/10 text-accent" : "bg-amber-500/10 text-amber-500")}>
+              {note ??
+                "Preview: flows you save here live in this browser and aren't connected to the signal engine yet - they can't place orders or send anything."}
+            </p>
+          )}
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Start automation</div>
           <div className="mt-2">
             <FlowList steps={steps} parentId={null} lane="root" ctx={handlers} />
