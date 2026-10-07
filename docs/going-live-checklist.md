@@ -14,7 +14,7 @@ Written from Option Alpha's own documentation (docs.optionalpha.com: SmartPricin
 | Position limit, daily limit, allocation, leg-overlap guards | Same, per bot |
 | Expiring ITM positions: setting "calculate P/L from the underlying close" (the owner's choice) | Never auto-closes; marks positions expired in an end-of-day sweep. Same effect |
 | Assignment is not supported | Not an issue for cash-settled European index options (SPX, NDX): nothing to assign |
-| Close Monitor automations (sweep for wrong-side positions) | Deliberately not copied. A future version must compare against the latest confirmed signal |
+| Close Monitor automations (sweep for wrong-side positions) | The Bullish Close Monitor is built, off by default, and compares against the latest confirmed signal so it can't fight the flip (see known-limitations). Originally not copied. Earlier note: a version must compare against the latest confirmed signal |
 | Exit options, entry/position filters, other strike and sizing modes | Not built; the live bot uses none of them |
 | Broker keeps the books | **Built:** a broker check (reconcile) and crash recovery read the broker back; neither trades |
 

@@ -36,7 +36,7 @@ It sends GET requests only and refuses any host but the sandbox. It prints: the 
 Start the app, open **Settings > Trading Accounts**: the "Broker account" card shows the sandbox account's balance. The Automation status page shows a blue "Tradier SANDBOX (paper money)" banner.
 
 ## 4. Create the webhooks
-**Settings > Webhooks > Your webhooks**: create *BullishNDX* (NDX bot, bullish) and *BearishNDX* (NDX bot, bearish). Each gets a secret URL like `https://<your-address>/hook/<48 characters>`. Use **Send a test call** on each with today's NDX level: with dry run on it shows the SmartPricing ladder it would use, and sends nothing.
+**Settings > Webhooks > Your webhooks**: create *BullishNDX* and *BearishNDX* (a name is all it takes; they start unattached). Then open the NDX Bias Bot > Settings > Automations, click the **gear** on the **Bullish** trigger, choose BullishNDX in the dropdown and **Save**; do the same for the **Bearish** trigger with BearishNDX. An attachment stays until you change or detach it, and each change is written to the bot's log. The panel shows the URL masked (`https://<your-address>/hook/••••••••••••ab12`): **Reveal** or **Copy** fetches the full one for TradingView. One webhook, one trigger: a webhook already on the other trigger shows as unavailable. **Test hook** (in the panel) sends a test call with today's NDX level: with dry run on it shows the SmartPricing ladder it would use, and sends nothing.
 
 ## 5. First paper order
 Turn `AUTOMATION_DRY_RUN` off and restart. **Send a test call** on BullishNDX during market hours (9:35am-3:55pm ET, a weekday). Check, in order:

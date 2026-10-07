@@ -19,6 +19,12 @@ Everything below runs on the **mock executor**. No broker, no real orders, no ou
 - An **Activity alerts** list (opened, closed, warning, error). Email is off.
 - Empty tables: Active positions, Closed and expired positions, Orders, and Alerts and the decision for each.
 
+## Attach the webhooks (once)
+
+1. **Settings > Webhooks > Your webhooks**: create *BullishNDX* and *BearishNDX* (a name only; they start unattached).
+2. Open the **NDX Bias Bot > Settings > Automations**. Click the **gear** on the **Bullish** trigger, pick *BullishNDX* in the dropdown, **Save**. Do the same on the **Bearish** trigger with *BearishNDX*. A webhook already on the other trigger shows as unavailable (one webhook, one trigger).
+3. The panel shows the URL masked: **Reveal** or **Copy** gets the full one for TradingView. **Test hook** sends a test call through the real path. **Detach** removes it. Each change is in the bot's Log.
+
 ## The script
 
 1. **Bullish alert.** On the NDX card, click **Bullish - short put spread**.
