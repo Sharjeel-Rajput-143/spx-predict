@@ -1,5 +1,6 @@
 import "server-only";
 import { after } from "next/server";
+import type { CollectionName } from "./storage/repository";
 import { storage } from "./store";
 import { SESSION_COOKIE_NAME, sessionUserId } from "./session";
 import { runAs } from "./userContext";
@@ -19,11 +20,14 @@ const DEFERRED = Symbol.for("spx.deferredWork");
 
 /** Marks a response whose real work is still going on: the answer goes out now, and the host is asked to keep the function
  * alive until the work is done (TradingView gives up on an alert after about 3 seconds, so a call is answered at once). */
-export function deferWork<R extends Response>(response: R, work: Promise<unknown> | undefined): R {
+export type Deferred = Promise<unknown> | (() => Promise<unknown>);
+/** `work` is either a promise already running, or a function started only after the answer has gone out (and its changes were saved). */
+export function deferWork<R extends Response>(response: R, work: Deferred | undefined): R {
   if (work) (response as unknown as Record<symbol, unknown>)[DEFERRED] = work;
   return response;
 }
-const deferredOf = (response: Response | undefined): Promise<unknown> | null => ((response as unknown as Record<symbol, Promise<unknown> | undefined> | undefined)?.[DEFERRED] ?? null);
+const deferredOf = (response: Response | undefined): Deferred | null => ((response as unknown as Record<symbol, Deferred | undefined> | undefined)?.[DEFERRED] ?? null);
+const start = (work: Deferred): Promise<unknown> => (typeof work === "function" ? work() : work);
 
 /** Runs `task` after the response, kept alive by the host where it can be (Next's after(); outside a request, just started). */
 function afterResponse(task: () => Promise<void>): void {
@@ -37,7 +41,12 @@ function afterResponse(task: () => Promise<void>): void {
 /** A page that polls may use records up to this old, so it doesn't load the whole database every few seconds. */
 const READ_FRESH_MS = 2_000;
 
-export function withStorage<A extends unknown[]>(handler: (...args: A) => Response | Promise<Response>): (...args: A) => Promise<Response> {
+export interface WithStorageOptions {
+  /** Load only these collections before the handler runs, instead of everything (the handler must `loadEverything()` before it touches the rest). For a call that has to be answered fast. */
+  load?: CollectionName[];
+}
+
+export function withStorage<A extends unknown[]>(handler: (...args: A) => Response | Promise<Response>, options: WithStorageOptions = {}): (...args: A) => Promise<Response> {
   /** The handler, run as the signed-in user: it then sees and changes only that user's records. */
   const asUser = (args: A): Promise<Response> | Response => {
     const req = args[0] as { cookies?: { get(name: string): { value: string } | undefined } } | undefined;
@@ -49,7 +58,7 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
       const response = await asUser(args);
       const work = deferredOf(response);
       // Records in files or a temporary folder: nothing to save afterwards, but on Vercel the function must be kept alive for the work.
-      if (work && process.env.VERCEL) afterResponse(async () => void (await work.catch(() => undefined)));
+      if (work && process.env.VERCEL) afterResponse(async () => void (await start(work).catch(() => undefined)));
       return response;
     };
   }
@@ -64,7 +73,8 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
     try {
       const method = (args[0] as { method?: string } | undefined)?.method ?? "GET";
       try {
-        await storage.hydrate?.(method === "GET" ? READ_FRESH_MS : 0);
+        if (options.load && storage.hydrateCollections) await storage.hydrateCollections(options.load);
+        else await storage.hydrate?.(method === "GET" ? READ_FRESH_MS : 0);
       } catch (err) {
         return problem(err);
       }
@@ -89,7 +99,7 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
         held = true;
         afterResponse(async () => {
           try {
-            await work;
+            await start(work);
           } catch {
             /* the work records its own failures */
           }
@@ -116,4 +126,9 @@ export async function loadStorage(): Promise<void> {
   } catch {
     /* the page then shows what it has; the routes it calls report the problem */
   }
+}
+
+/** Loads every record. For work that carries on after a fast answer (it ran with only part of the records loaded). A no-op with files. */
+export async function loadEverything(): Promise<void> {
+  await storage.hydrate?.();
 }

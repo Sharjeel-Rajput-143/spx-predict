@@ -115,6 +115,50 @@ export class TursoBackend implements StorageBackend {
     s.ready = true;
   }
 
+  /** Runs a database call, creating the table first only if the database says it isn't there (saves a round trip on every cold start). */
+  private async withTable<T>(run: () => Promise<T>): Promise<T> {
+    const s = this.state;
+    if (s.ready) return run();
+    try {
+      const result = await run();
+      s.ready = true;
+      return result;
+    } catch (err) {
+      if (!/no such table/i.test(reason(err))) throw err;
+      await this.ensureTable();
+      return run();
+    }
+  }
+
+  /**
+   * Loads only some collections (one small query), leaving the others as they are. A TradingView call is answered with only what it needs
+   * to be recognised (the webhooks and the bots); everything else is loaded after the answer has gone out (`hydrate`).
+   */
+  async hydrateCollections(names: CollectionName[]): Promise<void> {
+    const s = this.state;
+    try {
+      if (s.pending.length > 0) await this.flush();
+      const marks = names.map(() => "?").join(", ");
+      const result = await this.withTable(() => this.client.execute({ sql: `SELECT collection, json FROM records WHERE collection IN (${marks}) ORDER BY rowid`, args: names }));
+      const fresh = new Map<CollectionName, unknown[]>(names.map((n) => [n, []]));
+      for (const row of result.rows) {
+        const list = fresh.get(String(row.collection) as CollectionName);
+        if (!list) continue;
+        try {
+          list.push(JSON.parse(String(row.json)));
+        } catch {
+          throw new StorageError("corrupt", `A ${String(row.collection)} record in the database is damaged (it is not valid JSON). Restore it from a backup; the engine will not carry on as if it were empty.`);
+        }
+      }
+      for (const [name, list] of fresh) s.data.set(name, list);
+      s.lastError = null;
+    } catch (err) {
+      const message = err instanceof StorageError ? err.message : `The database can't be reached (${reason(err)}). Check TURSO_DB_URL and TURSO_DB_TOKEN.`;
+      s.lastError = message;
+      throw err instanceof StorageError ? err : new StorageError("unwritable", message);
+    }
+  }
+
   /** Loads every record from the database into memory. `maxAgeMs`: keep a copy that is that fresh (for the page polling). */
   async hydrate(maxAgeMs = 0): Promise<void> {
     const s = this.state;
@@ -164,8 +208,7 @@ export class TursoBackend implements StorageBackend {
         : { sql: "DELETE FROM records WHERE collection = ? AND id = ?", args: [op.collection, op.id] },
     );
     try {
-      await this.ensureTable();
-      await this.client.batch(statements, "write");
+      await this.withTable(() => this.client.batch(statements, "write"));
       s.lastError = null;
     } catch (err) {
       s.pending.unshift(...ops);

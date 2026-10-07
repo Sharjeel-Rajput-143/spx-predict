@@ -32,6 +32,8 @@ export interface StorageBackend {
   readonly remote?: boolean;
   /** Remote only: load the records. `maxAgeMs` keeps a copy that is at least that fresh. */
   hydrate?(maxAgeMs?: number): Promise<void>;
+  /** Remote only: load just these collections (a fast first step; `hydrate` loads the rest later). */
+  hydrateCollections?(names: CollectionName[]): Promise<void>;
   /** Remote only: save what this request changed. */
   flush?(): Promise<void>;
   /** Forgets the in-memory copy, as after a restart. */

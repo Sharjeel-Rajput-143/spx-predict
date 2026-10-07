@@ -97,3 +97,13 @@ TradingView gives up on a webhook call after about 3 seconds ("request took too 
 
 - **A run the server stopped partway through.** A signal's run saves its step-by-step record when it ends. A signal accepted more than 10 minutes ago with no such record is logged as "Run interrupted" (an error alert; the bot is marked as needing attention). If it was a flip that closed one side and never opened the other, the message says so. The bot does not open the missing side by itself: the price has moved and the next signal may say otherwise. The scheduler looks every minute; on a host with no timer (Vercel) the next webhook call does.
 - **Old log entries.** Signals, their decisions and runs, alerts and error records older than `LOG_RETENTION_DAYS` (default 90; `0` keeps everything) are removed, at most once a day. Positions and their orders are never removed. Keeping the log small matters most on Vercel, where every request loads all the records.
+
+## Keeping the TradingView answer fast on Vercel
+
+TradingView gives up after about 3 seconds. Three things keep the answer inside that, measured on the live site (a call took 3.4 to 7.5 seconds before):
+
+- **The function runs next to the database.** `vercel.json` pins the functions to `bom1` (Mumbai), where the Turso database is (`aws-ap-south-1`). Before, the function ran in Washington and every database round trip crossed the world (about 250 ms each). If the database is ever moved, change the region in `vercel.json` to match it (a Turso database also lets you add a replica nearer to the function).
+- **The answer goes out first.** On a host whose records are in a database, a call is recognised from the webhook and the bot only (one small query), the minute's slot is saved, and the answer goes out. Loading the rest of the records, the live quote, the checks, the flip and the orders all happen behind the answer. The Log shows every call, including one the bot then refused.
+- **A call that never reached the bot is noticed.** If the server stops between the answer and the signal being saved, the webhook's minute was taken and no signal followed: after 10 minutes the Log says "Run interrupted", with an error alert, so a call can't vanish without a trace.
+
+The first call after a long idle still pays for a cold start of the function (a second or two). Calling `/login` every few minutes from an uptime checker keeps an instance warm if that matters.

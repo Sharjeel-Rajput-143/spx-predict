@@ -61,6 +61,37 @@ describe("two serverless instances sharing one database", () => {
     expect(c.repository<Row>("webhooks").all().map((r) => r.id).sort()).toEqual(["bear", "bull"]);
   });
 
+  it("can load just some collections first, and everything afterwards, without losing a change made in between", async () => {
+    const a = instance("a");
+    await a.hydrate();
+    a.repository<Row>("webhooks").insert({ id: "w", name: "hook" });
+    a.repository<Row>("signals").insert({ id: "s", name: "signal" });
+    a.repository<Row>("positions").insert({ id: "p", name: "position" });
+    await a.flush();
+
+    const b = instance("b");
+    await b.hydrateCollections(["webhooks"]); // a fast first step: one small query
+    expect(b.repository<Row>("webhooks").all().map((r) => r.id)).toEqual(["w"]);
+    expect(b.repository<Row>("signals").all()).toEqual([]); // not loaded yet
+    b.repository<Row>("webhooks").update("w", { name: "claimed" }); // a change made before the rest is loaded
+    await b.hydrate(); // loads the rest; saves the change first
+    expect(b.repository<Row>("signals").all().map((r) => r.id)).toEqual(["s"]);
+    expect(b.repository<Row>("positions").all().map((r) => r.id)).toEqual(["p"]);
+    expect(b.repository<Row>("webhooks").get("w")?.name).toBe("claimed");
+    await a.hydrate();
+    expect(a.repository<Row>("webhooks").get("w")?.name).toBe("claimed");
+  });
+
+  it("creates its table only when it finds none (no extra round trip on a cold start), and still works on an empty database", async () => {
+    const fresh = new TursoBackend({ url: `file:${path.join(dir, "fresh.sqlite")}`, instance: "fresh" });
+    await fresh.hydrateCollections(["webhooks"]); // the table does not exist yet: made, then read
+    fresh.repository<Row>("webhooks").insert({ id: "x", name: "first" });
+    await fresh.flush();
+    const other = new TursoBackend({ url: `file:${path.join(dir, "fresh.sqlite")}`, instance: "other" });
+    await other.hydrate();
+    expect(other.repository<Row>("webhooks").all().map((r) => r.id)).toEqual(["x"]);
+  });
+
   it("keeps the order records were added in, and keeps collections apart", async () => {
     const a = instance("a");
     await a.hydrate();
@@ -187,6 +218,47 @@ describe("through the app's own routes, as on Vercel", () => {
     expect(count("signals")).toBe(1);
     expect(count("decisions")).toBeGreaterThan(0);
     expect(count("runs")).toBe(1);
+    vi.doUnmock("@/lib/marketData/tickStore");
+  });
+
+  it("answers a TradingView call BEFORE the live quote has arrived, then finishes behind the answer and saves it all", async () => {
+    vi.resetModules();
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("AUTOMATION_STORAGE", "");
+    vi.stubEnv("TURSO_DB_URL", url);
+    vi.stubEnv("TURSO_DB_TOKEN", "test-token");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    // The quote only arrives once the test lets it: a call that waited for it could not be answered first.
+    vi.doMock("@/lib/marketData/tickStore", () => ({ waitForTick: async () => (await gate, { t: Date.now(), price: 21_050.5 }), getLastTick: () => null, isLiveSymbol: () => false }));
+    const { storage } = await import("../store");
+    const { POST: create, GET } = await import("@/app/api/automation/webhooks/route");
+    const { POST: hook } = await import("@/app/api/webhook/hook/[token]/route");
+    const { attachWebhook } = await import("../webhooks");
+    const { setNdxTestEnv } = await import("../testSupport");
+    setNdxTestEnv();
+
+    await create(json("POST", { name: "BullishNDX" }));
+    const made = storage.repository<{ id: string; token: string }>("webhooks").all()[0];
+    attachWebhook(made.id, "ndx_ema_bias", "bullish");
+    await GET(json("GET"));
+    storage.dropCaches?.(); // a cold instance: nothing in memory
+
+    const call = hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
+    const first = await Promise.race([call.then((r) => r.status), new Promise<string>((r) => setTimeout(() => r("still waiting for the quote"), 3000))]);
+    expect(first).toBe(200); // answered with the quote still on its way
+
+    release(); // now the quote arrives, and the work behind the answer can finish
+    await GET(json("GET")); // asks next, so waits its turn behind that work
+    const { createClient } = await import("@libsql/client");
+    const rows = (await createClient({ url }).execute("SELECT collection, json FROM records WHERE collection IN ('signals','decisions','runs','webhooks')")).rows;
+    const count = (name: string) => rows.filter((r) => r.collection === name).length;
+    expect(count("signals")).toBe(1);
+    expect(count("runs")).toBe(1);
+    expect(count("decisions")).toBeGreaterThan(0);
+    const saved = rows.filter((r) => r.collection === "webhooks").map((r) => JSON.parse(String(r.json)))[0];
+    expect(saved.triggerCount).toBe(1); // counted
+    expect(saved.lastTriggeredAt).toBeGreaterThan(0); // the minute was taken and saved before the answer
     vi.doUnmock("@/lib/marketData/tickStore");
   });
 

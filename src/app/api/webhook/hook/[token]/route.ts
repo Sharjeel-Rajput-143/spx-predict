@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
-import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
+import { signalsStore, storage as backend, storageProblem, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, isAttached, webhookUnderlying } from "@/lib/automation/webhooks";
 import { SLOW_QUOTE_WAIT_MS, resolveHookPrice } from "@/lib/automation/hookPrice";
 import { checkInterruptedRuns } from "@/lib/automation/interrupted";
 import { pruneOncePerDay } from "@/lib/automation/retention";
-import { deferWork, withStorage } from "@/lib/automation/withStorage";
+import { deferWork, loadEverything, withStorage } from "@/lib/automation/withStorage";
 
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself. As in Option Alpha, the call is only a trigger:
  * whatever the alert's message says is not read, and the bot works from its own live quote of its underlying. */
@@ -53,19 +53,41 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ toke
 
   const botId = hook.botId;
   const direction = hook.direction;
-  // On a host with no timer (Vercel) this is what notices a run the server stopped partway through, on the next call.
-  const interruptedCheck = (async () => {
-    // Housekeeping, finished behind the answer with the rest of the work: old log entries (once a day) and runs that never finished.
-    pruneOncePerDay(now);
-    await checkInterruptedRuns(now);
-  })().catch(() => undefined);
   const barTime = `${hook.id}-${new Date(now).toISOString().slice(0, 16)}`; // one per minute: a webhook runs at most once a minute
   const send = (price: number) =>
     ingestWebhook({ bot: botId, signal: direction, ...(underlying ? { symbol: underlying } : {}), price, bar_time: barTime, interval: "", webhook: hook.name }, { executor: sharedExecutor, trusted: true });
   const count = () => webhooksStore.update(hook.id, { triggerCount: (webhooksStore.get(hook.id)?.triggerCount ?? 0) + 1 });
 
-  // TradingView gives up on a call after about 3 seconds, so the answer goes out as soon as the signal is saved; the bot then
-  // finishes its work (the flip, the orders) behind it. The price is the bot's own live quote, never one sent with the call.
+  // On a host whose records are in a database (Vercel), loading them all, finding the live quote and starting up all cost seconds
+  // that TradingView will not wait for (it gives up after about 3). So the call is recognised from the webhook and the bot alone,
+  // the minute's slot is taken and saved, and the answer goes out. Everything else (loading the rest of the records, the quote,
+  // the checks, the flip, the orders) is done behind the answer. The Log shows every call, including one the bot then refused.
+  if (backend.remote) {
+    const background = async () => {
+      await loadEverything();
+      pruneOncePerDay(now);
+      await checkInterruptedRuns(now).catch(() => undefined);
+      const found = await resolveHookPrice(underlying, Date.now(), SLOW_QUOTE_WAIT_MS);
+      if (found === null) {
+        giveBack();
+        signalsStore.insert({ id: `sig-rejected-${now}-${crypto.randomUUID()}`, botId, signal: direction, barTime, price: 0, interval: "", receivedAt: now, status: "rejected", rejectReason: "no_price", raw: { webhook: hook.name } });
+        return;
+      }
+      const result = send(found);
+      if (result.status === 200) count();
+      else giveBack();
+      await result.processing;
+    };
+    return deferWork(NextResponse.json({ received: true }, { status: 200 }), background);
+  }
+
+  // Records in files (a laptop, a server with a disk): answered as soon as the signal is saved; the bot finishes its work behind it.
+  // The price is the bot's own live quote, never one sent with the call.
+  const interruptedCheck = (async () => {
+    // Housekeeping, finished behind the answer with the rest of the work: old log entries (once a day) and runs that never finished.
+    pruneOncePerDay(now);
+    await checkInterruptedRuns(now);
+  })().catch(() => undefined);
   const price = await resolveHookPrice(underlying, now);
   if (price !== null) {
     const result = send(price);
@@ -91,4 +113,6 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ toke
   return deferWork(NextResponse.json({ received: true, queued: "Waiting for a live price; the call is being processed." }, { status: 202 }), Promise.all([late, interruptedCheck]));
 }
 
-export const POST = withStorage(handlePOST);
+// Only the webhooks and the bots are loaded before the answer (see above); `maxDuration` is how long the work behind the answer may take.
+export const maxDuration = 60;
+export const POST = withStorage(handlePOST, { load: ["webhooks", "bots"] });

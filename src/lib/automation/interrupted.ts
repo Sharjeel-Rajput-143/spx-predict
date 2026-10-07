@@ -3,7 +3,7 @@ import { withBotLock } from "./botLock";
 import { botDisplayName, listBotIds } from "./bots";
 import { logDecision } from "./decisions";
 import { describeLegs, typeName } from "./runTrace";
-import { botsStore, decisionsStore, positionsStore, runsStore, signalsStore } from "./store";
+import { botsStore, decisionsStore, positionsStore, runsStore, signalsStore, webhooksStore } from "./store";
 import type { Signal } from "./types";
 
 /**
@@ -49,6 +49,20 @@ export async function checkInterruptedRuns(now: number = Date.now()): Promise<nu
         if (decisionsStore.query((d) => d.signalId === signal.id && d.outcome === "run_interrupted").length > 0) continue; // already said
         const { reason, closedPositionId } = describe(signal);
         logDecision({ signalId: signal.id, botId, outcome: "run_interrupted", reason: `${botDisplayName(botId)}: ${reason}`, detail: { receivedAt: signal.receivedAt, ...(closedPositionId ? { closedPositionId } : {}) }, now });
+        botsStore.update(botId, { needsAttention: true, needsAttentionReason: reason });
+        n++;
+      }
+
+      // A call that was answered but never reached the engine: the webhook's minute was taken and saved, and no signal followed (the
+      // server stopped between the answer and the signal being saved). Without this such a call would vanish without a trace.
+      for (const hook of webhooksStore.query((w) => w.botId === botId && w.lastTriggeredAt !== null)) {
+        const claimedAt = hook.lastTriggeredAt!;
+        if (now - claimedAt < INTERRUPTED_AFTER_MS || now - claimedAt > LOOKBACK_MS) continue;
+        const followed = signalsStore.query((s) => s.botId === botId && s.signal === hook.direction && s.receivedAt >= claimedAt - 1000 && (s.raw as { webhook?: string } | null)?.webhook === hook.name).length > 0;
+        if (followed) continue;
+        if (decisionsStore.query((d) => d.outcome === "run_interrupted" && d.detail?.webhookId === hook.id && d.detail?.claimedAt === claimedAt).length > 0) continue;
+        const reason = `The ${hook.direction} webhook "${hook.name}" was called at ${timeOf(claimedAt)} and answered, but the call never reached the bot (the server may have stopped just after answering). Nothing was opened or closed for it. Check your positions; the next signal will run as usual.`;
+        logDecision({ signalId: null, botId, outcome: "run_interrupted", reason: `${botDisplayName(botId)}: ${reason}`, detail: { webhookId: hook.id, claimedAt }, now });
         botsStore.update(botId, { needsAttention: true, needsAttentionReason: reason });
         n++;
       }

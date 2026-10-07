@@ -13,7 +13,7 @@ import { etDateTime, etDayKey, etTime, groupByDay, num, outcomeInfo, type Tone }
 
 type DateFilter = "all" | "today" | "yesterday" | "7d";
 type TimeFilter = "all" | "market" | "outside";
-type TypeFilter = "all" | "tradingview" | "test_hook" | "manual" | "rejected";
+type TypeFilter = "all" | "tradingview" | "test_hook" | "manual" | "system" | "rejected";
 
 /** A row in the log: a signal and what the engine did with it, or a decision
  * with no signal behind it (a position placed or closed by hand). */
@@ -31,8 +31,24 @@ const PROCESSING_WINDOW_MS = 3 * 60_000;
 
 const isManualSignal = (s: Signal) => signalOrigin(s) === "manual";
 
+/** Things the system did on its own, with no signal behind them: named for what they are, not "Manual position". */
+const SYSTEM_ENTRY: Record<string, string> = {
+  eod_sweep: "End-of-day sweep",
+  webhook_attached: "Webhook settings",
+  webhook_changed: "Webhook settings",
+  webhook_detached: "Webhook settings",
+  error_failsafe: "Error failsafe",
+  run_interrupted: "Run interrupted",
+  monitor_closed: "Close Monitor",
+};
+const isSystemEntry = (e: Entry): boolean => !e.signal && e.decisions[0] !== undefined && e.decisions[0].outcome in SYSTEM_ENTRY;
+
 const automationName = (e: Entry): string => {
-  if (!e.signal) return e.decisions[0]?.outcome === "closed" || e.decisions[0]?.reason.toLowerCase().includes("close") ? "Manual close" : "Manual position";
+  if (!e.signal) {
+    const system = e.decisions[0] && SYSTEM_ENTRY[e.decisions[0].outcome];
+    if (system) return system;
+    return e.decisions[0]?.outcome === "closed" || e.decisions[0]?.reason.toLowerCase().includes("close") ? "Manual close" : "Manual position";
+  }
   const label = e.signal.signal === "bullish" ? "Bullish signal" : e.signal.signal === "bearish" ? "Bearish signal" : e.signal.signal || "Signal";
   return isManualSignal(e.signal) ? `${label} (manual run)` : label;
 };
@@ -90,7 +106,8 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
         const inMarket = m >= 9 * 60 + 35 && m <= 15 * 60 + 55;
         if ((time === "market") !== inMarket) return false;
       }
-      if (type === "manual" && !(e.signal === null || isManualSignal(e.signal))) return false;
+      if (type === "manual" && !(e.signal === null ? !isSystemEntry(e) : isManualSignal(e.signal))) return false;
+      if (type === "system" && !isSystemEntry(e)) return false;
       if ((type === "tradingview" || type === "test_hook") && (e.signal === null || signalOrigin(e.signal) !== type)) return false;
       if (type === "rejected" && e.signal?.status !== "rejected") return false;
       const tones = tonesOf(e);
@@ -145,7 +162,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       <div className="flex flex-wrap items-center gap-2">
         {select(date, (v) => setDate(v as DateFilter), "Date", [["all", "Date: all"], ["today", "Today"], ["yesterday", "Yesterday"], ["7d", "Last 7 days"]])}
         {select(time, (v) => setTime(v as TimeFilter), "Time", [["all", "Time: all"], ["market", "Market hours"], ["outside", "Outside market hours"]])}
-        {select(type, (v) => setType(v as TypeFilter), "Type", [["all", "Type: all"], ["tradingview", "TradingView"], ["test_hook", "Test Hook"], ["manual", "Manual"], ["rejected", "Rejected"]])}
+        {select(type, (v) => setType(v as TypeFilter), "Type", [["all", "Type: all"], ["tradingview", "TradingView"], ["test_hook", "Test Hook"], ["manual", "Manual"], ["system", "System"], ["rejected", "Rejected"]])}
         {chip(onlyErrors, () => setOnlyErrors((v) => !v), "Errors")}
         {chip(onlyWarnings, () => setOnlyWarnings((v) => !v), "Warnings")}
         <div className="relative">

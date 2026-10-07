@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { checkInterruptedRuns, INTERRUPTED_AFTER_MS } from "./interrupted";
-import { alertsStore, botsStore, decisionsStore, positionsStore, runsStore, signalsStore } from "./store";
+import { alertsStore, botsStore, decisionsStore, positionsStore, runsStore, signalsStore, webhooksStore } from "./store";
 import { BASE_NOW, NDX_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 import { ensureBotRecord } from "./bots";
 
@@ -56,5 +56,29 @@ describe("a run that never finished", () => {
     expect(await checkInterruptedRuns(BASE_NOW)).toBe(0);
     expect(decisionsStore.all().filter((x) => x.outcome === "run_interrupted")).toHaveLength(0);
     expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(false);
+  });
+});
+
+describe("a call that was answered but never reached the bot", () => {
+  const hook = (claimedAt: number | null) =>
+    webhooksStore.insert({ id: "w1", name: "BearishNDX", token: "t".repeat(48), botId: NDX_BOT_ID, direction: "bearish", active: true, createdAt: 1, lastTriggeredAt: claimedAt, triggerCount: 1 });
+
+  it("is said once: the minute was taken, no signal followed", async () => {
+    hook(BASE_NOW - INTERRUPTED_AFTER_MS - 1000);
+    expect(await checkInterruptedRuns(BASE_NOW)).toBe(1);
+    const d = decisionsStore.all().find((x) => x.outcome === "run_interrupted")!;
+    expect(d.reason).toMatch(/BearishNDX.*never reached the bot/);
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
+    expect(await checkInterruptedRuns(BASE_NOW + 60_000)).toBe(0); // not again
+  });
+
+  it("is not said when a signal from that webhook followed, however it ended (even rejected), or when the call is recent", async () => {
+    const at = BASE_NOW - INTERRUPTED_AFTER_MS - 5000;
+    hook(at);
+    signal("after", INTERRUPTED_AFTER_MS + 5000 - 1500, { signal: "bearish", status: "rejected", rejectReason: "no_price", raw: { webhook: "BearishNDX" } });
+    expect(await checkInterruptedRuns(BASE_NOW)).toBe(0);
+    webhooksStore.update("w1", { lastTriggeredAt: BASE_NOW - 60_000 }); // a minute ago: still being worked on
+    expect(await checkInterruptedRuns(BASE_NOW)).toBe(0);
+    expect(decisionsStore.all().filter((x) => x.outcome === "run_interrupted")).toHaveLength(0);
   });
 });

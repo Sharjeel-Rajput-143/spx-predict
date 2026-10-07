@@ -195,6 +195,16 @@ describe("Log", () => {
     expect(tested).toContain(">Test Hook<");
   });
 
+  it("names what the system did on its own by what it is, not as a manual position, and can filter on it", () => {
+    const d = fixture();
+    const sweep = { id: "dec-sweep", signalId: null, botId: d.bot.id, outcome: "eod_sweep", reason: "End-of-day sweep (estimate) - 1 position expired", detail: {}, createdAt: NOW - 1000 };
+    const out = html(<LogTab ctx={ctxFor({ ...d, decisions: [...d.decisions, sweep] as never })} />);
+    expect(out).toContain(">End-of-day sweep<");
+    expect(out).toContain(">System</option>");
+    // The hand-made entry from the fixture keeps its own name.
+    expect(out).toContain("Manual position");
+  });
+
   it("hides everything before the cleared time", () => {
     const d = fixture();
     const out = html(<LogTab ctx={ctxFor({ ...d, bot: { ...d.bot, logClearedAt: NOW } })} />);
