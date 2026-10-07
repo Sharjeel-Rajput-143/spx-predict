@@ -165,7 +165,7 @@ describe("Automation builder (full page)", () => {
   it("opens a built-in trigger as a read-only reference with no add buttons, no Save, and the explanation", () => {
     const draft: AutomationDraft = { ...blankDraft(), id: "builtin-bullish", name: "Bullish signal", folder: "Built-in", steps: builtInFlow("bullish", null) };
     const out = render(draft, { readOnly: true, note: "Reference view of what the engine does." });
-    expect(out).toContain("Built-in · read only");
+    expect(out).not.toContain("Built-in");
     expect(out).toContain("Reference view of what the engine does.");
     expect(out).not.toContain('aria-label="Add step"');
     expect(out).not.toContain(">Save<");

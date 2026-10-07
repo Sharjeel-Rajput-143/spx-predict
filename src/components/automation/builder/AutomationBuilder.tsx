@@ -183,27 +183,31 @@ export function AutomationBuilder({
           aria-label="Automation name"
           className="min-w-0 max-w-xs flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-sm font-semibold outline-none hover:border-line focus:border-accent read-only:hover:border-transparent"
         />
-        <select
-          value={folder}
-          disabled={readOnly}
-          onChange={(e) => {
-            if (e.target.value === "__new") setNewFolder(true);
-            else {
-              setFolder(e.target.value);
-              changed();
-            }
-          }}
-          aria-label="Folder"
-          className="rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
-        >
-          {folders.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-          {!readOnly && <option value="__new">New folder...</option>}
-        </select>
-        <Pill tone={readOnly ? "info" : "warn"}>{readOnly ? (liveEditor ? "Built-in · live" : "Built-in · read only") : "Preview"}</Pill>
+        {!readOnly && (
+          <>
+            <select
+              value={folder}
+              disabled={readOnly}
+              onChange={(e) => {
+                if (e.target.value === "__new") setNewFolder(true);
+                else {
+                  setFolder(e.target.value);
+                  changed();
+                }
+              }}
+              aria-label="Folder"
+              className="rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent disabled:opacity-60"
+            >
+              {folders.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+              {!readOnly && <option value="__new">New folder...</option>}
+            </select>
+            <Pill tone="warn">Preview</Pill>
+          </>
+        )}
         {saved && <span className="text-xs text-up">Saved</span>}
         {flash && <span className="text-xs text-muted">{flash}</span>}
         <div className="ml-auto flex items-center gap-2">

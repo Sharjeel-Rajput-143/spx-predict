@@ -162,11 +162,10 @@ describe("what a live save sends", () => {
 describe("the built-in canvas", () => {
   const draft: AutomationDraft = { id: "builtin-bullish", name: "Bullish signal", folder: "Built-in", steps: builtInFlow("bullish", config, { start: "09:35", end: "15:55" }), inputs: [], updatedAt: 0 };
 
-  it("is marked live when it has editors, and read-only otherwise; it never offers Save for the design", () => {
+  it("shows no Built-in folder or live label, and never offers Save for the design", () => {
     const live = html(<AutomationBuilder draft={draft} botId="b" botName="B" readOnly liveEditor={() => null} onSaved={noop} onClose={noop} />);
-    expect(live).toContain("Built-in · live");
+    expect(live).not.toContain("Built-in");
+    expect(live).not.toContain('aria-label="Folder"');
     expect(live).not.toMatch(/<button[^>]*>Save<\/button>/);
-    const plain = html(<AutomationBuilder draft={draft} botId="b" botName="B" readOnly onSaved={noop} onClose={noop} />);
-    expect(plain).toContain("Built-in · read only");
   });
 });
