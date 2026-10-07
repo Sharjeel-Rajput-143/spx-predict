@@ -109,6 +109,28 @@ describe("calling a webhook", () => {
     expect((await call(w.token, "Bullish signal")).status).toBe(400);
   });
 
+  it("two calls arriving at the same moment (a double delivery) reach the engine once", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE_NOW); // inside trading hours
+    feed.tick = { t: Date.now(), price: 21_050.5 };
+    const w = createWebhook({ name: "Twice", botId: NDX_BOT_ID, direction: "bullish" });
+    const [a, b] = await Promise.all([call(w.token, ""), call(w.token, "")]);
+    await settle();
+    await settle();
+    const bodies = [await a.json(), await b.json()];
+    expect(bodies.filter((x) => x.ignored)).toHaveLength(1);
+    expect(signalsStore.all().filter((x) => x.status === "accepted")).toHaveLength(1); // only one reached the engine
+    expect(signalsStore.all().filter((x) => x.rejectReason === "webhook_rate_limited")).toHaveLength(1);
+    expect(webhooksStore.get(w.id)?.triggerCount).toBe(1);
+  });
+
+  it("a call refused for having no price does not use up the minute", async () => {
+    const w = createWebhook({ name: "NoQuote", botId: NDX_BOT_ID, direction: "bullish" });
+    expect((await call(w.token, "")).status).toBe(400);
+    feed.tick = { t: Date.now(), price: 21_050.5 };
+    expect((await call(w.token, "")).status).toBe(200);
+  });
+
   it("with no price anywhere (and no fresh quote) it is refused with a message, and nothing is saved", async () => {
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
     const res = await call(w.token, "");

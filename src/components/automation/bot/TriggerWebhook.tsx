@@ -18,7 +18,6 @@ export function TriggerWebhook({
   dir,
   triggerName,
   canTest,
-  suggestedPrice,
   notify,
   alwaysOn: savedAlwaysOn,
   saveAlwaysOn,
@@ -28,7 +27,6 @@ export function TriggerWebhook({
   triggerName: string;
   /** Test calls run on the mock executor and the Tradier sandbox only, never against real money. */
   canTest: boolean;
-  suggestedPrice: number | null;
   notify: (tone: "ok" | "error", text: string) => void;
   /** The trigger's saved Always On, and how to save a change to it. */
   alwaysOn: boolean;
@@ -156,29 +154,31 @@ export function TriggerWebhook({
       busy={busy}
       error={error}
       urlSlot={state.current && <SecretUrl webhookId={state.current.id} maskedPath={state.current.path} origin={origin} onCopied={() => notify("ok", "Webhook URL copied.")} onProblem={(m) => notify("error", m)} />}
-      testSlot={state.current && canTest && state.current.active && <TestHook webhookId={state.current.id} suggestedPrice={suggestedPrice} />}
+      testSlot={state.current && canTest && state.current.active && <TestHook webhookId={state.current.id} />}
     />
   );
 }
 
-/** "Test hook": sends this webhook's signal through the real path with a price you type (mock or Tradier sandbox only). */
-function TestHook({ webhookId, suggestedPrice }: { webhookId: string; suggestedPrice: number | null }) {
-  const [price, setPrice] = useState(suggestedPrice != null ? String(suggestedPrice) : "");
+/** "Test hook": sends this webhook's signal through the real path (mock or Tradier sandbox only). As for a real call, no
+ * price is needed: left blank it runs on the live quote; a typed price overrides it. */
+function TestHook({ webhookId }: { webhookId: string }) {
+  const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const n = Number(price.replace(/,/g, ""));
-  const ok = price.trim() !== "" && Number.isFinite(n) && n > 0;
+  const blank = price.trim() === "";
+  const ok = blank || (Number.isFinite(n) && n > 0);
 
   const run = async () => {
     setBusy(true);
     setResult(null);
     try {
-      const res = await fetch(`/api/automation/webhooks/${webhookId}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price: n }) });
+      const res = await fetch(`/api/automation/webhooks/${webhookId}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price: blank ? null : n }) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) setResult(`Not sent: ${j.error ?? res.status}`);
       else {
         const steps = ((j.decisions ?? []) as { outcome: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-        setResult(`Sent at ${n.toLocaleString("en-US")} → ${steps}${j.finished ? "" : " (still working…)"}`);
+        setResult(`Sent at ${Number(j.price).toLocaleString("en-US")}${blank ? " (live quote)" : ""} → ${steps}${j.finished ? "" : " (still working…)"}`);
       }
     } catch {
       setResult("Couldn't reach the server.");
@@ -190,13 +190,13 @@ function TestHook({ webhookId, suggestedPrice }: { webhookId: string; suggestedP
     <div className="space-y-1.5 border-t border-line pt-3">
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-xs text-muted">
-          Test price
+          Price (optional)
           <input
             className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent"
             inputMode="decimal"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            placeholder="price"
+            placeholder="live quote"
             aria-label="Test hook price"
           />
         </label>

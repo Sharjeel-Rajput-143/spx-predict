@@ -4,12 +4,7 @@ import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, isAttached, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
-import { waitForTick } from "@/lib/marketData/tickStore";
-
-/** A live quote older than this isn't a price to trade on. */
-const MAX_QUOTE_AGE_MS = 5 * 60_000;
-/** A server that has only just started has no quote yet; give its first one a few seconds. */
-const FIRST_QUOTE_WAIT_MS = 6_000;
+import { resolveHookPrice } from "@/lib/automation/hookPrice";
 
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself, so the alert message
  * only needs to carry the price (or nothing, when there is a fresh live quote for the bot's underlying). */
@@ -31,7 +26,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const underlying = webhookUnderlying(hook.botId);
 
   // Option Alpha ignores a webhook called again within a minute; so do we, and the log says so.
-  if (hook.lastTriggeredAt !== null && now - hook.lastTriggeredAt < WEBHOOK_MIN_INTERVAL_MS) {
+  // Read the record again here: `hook` was fetched before the body was awaited, and a call that arrived in the meantime may have used the minute.
+  const lastTriggeredAt = webhooksStore.get(hook.id)?.lastTriggeredAt ?? hook.lastTriggeredAt;
+  if (lastTriggeredAt !== null && now - lastTriggeredAt < WEBHOOK_MIN_INTERVAL_MS) {
     signalsStore.insert({
       id: `sig-rejected-${now}-${crypto.randomUUID()}`,
       botId: hook.botId,
@@ -47,20 +44,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
     return NextResponse.json({ received: true, ignored: "A webhook can only be triggered once a minute." }, { status: 200 });
   }
 
+  // Take this minute's slot now, before anything is awaited: two calls arriving together (a double delivery) then can't both
+  // get past the check above while the price is being looked up. If the call comes to nothing, the slot is given back.
+  const previous = lastTriggeredAt;
+  webhooksStore.update(hook.id, { lastTriggeredAt: now });
+  const giveBack = () => webhooksStore.update(hook.id, { lastTriggeredAt: previous });
+
   // The price: the alert's own, else the live quote of the bot's underlying if it is fresh. The alert may carry no
   // message at all (as with Option Alpha, the call itself is the trigger).
-  let price = payload.price;
-  if (price === null && underlying) {
-    const tick = await waitForTick(underlying, FIRST_QUOTE_WAIT_MS);
-    if (tick && now - tick.t <= MAX_QUOTE_AGE_MS) price = tick.price;
-  }
+  const price = await resolveHookPrice(payload.price, underlying, now);
   if (price === null) {
+    giveBack();
     return NextResponse.json({ error: 'No price. Put it in the alert message, e.g. {"price":{{close}}}.' }, { status: 400 });
   }
 
   const barTime = payload.barTime ?? `${hook.id}-${new Date(now).toISOString().slice(0, 16)}`;
   const result = ingestWebhook({ bot: hook.botId, signal: hook.direction, ...(underlying ? { symbol: underlying } : {}), price, bar_time: barTime, interval: payload.interval ?? "", webhook: hook.name }, { executor: sharedExecutor, trusted: true });
   await settleIfServerless(result);
-  if (result.status === 200) webhooksStore.update(hook.id, { lastTriggeredAt: now, triggerCount: hook.triggerCount + 1 });
+  if (result.status === 200) webhooksStore.update(hook.id, { triggerCount: (webhooksStore.get(hook.id)?.triggerCount ?? 0) + 1 });
+  else giveBack();
   return NextResponse.json(result.body, { status: result.status });
 }

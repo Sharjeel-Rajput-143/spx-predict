@@ -377,7 +377,7 @@ export function WebhooksSection({
   /** Renames a webhook; resolves to a problem to show, or null. */
   onRename?: (id: string, name: string) => Promise<string | null>;
   /** Sends this webhook's signal through the real path with a price. Offered on the mock and the Tradier sandbox only. */
-  onTest?: (id: string, price: number) => Promise<string>;
+  onTest?: (id: string, price: number | null) => Promise<string>;
   canTest?: boolean;
 }) {
   const [creating, setCreating] = useState(false);
@@ -407,26 +407,26 @@ export function WebhooksSection({
   );
 }
 
-/** A test call: the same path as TradingView's, with a price you type. */
-function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string, price: number) => Promise<string> }) {
+/** A test call: the same path as TradingView's. The price is optional, as it is for the real call: blank uses the live quote. */
+function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string, price: number | null) => Promise<string> }) {
   const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const n = Number(price.replace(/,/g, ""));
-  const ok = price.trim() !== "" && Number.isFinite(n) && n > 0;
+  const ok = price.trim() === "" || (Number.isFinite(n) && n > 0);
   return (
     <div className="space-y-1.5 border-t border-line pt-2">
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-xs text-muted">
-          Test call at {hook.underlying ?? "price"}
-          <input className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="price" aria-label={`Test price for ${hook.name}`} />
+          Test call, price (optional)
+          <input className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder={`live ${hook.underlying ?? ""} quote`.trim()} aria-label={`Test price for ${hook.name}`} />
         </label>
         <button
           className={buttonClass.secondary}
           disabled={busy || !ok}
           onClick={async () => {
             setBusy(true);
-            setResult(await onTest(hook.id, n));
+            setResult(await onTest(hook.id, price.trim() === "" ? null : n));
             setBusy(false);
           }}
         >

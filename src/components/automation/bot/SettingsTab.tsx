@@ -396,7 +396,6 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
           dir={dir}
           triggerName={`${dir === "bullish" ? "Bullish" : "Bearish"} trigger`}
           canTest
-          suggestedPrice={data.signals.find((sg) => sg.signal === dir)?.price ?? null}
           notify={notify}
           alwaysOn={data.bot.alwaysOn?.[dir] !== false}
           saveAlwaysOn={(on) => patch({ alwaysOn: { ...(data.bot.alwaysOn ?? { bullish: true, bearish: true }), [dir]: on } }, "Always On saved.")}

@@ -122,7 +122,7 @@ export function SettingsView() {
                 const j = await res.json().catch(() => ({}));
                 if (!res.ok) return `Not sent: ${j.error ?? res.status}`;
                 const steps = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-                return `Sent at ${price.toLocaleString("en-US")} → ${steps}${j.finished ? "" : " (still working…)"}. See the Automation status page for the order.`;
+                return `Sent at ${Number(j.price).toLocaleString("en-US")}${price === null ? " (live quote)" : ""} → ${steps}${j.finished ? "" : " (still working…)"}. See the Automation status page for the order.`;
               }}
             />
           )}
