@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { COLLECTIONS, SCHEMA_VERSION, StorageError, type CollectionName, type Repository, type StorageBackend } from "./repository";
+import { ADDED_COLLECTIONS, COLLECTIONS, SCHEMA_VERSION, StorageError, type CollectionName, type Repository, type StorageBackend } from "./repository";
 
 /**
  * JSON files in one folder, one file per collection: `<dir>/bots.json`, `positions.json`, `webhooks.json`...
@@ -108,6 +108,8 @@ export class JsonFileBackend implements StorageBackend {
       const version = (meta as { schemaVersion?: unknown } | null)?.schemaVersion;
       if (typeof version !== "number") throw new StorageError("corrupt", `${this.metaFile} is damaged (it has no schema version). Restore it from a backup; the engine will not start from an empty folder by itself.`, this.metaFile);
       if (version > SCHEMA_VERSION) throw new StorageError("schema", `${this.dir} was written by a newer version of this app (schema ${version}; this one reads ${SCHEMA_VERSION}). Update the app, or restore an older backup.`, this.metaFile);
+      // A collection added since this folder was set up has no file yet: that is not damage, so it starts empty.
+      for (const name of ADDED_COLLECTIONS) if (!this.ops.existsSync(this.fileOf(name))) this.write(name, []);
       ready.add(this.dir);
       return;
     }

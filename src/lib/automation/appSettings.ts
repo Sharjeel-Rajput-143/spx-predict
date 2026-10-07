@@ -1,6 +1,8 @@
 import "server-only";
 import { TRADING_HOURS, envString, parseClockMinutes } from "./config";
+import { ownerUserId } from "@/lib/auth/users";
 import { settingsStore } from "./store";
+import { currentUserId } from "./userContext";
 import type { AppSettings } from "./types";
 
 export const SESSION_TIMEOUT_CHOICES = [30, 60, 120, 240, 480] as const;
@@ -11,9 +13,15 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sessionTimeoutMinutes: 60,
 };
 
+/** The row of whoever is signed in (the owner's is "app", as it always was; anyone else's is "app:<userId>"). With nobody signed in (the engine) it is the owner's. */
+function settingsRowId(): string {
+  const me = currentUserId() ?? ownerUserId();
+  return me === ownerUserId() ? "app" : `app:${me}`;
+}
+
 /** What the Settings page has saved, over the defaults. */
 export function getAppSettings(): AppSettings {
-  const row = settingsStore.get("app");
+  const row = settingsStore.get(settingsRowId());
   return {
     tradingWindow: row?.tradingWindow ?? DEFAULT_APP_SETTINGS.tradingWindow,
     emailAlerts: { ...DEFAULT_APP_SETTINGS.emailAlerts, ...(row?.emailAlerts ?? {}) },
@@ -67,8 +75,9 @@ export function updateAppSettings(patch: AppSettingsPatch): AppSettings {
   }
 
   const { tradingWindow, emailAlerts, sessionTimeoutMinutes } = next;
-  if (settingsStore.get("app")) settingsStore.update("app", { tradingWindow, emailAlerts, sessionTimeoutMinutes });
-  else settingsStore.insert({ id: "app", tradingWindow, emailAlerts, sessionTimeoutMinutes });
+  const id = settingsRowId();
+  if (settingsStore.get(id)) settingsStore.update(id, { tradingWindow, emailAlerts, sessionTimeoutMinutes });
+  else settingsStore.insert({ id, tradingWindow, emailAlerts, sessionTimeoutMinutes });
   return getAppSettings();
 }
 

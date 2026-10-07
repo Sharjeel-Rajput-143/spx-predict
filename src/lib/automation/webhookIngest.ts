@@ -114,7 +114,7 @@ export function ingestWebhook(parsed: unknown, options: IngestOptions): IngestRe
     price,
     barTime,
     interval: typeof interval === "string" ? interval : "",
-    raw: { ...rest, symbol, ...(options.test ? { test: true } : {}) },
+    raw: { ...rest, symbol, origin: options.test ? "test_hook" : "tradingview", ...(options.test ? { test: true } : {}) },
   });
 
   // The decision logic (which can take up to the close/fill timeouts) runs in

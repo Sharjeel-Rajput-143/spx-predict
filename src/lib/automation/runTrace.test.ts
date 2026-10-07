@@ -34,7 +34,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
     const signal = await emit("bullish", { price: 7720.5 });
     const run = runOf(signal.id);
 
-    expect(run).toMatchObject({ botId: TEST_BOT_ID, signalId: signal.id, source: "webhook", automation: "Bullish signal", trigger: "Webhook" });
+    expect(run).toMatchObject({ botId: TEST_BOT_ID, signalId: signal.id, source: "webhook", automation: "Bullish signal", trigger: "TradingView" });
     expect(run.nodes.map((n) => (n.kind === "decision" ? `? ${n.text}` : `> ${n.title}`))).toEqual([
       "? Bot is switched on",
       "? Current market time is between 9:35am - 3:55pm",
@@ -46,7 +46,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
       "? Bot holds fewer than 1 Short Put Spread position",
       "? Bot has fewer than 1 open position",
       "? Bot opened fewer than 10 new positions today",
-      "? The strikes use the alert's price",
+      "? The strikes use the price when the call arrived",
       "? Strikes pass the checks (order, not equal, on the increment, the right width)",
       "? Opening stays within the $20,000 allocation",
       "? No leg collides with an existing position",

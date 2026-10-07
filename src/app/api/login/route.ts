@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SECRET_MISSING, checkCredentials, clearFailures, loginConfigured, lockedOut, recordFailure, safeNext, sessionKeyOrNull } from "@/lib/auth/credentials";
 import { SESSION_COOKIE_NAME, createSession } from "@/lib/automation/session";
+import { ownerEmail } from "@/lib/auth/users";
+import { recordSignIn } from "@/lib/automation/userAccounts";
 import { withStorage } from "@/lib/automation/withStorage";
 import { getAppSettings } from "@/lib/automation/appSettings";
 
@@ -30,6 +32,7 @@ async function handlePOST(req: NextRequest) {
   }
   console.info(`[auth] signed in from ${key}`);
   clearFailures(key);
+  recordSignIn(ownerEmail());
   const res = NextResponse.json({ ok: true, next: safeNext(body?.next) }, { headers: NO_STORE });
   res.cookies.set(SESSION_COOKIE_NAME, createSession(), {
     httpOnly: true,

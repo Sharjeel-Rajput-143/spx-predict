@@ -23,6 +23,8 @@ export type OrderStatus = "working" | "partially_filled" | "filled" | "canceled"
 
 /** Every reason a signal can be stopped or acted on, one per decision log row. */
 export type DecisionOutcome =
+  /** A signal was accepted but its run never finished (the server stopped or restarted partway): a person should check the positions. */
+  | "run_interrupted"
   | "automations_off"
   /** The kill switch is on: nothing runs for this bot. */
   | "kill_switch"
@@ -65,7 +67,7 @@ export type DecisionOutcome =
   | "eod_sweep"
   | "dry_run";
 
-/** Where the price the strikes are built from comes from: the TradingView alert's price, or a live quote taken when the Open step runs. */
+/** Where the price the strikes are built from comes from: the price recorded when the call arrived (the bot's own live quote: a webhook carries no price), or a fresh quote taken when the Open step runs. */
 export type StrikePriceSource = "alert" | "live";
 export const STRIKE_PRICE_SOURCES: readonly StrikePriceSource[] = ["alert", "live"];
 
@@ -164,6 +166,8 @@ export const DEFAULT_ALERTS: BotAlerts = { open: true, close: true, warning: tru
  * as a full override once the built-in bot's inputs are edited there). */
 export interface Bot {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   enabled: boolean;
   /** The kill switch: while on, a webhook run does nothing at all - no close, no open. Separate from `enabled`
    * (the bot's On/Off, which still lets a webhook close the opposite position). The end-of-day sweep and the
@@ -204,6 +208,8 @@ export interface Bot {
 /** A saved set of bot inputs, offered in the Library to start new bots from. */
 export interface BotTemplate {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   name: string;
   config: BotInputs;
   safeguards?: BotSafeguards;
@@ -212,6 +218,8 @@ export interface BotTemplate {
 
 export interface Signal {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   botId: string;
   /** "bullish" | "bearish" for every `status: "accepted"` row - loosely typed
    * so a `status: "rejected"` row (bad secret, malformed body) can still log
@@ -228,6 +236,8 @@ export interface Signal {
 
 export interface Position {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   botId: string;
   /** Needed to scope the leg-overlap check across bots sharing an account. */
   underlying: string;
@@ -282,6 +292,8 @@ export interface PositionSettlement {
 
 export interface Order {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   positionId: string;
   kind: OrderKind;
   status: OrderStatus;
@@ -296,6 +308,8 @@ export interface Order {
 
 export interface Decision {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   signalId: string | null;
   botId: string;
   outcome: DecisionOutcome;
@@ -306,6 +320,8 @@ export interface Decision {
 
 export interface ErrorRecord {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   botId: string;
   kind: string;
   detail: Record<string, unknown>;
@@ -436,6 +452,8 @@ export type AlertKind = "open" | "close" | "warning" | "error";
 
 export interface ActivityAlert {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   botId: string;
   kind: AlertKind;
   /** The decision outcome that raised it. */
@@ -451,6 +469,8 @@ export interface ActivityAlert {
 
 export interface Webhook {
   id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner: the login set in the environment. */
+  userId?: string;
   /** What the person calls it ("BullishNDX"). */
   name: string;
   /** The secret part of the URL: whoever has the URL can trigger it. */
@@ -498,5 +518,15 @@ export interface AppSettings {
 }
 
 export interface AppSettingsRow extends Partial<AppSettings> {
-  id: "app";
+  /** "app" for the owner's settings; "app:<userId>" for any other user's. */
+  id: string;
+  userId?: string;
+}
+
+/** Someone who can sign in. Every other record points at one by `userId`. */
+export interface User {
+  id: string;
+  email: string;
+  createdAt: number;
+  lastLoginAt: number;
 }

@@ -5,7 +5,9 @@ import path from "node:path";
 import { JsonFileBackend } from "./storage/jsonFileBackend";
 import type { CollectionName, Repository, StorageBackend } from "./storage/repository";
 import { TursoBackend } from "./storage/tursoBackend";
-import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
+import { ownerUserId } from "@/lib/auth/users";
+import { currentUserId } from "./userContext";
+import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal, User } from "./types";
 
 /**
  * The engine's records. This module is the only place that knows where they live; everything else calls the
@@ -86,7 +88,66 @@ export function storageProblem(): string | null {
  * Repository interface can replace this one later without any engine change. */
 export const storage: StorageBackend = TURSO ? new TursoBackend({ url: TURSO.url, authToken: TURSO.authToken }) : new JsonFileBackend(DATA_DIR);
 
-const repo = <T extends { id: string }>(name: CollectionName): Repository<T> => storage.repository<T>(name);
+// --- who owns what ---------------------------------------------------------------------------------------------
+// Every record carries `userId`, a reference to `users`; a record with none belongs to the owner (the login set in the
+// environment), so data from before users existed needs no migration. Inside runAs(userId, ...) (a signed-in request) the
+// repositories below show and change only that user's records, and what is saved there is saved as theirs. Outside it (a
+// TradingView call, the clock) they see everything: that is the engine, which works under a bot's owner (botLock.ts).
+
+const rawBots = storage.repository<Bot>("bots");
+const rawPositions = storage.repository<Position>("positions");
+
+/** The user a bot belongs to. */
+export const ownerOfBot = (botId: string): string => rawBots.get(botId)?.userId ?? ownerUserId();
+
+interface Owned {
+  id: string;
+  userId?: string;
+  botId?: string | null;
+  positionId?: string;
+}
+const owner = (row: Owned): string => row.userId ?? ownerUserId();
+const visible = (row: Owned): boolean => {
+  const me = currentUserId();
+  return me === null || owner(row) === me;
+};
+
+function scoped<T extends Owned>(inner: Repository<T>): Repository<T> {
+  /** A record belongs to whoever owns its bot (or position), else to whoever is signed in, else to the owner. */
+  const stamp = (row: T): T => {
+    if (row.userId) return row;
+    const bot = row.botId ? rawBots.get(row.botId) : undefined;
+    const position = row.positionId ? rawPositions.get(row.positionId) : undefined;
+    const userId = bot ? owner(bot) : position ? owner(position) : (currentUserId() ?? ownerUserId());
+    return { ...row, userId };
+  };
+  return {
+    all: () => inner.all().filter(visible),
+    get: (id) => {
+      const row = inner.get(id);
+      return row && visible(row) ? row : undefined;
+    },
+    query: (pred) => inner.query((r) => visible(r) && pred(r)),
+    insert: (row) => inner.insert(stamp(row)),
+    update: (id, patch) => {
+      const row = inner.get(id);
+      if (!row || !visible(row)) return undefined;
+      const { userId: _ignored, ...safe } = patch as Partial<T> & { userId?: string };
+      return inner.update(id, safe as Partial<T>);
+    },
+    remove: (id) => {
+      const row = inner.get(id);
+      return row && visible(row) ? inner.remove(id) : false;
+    },
+    removeWhere: (pred) => inner.removeWhere((r) => visible(r) && pred(r)),
+    __reset: () => {
+      if (currentUserId() === null) inner.__reset();
+      else inner.removeWhere(visible);
+    },
+  };
+}
+
+const repo = <T extends Owned>(name: CollectionName): Repository<T> => scoped(storage.repository<T>(name));
 
 export const botsStore = repo<Bot>("bots");
 export const signalsStore = repo<Signal>("signals");
@@ -98,8 +159,31 @@ export const templatesStore = repo<BotTemplate>("templates");
 export const runsStore = repo<Run>("runs");
 export const alertsStore = repo<ActivityAlert>("alerts");
 export const webhooksStore = repo<Webhook>("webhooks");
-/** One row (id "app"): the app-wide settings from the Settings page. */
+/** App-wide settings, one row per user (id "app" for the owner, "app:<userId>" for anyone else). */
 export const settingsStore = repo<AppSettingsRow>("settings");
+
+/** The people who can sign in. A signed-in user sees only their own row. */
+const rawUsers = storage.repository<User>("users");
+const isMe = (row: User) => currentUserId() === null || row.id === currentUserId();
+export const usersStore: Repository<User> = {
+  all: () => rawUsers.all().filter(isMe),
+  get: (id) => {
+    const row = rawUsers.get(id);
+    return row && isMe(row) ? row : undefined;
+  },
+  query: (pred) => rawUsers.query((r) => isMe(r) && pred(r)),
+  insert: (row) => rawUsers.insert(row),
+  update: (id, patch) => {
+    const row = rawUsers.get(id);
+    return row && isMe(row) ? rawUsers.update(id, patch) : undefined;
+  },
+  remove: (id) => {
+    const row = rawUsers.get(id);
+    return row && isMe(row) ? rawUsers.remove(id) : false;
+  },
+  removeWhere: (pred) => rawUsers.removeWhere((r) => isMe(r) && pred(r)),
+  __reset: () => rawUsers.__reset(),
+};
 
 /** Test hook: forget what is in memory so the next read comes from the files, as after a restart. */
 export function __simulateRestart(): void {
@@ -118,4 +202,5 @@ export function __resetAllStores(): void {
   alertsStore.__reset();
   settingsStore.__reset();
   webhooksStore.__reset();
+  usersStore.__reset();
 }

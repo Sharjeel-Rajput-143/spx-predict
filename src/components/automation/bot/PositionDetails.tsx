@@ -291,6 +291,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
 
         <TagsBlock position={p} onChanged={onChanged} notify={notify} />
         <NotesBlock position={p} onChanged={onChanged} notify={notify} />
+        <DeleteBlock position={p} onChanged={onChanged} onClose={onClose} notify={notify} />
       </div>
 
       {confirmingClose && (
@@ -364,6 +365,31 @@ function TagsBlock({ position: p, onChanged, notify }: { position: Position; onC
       )}
       <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} onBlur={add} placeholder="Add tag" aria-label="Add tag" className={inputClass} />
     </section>
+  );
+}
+
+/** Remove a finished (or test) position from the records. Open and closing ones can't be: the bot is still tracking them. */
+function DeleteBlock({ position: p, onChanged, onClose, notify }: { position: Position; onChanged: () => void; onClose: () => void; notify: Props["notify"] }) {
+  const removable = p.test || p.status === "closed" || p.status === "expired" || p.status === "rejected";
+  const [busy, setBusy] = useState(false);
+  if (!removable) return null;
+  const remove = async () => {
+    if (!window.confirm("Delete this position from the records? Its orders go with it. The log entries about it stay.")) return;
+    setBusy(true);
+    const res = await fetch(`/api/automation/positions/${p.id}`, { method: "DELETE" });
+    const j = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) return notify("error", j.error ?? "Couldn't delete the position.");
+    notify("ok", "Position deleted.");
+    onChanged();
+    onClose();
+  };
+  return (
+    <div className="border-t border-line pt-4">
+      <button className={buttonClass.secondary} disabled={busy} onClick={remove}>
+        Delete position
+      </button>
+    </div>
   );
 }
 

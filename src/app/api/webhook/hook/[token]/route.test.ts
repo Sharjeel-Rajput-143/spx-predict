@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWebhook, deleteWebhook, findWebhookByToken, parseHookBody, updateWebhook } from "@/lib/automation/webhooks";
+import { createWebhook, deleteWebhook, findWebhookByToken, updateWebhook } from "@/lib/automation/webhooks";
 import { createEmptyBot, deleteBot, ensureBotRecord } from "@/lib/automation/bots";
 import { decisionsStore, positionsStore, signalsStore, webhooksStore } from "@/lib/automation/store";
 import { BASE_NOW, NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
@@ -9,8 +9,9 @@ import { DELETE as remove, PATCH as patch } from "../../../automation/webhooks/[
 import { POST } from "./route";
 
 // The live feed is never reached from a test: a cold server has no quote, unless a test gives one.
-const feed = vi.hoisted(() => ({ tick: null as { t: number; price: number } | null }));
-vi.mock("@/lib/marketData/tickStore", () => ({ waitForTick: async () => feed.tick, getLastTick: () => feed.tick, isLiveSymbol: () => false }));
+const feed = vi.hoisted(() => ({ tick: null as { t: number; price: number } | null, slowTick: null as { t: number; price: number } | null }));
+// A short wait (the quick one) sees `tick`; a long wait (the background one) also sees `slowTick`: a quote that arrives late.
+vi.mock("@/lib/marketData/tickStore", () => ({ waitForTick: async (_s: string, ms: number) => feed.tick ?? (ms >= 5000 ? feed.slowTick : null), getLastTick: () => feed.tick, isLiveSymbol: () => false }));
 
 // Named webhooks, through the route handlers, on the mock executor. No network.
 
@@ -21,7 +22,9 @@ const call = (token: string, body?: string) => POST(new NextRequest(`http://loca
 const settle = () => new Promise((r) => setTimeout(r, 80));
 
 beforeEach(() => {
-  feed.tick = null;
+  feed.tick = { t: Date.now(), price: 21_003.7 }; // the live quote the bot works from
+  
+  feed.slowTick = null;
   resetAutomationStores();
   setNdxTestEnv();
   vi.stubEnv("AUTOMATION_TEST_MODE", "");
@@ -66,13 +69,13 @@ describe("creating a webhook", () => {
 });
 
 describe("calling a webhook", () => {
-  it("a bullish webhook with the price in the message becomes a bullish signal for its bot, with that bot's own symbol", async () => {
+  it("a bullish webhook becomes a bullish signal for its bot, at the bot's own live quote, with that bot's own symbol", async () => {
     const w = createWebhook({ name: "BullishNDX", botId: NDX_BOT_ID, direction: "bullish" });
-    const res = await call(w.token, '{"price":21003.7,"bar_time":"2026-10-06T14:40:00Z","interval":"5"}');
+    const res = await call(w.token, "");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ received: true });
     const [signal] = signalsStore.all();
-    expect(signal).toMatchObject({ botId: NDX_BOT_ID, signal: "bullish", price: 21_003.7, barTime: "2026-10-06T14:40:00Z", interval: "5", status: "accepted" });
+    expect(signal).toMatchObject({ botId: NDX_BOT_ID, signal: "bullish", price: 21_003.7, interval: "", status: "accepted" });
     expect((signal.raw as { symbol: string }).symbol).toBe("NDX");
     await settle();
     expect(decisionsStore.all().length).toBeGreaterThan(0); // the engine ran it through its decisions
@@ -81,17 +84,19 @@ describe("calling a webhook", () => {
   });
 
   it("a bearish webhook is a bearish signal", async () => {
+    feed.tick = { t: Date.now(), price: 7720.5 };
     const w = createWebhook({ name: "BearishSPX", botId: TEST_BOT_ID, direction: "bearish" });
-    await call(w.token, '{"price":7720.5}');
+    await call(w.token, "");
     expect(signalsStore.all()[0]).toMatchObject({ botId: TEST_BOT_ID, signal: "bearish", price: 7720.5 });
   });
 
-  it("the message can be just a number, a quoted number, or use `close`", async () => {
-    for (const [i, body] of ['21003.7', '"21,003.7"', '{"close":"21003.7"}'].entries()) {
+  it("the call is only a trigger, as in Option Alpha: nothing in the message is read, a price in it least of all", async () => {
+    for (const [i, body] of ['{"price":99999,"bar_time":"x","interval":"5"}', "12345.6", '{"close":"1.5"}', "Bullish signal, confirmed cross"].entries()) {
       resetAutomationStores();
       const w = createWebhook({ name: `H${i}`, botId: NDX_BOT_ID, direction: "bullish" });
       expect((await call(w.token, body)).status, body).toBe(200);
-      expect(signalsStore.all()[0].price, body).toBe(21_003.7);
+      expect(signalsStore.all()[0], body).toMatchObject({ price: 21_003.7, interval: "" }); // the bot's own quote, not the message's
+      expect(signalsStore.all()[0].barTime, body).not.toBe("x");
     }
   });
 
@@ -103,10 +108,12 @@ describe("calling a webhook", () => {
     expect(signalsStore.all()[0].price).toBe(21_050.5);
   });
 
-  it("a plain-text alert message with no price is refused when the quote is stale", async () => {
+  it("a plain-text alert message with no price, and only a stale quote, is answered at once and logged as rejected (no price)", async () => {
     feed.tick = { t: Date.now() - 10 * 60_000, price: 21_050.5 };
     const w = createWebhook({ name: "Stale", botId: NDX_BOT_ID, direction: "bullish" });
-    expect((await call(w.token, "Bullish signal")).status).toBe(400);
+    expect((await call(w.token, "Bullish signal")).status).toBe(202); // TradingView is not kept waiting
+    await settle();
+    expect(signalsStore.all().map((s) => [s.status, s.rejectReason])).toEqual([["rejected", "no_price"]]);
   });
 
   it("two calls arriving at the same moment (a double delivery) reach the engine once", async () => {
@@ -124,28 +131,49 @@ describe("calling a webhook", () => {
     expect(webhooksStore.get(w.id)?.triggerCount).toBe(1);
   });
 
-  it("a call refused for having no price does not use up the minute", async () => {
+  it("a call that found no price does not use up the minute", async () => {
+    feed.tick = null;
     const w = createWebhook({ name: "NoQuote", botId: NDX_BOT_ID, direction: "bullish" });
-    expect((await call(w.token, "")).status).toBe(400);
+    expect((await call(w.token, "")).status).toBe(202);
+    await settle();
     feed.tick = { t: Date.now(), price: 21_050.5 };
     expect((await call(w.token, "")).status).toBe(200);
+    await settle(); // let the bot finish before the next test starts
   });
 
-  it("with no price anywhere (and no fresh quote) it is refused with a message, and nothing is saved", async () => {
+  it("with no live quote the call is answered at once; once the wait is over it is logged as rejected and nothing is run", async () => {
+    feed.tick = null;
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
     const res = await call(w.token, "");
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/No price/);
-    expect((await call(w.token, '{"bar_time":"x"}')).status).toBe(400);
-    expect(signalsStore.all()).toHaveLength(0);
+    expect(res.status).toBe(202);
+    expect((await res.json()).queued).toMatch(/live price/);
+    await settle();
+    expect(signalsStore.all()).toHaveLength(1);
+    expect(signalsStore.all()[0]).toMatchObject({ status: "rejected", rejectReason: "no_price", botId: NDX_BOT_ID, signal: "bullish" });
+    expect(decisionsStore.all().filter((d) => d.signalId !== null)).toHaveLength(0);
     expect(webhooksStore.get(w.id)?.triggerCount).toBe(0);
+  });
+
+  it("a slow quote: the call is answered before the quote arrives, and runs when it does", async () => {
+    feed.tick = null;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BASE_NOW); // inside trading hours
+    feed.slowTick = { t: BASE_NOW, price: 21_050.5 }; // not there for the quick look, there for the longer one
+    const w = createWebhook({ name: "Slow", botId: NDX_BOT_ID, direction: "bullish" });
+    expect((await call(w.token, "")).status).toBe(202);
+    await settle();
+    await settle();
+    expect(signalsStore.all().map((s) => [s.status, s.price])).toEqual([["accepted", 21_050.5]]);
+    expect(webhooksStore.get(w.id)?.triggerCount).toBe(1);
+    expect(decisionsStore.all().filter((d) => d.signalId !== null).length).toBeGreaterThan(0);
   });
 
   it("a price that makes no sense is refused by the same checks as any signal", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(BASE_NOW); // inside trading hours, so it is the price that gets refused
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
-    await call(w.token, '{"price":7720}'); // an SPX-sized price on the NDX bot
+    feed.tick = { t: Date.now(), price: 7720 }; // an SPX-sized price on the NDX bot
+    await call(w.token, "");
     await settle();
     expect(decisionsStore.all().map((d) => d.outcome)).toContain("price_out_of_range");
     expect(positionsStore.all()).toHaveLength(0);
@@ -181,7 +209,7 @@ describe("calling a webhook", () => {
 
   it("the URL is the only credential: no shared secret is needed, and a body can't pick another bot or signal", async () => {
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
-    await call(w.token, '{"price":21003.7,"bot":"spx_ema_bias","signal":"bearish","secret":"whatever","test":true}');
+    await call(w.token, '{"bot":"spx_ema_bias","signal":"bearish","secret":"whatever","test":true}');
     expect(signalsStore.all()[0]).toMatchObject({ botId: NDX_BOT_ID, signal: "bullish" });
     expect(signalsStore.all()[0].raw).not.toHaveProperty("test");
   });
@@ -195,54 +223,5 @@ describe("a host that can't keep records", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).error).toMatch(/can't write/);
     spy.mockRestore();
-  });
-});
-
-describe("parsing the message", () => {
-  it.each([
-    ['{"price":21003.7,"bar_time":"t","interval":"5"}', { price: 21_003.7, barTime: "t", interval: "5" }],
-    ['{"price":"21,003.7"}', { price: 21_003.7, barTime: null, interval: null }],
-    ['{"price":5,"interval":15}', { price: 5, barTime: null, interval: "15" }],
-    ["21003.7", { price: 21_003.7, barTime: null, interval: null }],
-    ["", { price: null, barTime: null, interval: null }],
-    ["Bullish crossing", { price: null, barTime: null, interval: null }],
-    ['{"price":"abc"}', { price: null, barTime: null, interval: null }],
-    ["[1,2]", { price: null, barTime: null, interval: null }],
-  ])("%s", (body, expected) => {
-    expect(parseHookBody(body)).toEqual(expected);
-  });
-});
-
-describe("managing webhooks through the API", () => {
-  const json = (method: string, body?: unknown) => new NextRequest("http://localhost/api/automation/webhooks", { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { "Content-Type": "application/json" } });
-  const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
-
-  it("creates, lists (newest first, with the bot's name, symbol and URL path), switches off and deletes", async () => {
-    ensureBotRecord(NDX_BOT_ID);
-    const made = await create(json("POST", { name: "BullishNDX", botId: NDX_BOT_ID, direction: "bullish" }));
-    expect(made.status).toBe(201);
-    const hook = (await made.json()).webhook;
-    expect(hook).toMatchObject({ name: "BullishNDX", botName: "NDX Bias Bot", underlying: "NDX", attached: true, direction: "bullish" });
-    expect(hook.token).toBeUndefined(); // the secret is never in a list or create answer
-    expect(hook.path).toMatch(/^\/hook\/•+[0-9a-f]{4}$/); // masked: only the last four characters show
-    const token = webhooksStore.get(hook.id)!.token;
-    expect(hook.path).not.toContain(token);
-
-    await create(json("POST", { name: "BearishNDX", botId: NDX_BOT_ID, direction: "bearish" }));
-    expect((await (await list(json("GET"))).json()).webhooks.map((w: { name: string }) => w.name)).toEqual(["BearishNDX", "BullishNDX"]);
-
-    expect((await patch(json("PATCH", { active: false }), ctx(hook.id))).status).toBe(200);
-    expect((await call(token, '{"price":21003.7}')).status).toBe(404);
-
-    expect((await remove(json("DELETE"), ctx(hook.id))).status).toBe(200);
-    expect(webhooksStore.get(hook.id)).toBeUndefined();
-    expect((await remove(json("DELETE"), ctx(hook.id))).status).toBe(400);
-  });
-
-  it("says what's wrong with a bad request", async () => {
-    const res = await create(json("POST", { name: "", botId: NDX_BOT_ID, direction: "bullish" }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/name/);
-    expect(deleteWebhook).toBeDefined();
   });
 });

@@ -14,6 +14,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
 
   // Something went wrong or needs a person.
   error_failsafe: "error",
+  run_interrupted: "error",
   executor_error: "error",
   config_error: "error",
   invalid_strikes: "error",

@@ -48,7 +48,7 @@ Then BearishNDX: the put spread should close first, then the call spread open.
 
 ## 6. Point TradingView at it
 1. Public address: run `ngrok http 3000` and use the https address it prints (or your server's own domain).
-2. On the NDX chart, make an alert for the **confirmed** bullish signal. **Notifications > Webhook URL**: paste BullishNDX's URL. **Message**: `{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}`.
+2. On the NDX chart, make an alert for the **confirmed** bullish signal. **Notifications > Webhook URL**: paste BullishNDX's URL. **Message**: anything, or nothing. A webhook is only a trigger, as in Option Alpha: the message is not read, and the bot works from its own live NDX quote.
 3. Do the same for the bearish signal with BearishNDX's URL. Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.
 4. When an alert fires, watch the status page: the signal, its decisions, the order.
 

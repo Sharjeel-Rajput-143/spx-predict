@@ -171,7 +171,7 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
     id: `builtin-${dir}`,
     name: `${dir === "bullish" ? "Bullish" : "Bearish"} signal`,
     folder: "Built-in",
-    steps: builtInFlow(dir, data.config, data.config?.hours ?? data.limits.hours),
+    steps: builtInFlow(dir, data.config, data.config?.hours ?? data.limits.hours, data.limits.maxPositionsPerType),
     inputs: [],
     updatedAt: 0,
   });

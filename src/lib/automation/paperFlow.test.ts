@@ -8,6 +8,14 @@ import { decisionsStore as allDecisions, ordersStore, positionsStore, signalsSto
 const decisionsStore = { all: () => allDecisions.all().filter((d) => d.signalId !== null) };
 import { BASE_NOW, NDX_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 
+// The bot's own live quote, as the app's price feed would give it: a webhook call carries no price. No network.
+vi.mock("@/lib/marketData/tickStore", () => ({
+  waitForTick: async () => ({ t: Date.now(), price: 21_003.7 }),
+  getLastTick: () => ({ t: Date.now(), price: 21_003.7 }),
+  isLiveSymbol: () => false,
+}));
+
+
 // The whole NDX path, from a TradingView call to an order on Tradier's SANDBOX, with Tradier replaced by a fake
 // HTTP layer. It proves the pieces fit together; it does not prove anything about Tradier's real answers.
 

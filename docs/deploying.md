@@ -75,3 +75,25 @@ A serverless host has no disk that lasts: each instance has its own temporary fo
 - A laptop or a server with a disk keeps using the JSON files even with `TURSO_*` set (set `AUTOMATION_STORAGE=turso` to use the database there too). Data in the files and in the database is separate.
 - This makes the records last. It does not make Vercel a place to trade: the timers (end-of-day sweep, monitors) don't run there, and a function can be stopped while an order is still being followed. Run real paper trading on a server that stays up.
 - The database holds the webhook secrets: keep the token private, and rotate it in Turso if it leaks.
+
+## Users and ownership
+
+Every record (bots, webhooks, positions, orders, signals, log decisions, runs, alerts, templates, settings) carries `userId`, a reference to a row in `users`. The one login from the environment is the owner; a record with no `userId` (made before this existed) belongs to it, so nothing needed migrating. A signed-in request sees and changes only its own user's records; the engine, when a TradingView call or the clock starts it, works under the bot's owner. Settings are one row per user. The built-in bots belong to the owner.
+
+Only one login exists today (`APP_LOGIN_EMAIL`/`APP_LOGIN_PASSWORD`). The structure is ready for more, but there is no screen to add users yet.
+
+Removing: a webhook, a bot (archive first), a trigger's webhook and a position's tags and notes can be edited and removed as before. A position can be deleted once it is closed, expired or rejected (or is a test position); an open or closing one can't. A log entry can be deleted from the records (its signal, decisions and run) once it is older than the duplicate-protection window; "Clear log" still only hides.
+
+## Answering TradingView in time
+
+TradingView gives up on a webhook call after about 3 seconds ("request took too long and timed out"). A call is therefore answered as soon as the signal is saved, and the bot's work (the flip, the orders, the log) carries on behind the answer: on Vercel the function is kept alive for it (Next's `after`), and on a server that stays up it simply continues. The next request on the same instance waits its turn behind that work, so records are never loaded over unsaved ones.
+
+- **A webhook is only a trigger, as in Option Alpha** ("bots cannot accept JSON payloads; a webhook can only trigger an automation to run"). The alert's message is never read, and no price, time or direction is taken from it. The bot uses its own live quote of its underlying (the app's price feed); the direction comes from the URL.
+- With a fresh quote already known, the answer goes out within the time it takes to save one record.
+- With none (a server that has just started), the call waits up to 1.5 seconds for the first quote, then answers "202 queued" and keeps looking for up to 8 more seconds. If there is still no quote the call is logged as rejected ("no_price"), so it shows in the bot's Log instead of vanishing.
+- The Test Hook button isn't time-limited: it waits for the bot to finish and shows the decisions.
+
+## Housekeeping the bot does by itself
+
+- **A run the server stopped partway through.** A signal's run saves its step-by-step record when it ends. A signal accepted more than 10 minutes ago with no such record is logged as "Run interrupted" (an error alert; the bot is marked as needing attention). If it was a flip that closed one side and never opened the other, the message says so. The bot does not open the missing side by itself: the price has moved and the next signal may say otherwise. The scheduler looks every minute; on a host with no timer (Vercel) the next webhook call does.
+- **Old log entries.** Signals, their decisions and runs, alerts and error records older than `LOG_RETENTION_DAYS` (default 90; `0` keeps everything) are removed, at most once a day. Positions and their orders are never removed. Keeping the log small matters most on Vercel, where every request loads all the records.

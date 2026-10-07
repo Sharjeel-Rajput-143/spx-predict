@@ -171,39 +171,6 @@ export function deleteWebhook(id: string, now: number = Date.now()): void {
   webhooksStore.remove(id);
 }
 
-/** What a body from TradingView can tell us. The message is whatever the alert is set to send: JSON like
- * {"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}, or just text like 21003.7. */
-export interface HookPayload {
-  price: number | null;
-  barTime: string | null;
-  interval: string | null;
-}
-
-export function parseHookBody(raw: string): HookPayload {
-  const text = raw.trim();
-  const empty: HookPayload = { price: null, barTime: null, interval: null };
-  if (!text) return empty;
-  const asNumber = (v: unknown): number | null => {
-    const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v.replace(/,/g, "")) : NaN;
-    return Number.isFinite(n) ? n : null;
-  };
-  try {
-    const json = JSON.parse(text) as unknown;
-    if (typeof json === "number" || typeof json === "string") return { ...empty, price: asNumber(json) };
-    if (json && typeof json === "object" && !Array.isArray(json)) {
-      const o = json as Record<string, unknown>;
-      return {
-        price: asNumber(o.price ?? o.close),
-        barTime: typeof o.bar_time === "string" && o.bar_time ? o.bar_time : null,
-        interval: typeof o.interval === "string" || typeof o.interval === "number" ? String(o.interval) : null,
-      };
-    }
-  } catch {
-    /* not JSON: it may just be a number */
-  }
-  return { ...empty, price: asNumber(text) };
-}
-
 export const webhookUnderlying = (botId: string | null): string | null => {
   if (!botId) return null;
   try {

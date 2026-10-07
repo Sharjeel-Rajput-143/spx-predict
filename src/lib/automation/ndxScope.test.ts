@@ -417,11 +417,11 @@ describe("(A1) the strike price source", () => {
   const liveAt = (price: number, ageMs = 3000) => () => ({ price, ageMs });
   const sourceOf = () => (decisionsStore.all().at(-1)!.detail as { priceSource?: Record<string, unknown> }).priceSource;
 
-  it("defaults to the alert's price", () => {
+  it("defaults to the price taken when the call arrived", () => {
     expect(getBotStaticConfig(NDX_BOT_ID).strikePriceSource).toBe("alert");
   });
 
-  it("alert price: strikes come from the alert, and the log says so with the price and its age", async () => {
+  it("call-time price: strikes come from the price at the call, and the log says so with the price and its age", async () => {
     await emit("bullish", { price: 21_003.7, receivedAgoMs: 4000, liveQuote: liveAt(25_000) }); // a live quote exists but is not used
     const [open] = executor.placedOrders;
     expect([open.shortStrike, open.longStrike]).toEqual([20_970, 20_960]); // 21,003.7 - 30, rounded down
@@ -429,7 +429,7 @@ describe("(A1) the strike price source", () => {
     expect((sourceOf() as { ageSeconds: number }).ageSeconds).toBeGreaterThanOrEqual(4);
     expect(positionsStore.all()[0].underlyingAtOpen).toBe(21_003.7);
     const card = runsStore.all()[0].nodes.find((n) => n.kind === "action");
-    expect(card && card.kind === "action" && card.params.find((p) => p.label === "Strike price")?.value).toMatch(/^alert price 21,003\.7, \d+(\.\d)?s old$/);
+    expect(card && card.kind === "action" && card.params.find((p) => p.label === "Strike price")?.value).toMatch(/^price at the call 21,003\.7, \d+(\.\d)?s old$/);
   });
 
   it("the alert's age includes the flip's wait: it is older by the time the Open step runs", async () => {
@@ -469,7 +469,7 @@ describe("(A1) the strike price source", () => {
     expect(executor.placedOrders).toHaveLength(0);
   });
 
-  it("and on the alert's price in alert mode", async () => {
+  it("and on the price at the call in the default mode", async () => {
     await emit("bullish", { price: 5_000 });
     expect(outcomes()).toEqual(["price_out_of_range"]);
   });

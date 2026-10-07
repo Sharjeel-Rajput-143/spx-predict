@@ -140,6 +140,10 @@ describe("through the app's own routes, as on Vercel", () => {
     const list = await names();
     expect(list.map((w) => w.name).sort()).toEqual(["BearishNDX", "BullishNDX"]); // both are there, once each
 
+    // Saved with its user, in the database, not just in memory.
+    const { ownerUserId } = await import("@/lib/auth/users");
+    expect(storage.repository<{ id: string; userId?: string }>("webhooks").all().every((w) => w.userId === ownerUserId())).toBe(true);
+
     storage.dropCaches?.();
     const bull = list.find((w) => w.name === "BullishNDX")!;
     expect((await PATCH(json("PATCH", { name: "BullishNDX2" }), ctx(bull.id))).status).toBe(200);
@@ -150,6 +154,40 @@ describe("through the app's own routes, as on Vercel", () => {
     expect((await DELETE(json("DELETE"), ctx(bull.id))).status).toBe(200);
     storage.dropCaches?.();
     expect((await names()).map((w) => w.name)).toEqual(["BearishNDX"]);
+  });
+
+  it("a TradingView call is answered at once, and the bot's work behind the answer is still saved", async () => {
+    vi.resetModules();
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("AUTOMATION_STORAGE", "");
+    vi.stubEnv("TURSO_DB_URL", url);
+    vi.stubEnv("TURSO_DB_TOKEN", "test-token");
+    vi.doMock("@/lib/marketData/tickStore", () => ({ waitForTick: async () => ({ t: Date.now(), price: 21_050.5 }), getLastTick: () => null, isLiveSymbol: () => false }));
+    const { storage } = await import("../store");
+    const { POST: create, GET } = await import("@/app/api/automation/webhooks/route");
+    const { POST: hook } = await import("@/app/api/webhook/hook/[token]/route");
+    const { setNdxTestEnv } = await import("../testSupport");
+    setNdxTestEnv();
+
+    await create(json("POST", { name: "BullishNDX" }));
+    const made = (storage.repository<{ id: string; token: string }>("webhooks").all())[0];
+    // attach it to the bullish trigger of the NDX bot
+    const { attachWebhook } = await import("../webhooks");
+    attachWebhook(made.id, "ndx_ema_bias", "bullish");
+    await GET(json("GET")); // saved
+
+    const res = await hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
+    expect(res.status).toBe(200);
+
+    // Anything that asks next waits its turn behind the bot's work, then sees everything it did.
+    await GET(json("GET"));
+    const { createClient } = await import("@libsql/client");
+    const rows = (await createClient({ url }).execute("SELECT collection, json FROM records WHERE collection IN ('signals','decisions','runs')")).rows;
+    const count = (name: string) => rows.filter((r) => r.collection === name).length;
+    expect(count("signals")).toBe(1);
+    expect(count("decisions")).toBeGreaterThan(0);
+    expect(count("runs")).toBe(1);
+    vi.doUnmock("@/lib/marketData/tickStore");
   });
 
   it("answers 503 with the reason when the database can't be reached", async () => {

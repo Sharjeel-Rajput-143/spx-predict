@@ -184,6 +184,17 @@ describe("Log", () => {
     }
   });
 
+  it("says where each call came from (TradingView or Test Hook) and can filter on it", () => {
+    const d = fixture();
+    const out = html(<LogTab ctx={ctxFor(d)} />);
+    expect(out).toContain(">TradingView<");
+    for (const option of ["TradingView", "Test Hook"]) expect(out).toContain(`>${option}</option>`);
+    const tested = html(
+      <LogTab ctx={ctxFor({ ...d, signals: d.signals.map((s) => ({ ...s, raw: { ...(s.raw as object), test: true, origin: "test_hook", webhook: "BullishNDX" } })) })} />,
+    );
+    expect(tested).toContain(">Test Hook<");
+  });
+
   it("hides everything before the cleared time", () => {
     const d = fixture();
     const out = html(<LogTab ctx={ctxFor({ ...d, bot: { ...d.bot, logClearedAt: NOW } })} />);

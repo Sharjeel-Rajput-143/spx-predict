@@ -31,6 +31,8 @@ interface State {
   hydratedAt: number;
   lastError: string | null;
   timer: ReturnType<typeof setTimeout> | null;
+  /** Saves run one after another, so two never race and write an older change over a newer one. */
+  saving: Promise<unknown>;
 }
 
 // One copy per database and instance, shared by every module graph (as the JSON backend's caches are).
@@ -56,7 +58,7 @@ export class TursoBackend implements StorageBackend {
   private get state(): State {
     let s = states.get(this.key);
     if (!s) {
-      s = { data: new Map(), pending: [], ready: false, hydratedAt: 0, lastError: null, timer: null };
+      s = { data: new Map(), pending: [], ready: false, hydratedAt: 0, lastError: null, timer: null, saving: Promise.resolve() };
       for (const name of COLLECTIONS) s.data.set(name, []);
       states.set(this.key, s);
     }
@@ -145,7 +147,14 @@ export class TursoBackend implements StorageBackend {
   }
 
   /** Writes every change made since the last save, in one transaction. On failure the changes are kept for the next try. */
-  async flush(): Promise<void> {
+  flush(): Promise<void> {
+    const s = this.state;
+    const run = s.saving.then(() => this.save());
+    s.saving = run.catch(() => undefined);
+    return run;
+  }
+
+  private async save(): Promise<void> {
     const s = this.state;
     if (s.pending.length === 0) return;
     const ops = s.pending.splice(0, s.pending.length);

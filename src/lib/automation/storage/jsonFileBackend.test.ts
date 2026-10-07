@@ -246,3 +246,19 @@ describe("atomic writes", () => {
     expect(calls).toEqual(Array(3).fill(["write orders.json.tmp", "rename orders.json.tmp -> orders.json"]).flat());
   });
 });
+
+describe("a collection added after a folder was set up", () => {
+  it("starts empty, without calling the folder damaged; any other missing file is still an error", () => {
+    const first = make();
+    first.repository<Row>("bots").insert({ id: "keep" });
+    fs.rmSync(file("users")); // a folder from before `users` existed
+    const b = restart();
+    expect(b.check()).toBeNull();
+    expect(b.repository<Row>("users").all()).toEqual([]);
+    expect(fs.existsSync(file("users"))).toBe(true);
+    expect(b.repository<Row>("bots").all()).toEqual([{ id: "keep" }]); // the rest is untouched
+
+    fs.rmSync(file("positions")); // a real loss is still reported
+    expect(restart().check()).toMatch(/positions\.json is missing/);
+  });
+});

@@ -132,9 +132,9 @@ export function InputFields({ f, set, columns = 3 }: { f: BotFormValues; set: (k
                 <option value="nearest">Nearest strike</option>
               </select>
             </Field>
-            <Field label="Strike price from" hint="Which price the strikes are built from. Alert price (default): the price TradingView sent. Live quote: a quote taken when the Open step runs - use it only once a real-time quote source is connected (the Tradier sandbox's quotes are about 15 minutes delayed). With no fresh quote the bot refuses to open. The log always says which was used, the price and its age.">
+            <Field label="Strike price from" hint="Which price the strikes are built from. When the call arrived (default): the bot's own live quote at the moment the webhook was called (the webhook carries no price). At the Open step: a fresh quote taken when the Open step runs - use it only once a real-time quote source is connected (the Tradier sandbox's quotes are about 15 minutes delayed). With no fresh quote the bot refuses to open. The log always says which was used, the price and its age.">
               <select className={inputClass} value={f.strikePriceSource} onChange={set("strikePriceSource")}>
-                <option value="alert">Alert price</option>
+                <option value="alert">When the call arrived</option>
                 <option value="live">Live quote: do not use until a real time quote source is connected</option>
               </select>
             </Field>

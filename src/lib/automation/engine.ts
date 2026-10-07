@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { originLabel } from "./origin";
 import { botAccountId, ensureBotRecord, getBotLimits, getBotStaticConfig, listBotIds } from "./bots";
 import {
   DEDUPE_WINDOW_SECONDS,
@@ -321,7 +322,7 @@ export async function processSignal(signal: Signal, options: ProcessSignalOption
     signalId: signal.id,
     source: manual ? "manual" : "webhook",
     automation: `${signal.signal === "bullish" ? "Bullish" : signal.signal === "bearish" ? "Bearish" : "Unknown"} signal`,
-    trigger: manual ? "Manual run" : "Webhook",
+    trigger: originLabel(signal), // "TradingView: BullishNDX", "Test Hook: BullishNDX", "Manual run"
     startedAt: options.now ?? Date.now(),
   });
   try {
@@ -343,7 +344,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   const openTimeoutMs = options.orderFillTimeoutMs ?? ORDER_FILL_TIMEOUT_SECONDS * 1000;
   const pollIntervalMs = options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS;
   const dryRun = options.dryRun ?? isDryRun();
-  /** Real clock at the start of the run: the flip's waits are real time, and they age the alert's price. */
+  /** Real clock at the start of the run: the flip's waits are real time, and they age the price taken at the call. */
   const runStartedAt = Date.now();
   const { botId } = signal;
 
@@ -603,7 +604,7 @@ interface OpenStageContext {
   wouldCloseIds?: ReadonlySet<string>;
   /** Where a live strike price comes from. */
   liveQuote?: (symbol: string) => LiveQuote | null;
-  /** Date.now() when the run began, to work out how old the alert's price is by the time the Open step runs. */
+  /** Date.now() when the run began, to work out how old the price taken at the call is by the time the Open step runs. */
   runStartedAt?: number;
 }
 
@@ -722,8 +723,8 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     if (sourceSetting === "alert") {
       const ageMs = Math.max(0, now - signal.receivedAt) + elapsedMs;
       sourceDetail = { priceSource: { source: "alert", price: signal.price, ageSeconds: seconds(ageMs) } };
-      sourceNote = `alert price ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old`;
-      rec?.decision("The strikes use the alert's price", true, `Alert price ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old when the Open step ran`);
+      sourceNote = `price at the call ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old`;
+      rec?.decision("The strikes use the price when the call arrived", true, `Price at the call ${fmtLevel(signal.price)}, ${seconds(ageMs)}s old when the Open step ran`);
     } else {
       const quote = (ctx.liveQuote ?? feedQuote)(staticConfig.underlying);
       const maxAgeMs = STRIKE_QUOTE_MAX_AGE_SECONDS * 1000;

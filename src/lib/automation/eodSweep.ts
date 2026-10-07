@@ -7,6 +7,8 @@ import { recordError } from "./errors";
 import { closePosition } from "./engine";
 import { payoffAt } from "./payoff";
 import { positionQuantity } from "./pnl";
+import { checkInterruptedRuns } from "./interrupted";
+import { pruneOncePerDay } from "./retention";
 import { runDueMonitors } from "./monitors";
 import { recoverInFlightPositions } from "./recovery";
 import { flagMismatches, reconcile } from "./reconcile";
@@ -230,6 +232,8 @@ async function tick(): Promise<void> {
   state.ticking = true;
   try {
     await runDueSweeps(Date.now());
+    pruneOncePerDay(Date.now()); // old log entries, once a day
+    await checkInterruptedRuns(Date.now()); // a run the server stopped partway through, said once in the Log
     await runDueMonitors(Date.now()); // Close Monitors (off unless a person switched one on); quiet when there is nothing to do
 
     // Optional periodic check of our open positions against the broker's (RECONCILE_INTERVAL_MINUTES, off by default).

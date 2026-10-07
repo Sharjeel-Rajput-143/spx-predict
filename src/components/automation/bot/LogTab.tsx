@@ -7,12 +7,13 @@ import { cn } from "@/lib/format";
 import type { Decision, Run, Signal } from "@/lib/automation/types";
 import type { BotContext } from "./BotDetail";
 import { DirectionTag, Drawer, KeyValue, Modal, Pill, buttonClass } from "./primitives";
+import { ORIGIN_LABEL, originLabel, signalOrigin } from "@/lib/automation/origin";
 import { RunTrace } from "./RunTrace";
 import { etDateTime, etDayKey, etTime, groupByDay, num, outcomeInfo, type Tone } from "./model";
 
 type DateFilter = "all" | "today" | "yesterday" | "7d";
 type TimeFilter = "all" | "market" | "outside";
-type TypeFilter = "all" | "webhook" | "manual" | "rejected";
+type TypeFilter = "all" | "tradingview" | "test_hook" | "manual" | "rejected";
 
 /** A row in the log: a signal and what the engine did with it, or a decision
  * with no signal behind it (a position placed or closed by hand). */
@@ -28,7 +29,7 @@ interface Entry {
 
 const PROCESSING_WINDOW_MS = 3 * 60_000;
 
-const isManualSignal = (s: Signal) => (s.raw as { source?: string } | null)?.source === "manual";
+const isManualSignal = (s: Signal) => signalOrigin(s) === "manual";
 
 const automationName = (e: Entry): string => {
   if (!e.signal) return e.decisions[0]?.outcome === "closed" || e.decisions[0]?.reason.toLowerCase().includes("close") ? "Manual close" : "Manual position";
@@ -90,7 +91,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
         if ((time === "market") !== inMarket) return false;
       }
       if (type === "manual" && !(e.signal === null || isManualSignal(e.signal))) return false;
-      if (type === "webhook" && (e.signal === null || isManualSignal(e.signal) || e.signal.status === "rejected")) return false;
+      if ((type === "tradingview" || type === "test_hook") && (e.signal === null || signalOrigin(e.signal) !== type)) return false;
       if (type === "rejected" && e.signal?.status !== "rejected") return false;
       const tones = tonesOf(e);
       if (onlyErrors && !tones.has("error")) return false;
@@ -108,6 +109,15 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
     const res = await fetch(`/api/automation/bots/${data.bot.id}/log`, { method: "DELETE" });
     if (res.ok) notify("ok", "Log cleared. The data is kept - export still includes it.");
     else notify("error", "Could not clear the log.");
+    reload();
+  };
+
+  const deleteEntry = async (key: string) => {
+    if (!window.confirm("Delete this log entry from the records? The signal, its decisions and its run are removed for good.")) return;
+    const res = await fetch(`/api/automation/bots/${data.bot.id}/log/${encodeURIComponent(key)}`, { method: "DELETE" });
+    const j = await res.json().catch(() => ({}));
+    if (res.ok) notify("ok", "Log entry deleted.");
+    else notify("error", j.error ?? "Could not delete the log entry.");
     reload();
   };
 
@@ -135,7 +145,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       <div className="flex flex-wrap items-center gap-2">
         {select(date, (v) => setDate(v as DateFilter), "Date", [["all", "Date: all"], ["today", "Today"], ["yesterday", "Yesterday"], ["7d", "Last 7 days"]])}
         {select(time, (v) => setTime(v as TimeFilter), "Time", [["all", "Time: all"], ["market", "Market hours"], ["outside", "Outside market hours"]])}
-        {select(type, (v) => setType(v as TypeFilter), "Type", [["all", "Type: all"], ["webhook", "Webhook"], ["manual", "Manual"], ["rejected", "Rejected"]])}
+        {select(type, (v) => setType(v as TypeFilter), "Type", [["all", "Type: all"], ["tradingview", "TradingView"], ["test_hook", "Test Hook"], ["manual", "Manual"], ["rejected", "Rejected"]])}
         {chip(onlyErrors, () => setOnlyErrors((v) => !v), "Errors")}
         {chip(onlyWarnings, () => setOnlyWarnings((v) => !v), "Warnings")}
         <div className="relative">
@@ -168,7 +178,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
             <div key={label}>
               <div className="border-b border-line bg-surface-2/60 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</div>
               {rows.map((e) => (
-                <LogRow key={e.key} entry={e} now={data.now} onOpen={() => setSelected(e.key)} onAutomation={() => navigate("settings")} />
+                <LogRow key={e.key} entry={e} now={data.now} onOpen={() => setSelected(e.key)} onAutomation={() => navigate("settings")} onDelete={() => deleteEntry(e.key)} />
               ))}
             </div>
           ))
@@ -218,7 +228,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
   );
 }
 
-function LogRow({ entry, now, onOpen, onAutomation }: { entry: Entry; now: number; onOpen: () => void; onAutomation: () => void }) {
+function LogRow({ entry, now, onOpen, onAutomation, onDelete }: { entry: Entry; now: number; onOpen: () => void; onAutomation: () => void; onDelete: () => void }) {
   const { signal, decisions } = entry;
   const opened = decisions.filter((d) => d.outcome === "opened").length;
   const closed = decisions.filter((d) => d.outcome === "closed").length;
@@ -241,6 +251,12 @@ function LogRow({ entry, now, onOpen, onAutomation }: { entry: Entry; now: numbe
           {automationName(entry)}
         </button>
         {signal && signal.price > 0 && <span className="tabular text-xs text-faint">@ {num(signal.price)}</span>}
+        {/* Where the call came from: a real TradingView alert, or somebody pressing Test Hook. */}
+        {signal && (
+          <Pill tone={signalOrigin(signal) === "test_hook" ? "info" : "neutral"} >
+            <span title={originLabel(signal)}>{ORIGIN_LABEL[signalOrigin(signal)]}</span>
+          </Pill>
+        )}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
         {signal?.status === "rejected" && <ErrorPill text={`Rejected: ${signal.rejectReason ?? "unknown"}`} />}
@@ -257,6 +273,23 @@ function LogRow({ entry, now, onOpen, onAutomation }: { entry: Entry; now: numbe
         {errors.map((d) => (
           <ErrorPill key={d.id} text={d.reason} />
         ))}
+        {/* Deletable once the bot has stopped remembering it for duplicate protection. */}
+        {now - entry.at >= PROCESSING_WINDOW_MS && (
+          <button
+            type="button"
+            aria-label="Delete log entry"
+            title="Delete this entry from the records"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-down"
+          >
+            <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+            </svg>
+          </button>
+        )}
       </span>
     </div>
   );
@@ -288,7 +321,7 @@ function TraceDrawer({ entry, onClose }: { entry: Entry; onClose: () => void }) 
                   ["Price", signal.price ? num(signal.price) : "—"],
                   ["Bar time", signal.barTime || "—"],
                   ["Interval", signal.interval || "—"],
-                  ["Triggered by", isManualSignal(signal) ? "Manual run" : "TradingView webhook"],
+                  ["Triggered by", originLabel(signal)],
                 ] as [string, React.ReactNode][])
               : ([["Triggered by", "Manual action"]] as [string, string][])),
           ]}

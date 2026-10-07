@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
-import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
-import { withStorage } from "@/lib/automation/withStorage";
+import { ingestWebhook } from "@/lib/automation/webhookIngest";
+import { deferWork, withStorage } from "@/lib/automation/withStorage";
 
 async function handlePOST(req: NextRequest) {
   const body = await req.json().catch(() => null);
-  // Return fast; the decision logic keeps running in the background.
+  // Return fast (TradingView gives up after about 3 seconds); the decision logic keeps running behind the answer.
   const result = ingestWebhook(body, { executor: sharedExecutor });
-  await settleIfServerless(result);
-  return NextResponse.json(result.body, { status: result.status });
+  return deferWork(NextResponse.json(result.body, { status: result.status }), result.processing);
 }
 
 export const POST = withStorage(handlePOST);

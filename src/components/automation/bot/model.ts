@@ -93,6 +93,7 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   executor_error: { label: "Executor error", tone: "error" },
   config_error: { label: "Config missing", tone: "error" },
   error_failsafe: { label: "Bot switched off", tone: "error" },
+  run_interrupted: { label: "Run interrupted", tone: "error" },
   eod_sweep: { label: "End-of-day sweep", tone: "ok" },
 };
 

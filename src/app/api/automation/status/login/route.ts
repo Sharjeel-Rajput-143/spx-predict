@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkCredentials, clearFailures, loginConfigured, lockedOut, recordFailure, sessionKeyOrNull } from "@/lib/auth/credentials";
+import { ownerEmail } from "@/lib/auth/users";
+import { recordSignIn } from "@/lib/automation/userAccounts";
 import { isAuthRequired } from "@/lib/automation/config";
 import { createSession, SESSION_COOKIE_NAME } from "@/lib/automation/session";
 import { withStorage } from "@/lib/automation/withStorage";
@@ -29,6 +31,7 @@ async function handlePOST(req: NextRequest) {
     return NextResponse.redirect(redirectUrl, { status: 303 });
   }
 
+  if (isAuthRequired()) recordSignIn(ownerEmail());
   const res = NextResponse.redirect(redirectUrl, { status: 303 });
   res.cookies.set(SESSION_COOKIE_NAME, createSession(), {
     httpOnly: true,

@@ -18,6 +18,14 @@ import { ensureBotRecord } from "./bots";
 import { attachWebhook, createWebhook, detachTrigger, deleteWebhook, optionsForTrigger, webhookForTrigger } from "./webhooks";
 import { NDX_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 
+// The bot's own live quote, as the app's price feed would give it: a webhook call carries no price. No network.
+vi.mock("@/lib/marketData/tickStore", () => ({
+  waitForTick: async () => ({ t: Date.now(), price: 21_003.7 }),
+  getLastTick: () => ({ t: Date.now(), price: 21_003.7 }),
+  isLiveSymbol: () => false,
+}));
+
+
 // Attaching a webhook to the NDX Bias Bot's Bullish or Bearish trigger: attach, change, detach, one webhook one
 // trigger, kept across a restart, logged, and the secret never shown, logged or returned in full.
 
@@ -435,7 +443,7 @@ describe("the trigger panel (laid out like Option Alpha's Edit Settings)", () =>
 });
 
 describe("a test call needs no price, like the real call", () => {
-  it("left blank it runs on the live quote; with no fresh quote it says so; a typed price still works", async () => {
+  it("runs on the live quote; with no fresh quote it says so; a price sent in the body is ignored", async () => {
     vi.resetModules();
     const feed = { tick: null as { t: number; price: number } | null };
     vi.doMock("@/lib/marketData/tickStore", () => ({ waitForTick: async () => feed.tick, getLastTick: () => feed.tick, isLiveSymbol: () => false }));
@@ -448,11 +456,10 @@ describe("a test call needs no price, like the real call", () => {
 
     expect((await ask({})).status).toBe(409); // no quote yet
     feed.tick = { t: Date.now(), price: 21_050.5 };
-    const res = await ask({ price: null });
+    const res = await ask({});
     expect(res.status).toBe(200);
     expect((await res.json()).price).toBe(21_050.5);
-    expect((await (await ask({ price: 21_000 })).json()).price).toBe(21_000);
-    expect((await ask({ price: -5 })).status).toBe(400);
+    expect((await (await ask({ price: 21_000 })).json()).price).toBe(21_050.5); // not read
     vi.doUnmock("@/lib/marketData/tickStore");
   });
 });

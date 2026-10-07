@@ -1,5 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
+import { ownerUserId } from "@/lib/auth/users";
+import { currentUserId } from "./userContext";
 import { SMART_PRICING_MODES, type SmartPricingMode } from "./smartPricing";
 import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes } from "./config";
 import {
@@ -204,8 +206,14 @@ export function isBuiltInBot(botId: string): boolean {
 
 const isUserBot = (b: Bot | undefined): b is Bot => !!b && (!!b.config || !!b.draftInputs);
 
+/** The built-in bots (from the environment) belong to the owner: another signed-in user doesn't see them. */
+function seesBuiltIns(): boolean {
+  const me = currentUserId();
+  return me === null || me === ownerUserId();
+}
+
 export function listBotIds(): string[] {
-  const ids = new Set(Object.keys(STATIC_CONFIGS));
+  const ids = new Set(seesBuiltIns() ? Object.keys(STATIC_CONFIGS) : []);
   for (const b of botsStore.all()) if (isUserBot(b)) ids.add(b.id);
   return [...ids];
 }
@@ -222,7 +230,7 @@ export function botAccountId(botId: string): string | null {
 }
 
 export function isKnownBot(botId: string): boolean {
-  return isBuiltInBot(botId) || isUserBot(botsStore.get(botId));
+  return (isBuiltInBot(botId) && seesBuiltIns()) || isUserBot(botsStore.get(botId));
 }
 
 /** A bot's trading inputs: its stored config if it has one (every bot made in

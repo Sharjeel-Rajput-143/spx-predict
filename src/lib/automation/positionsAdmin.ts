@@ -3,7 +3,7 @@ import { ensureBotRecord, getBotLimits, getBotStaticConfig, isKnownBot } from ".
 import { logDecision } from "./decisions";
 import { positionQuantity } from "./pnl";
 import { activePositionsForBot } from "./safeguards";
-import { botsStore, positionsStore } from "./store";
+import { botsStore, ordersStore, positionsStore } from "./store";
 import type { Position } from "./types";
 
 const cleanTags = (tags: unknown): string[] =>
@@ -108,4 +108,23 @@ export function movePosition(positionId: string, targetBotId: string, now: numbe
   logDecision({ signalId: null, botId: sourceBotId, outcome: "position_moved", reason: `Moved to ${target.name}.`, detail, now });
   logDecision({ signalId: null, botId: targetBotId, outcome: "position_moved", reason: `Moved in from ${botName(sourceBotId)}.`, detail, now });
   return moved;
+}
+
+/** Positions that are over (or never reached the broker) can be removed from the records. An open or closing one can't: the bot is still tracking it at the broker. */
+export const REMOVABLE_STATUSES: readonly Position["status"][] = ["closed", "expired", "rejected"];
+
+/** Whether a position can be deleted, and why not. A test position (made through Test Hook or a test run) can go whatever state it is in. */
+export function whyNotRemovable(position: Position): string | null {
+  if (position.test || REMOVABLE_STATUSES.includes(position.status)) return null;
+  return `This position is ${position.status}: the bot is still tracking it. Close it first; once it is closed or expired it can be deleted.`;
+}
+
+/** Removes a finished position and its orders from the records. The log entries about it stay (they are the history of what the bot did). Callers hold the bot's lock. */
+export function deletePosition(positionId: string): void {
+  const position = positionsStore.get(positionId);
+  if (!position) throw new Error("Position not found.");
+  const why = whyNotRemovable(position);
+  if (why) throw new Error(why);
+  ordersStore.removeWhere((o) => o.positionId === positionId);
+  positionsStore.remove(positionId);
 }

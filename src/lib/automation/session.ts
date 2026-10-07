@@ -3,6 +3,7 @@ import { getAppSettings } from "./appSettings";
 import { isAuthRequired } from "./config";
 
 import { loginEmail, sessionKeyOrNull } from "@/lib/auth/credentials";
+import { userIdForEmail } from "@/lib/auth/users";
 import { signSession, verifySession } from "@/lib/auth/sessionToken";
 
 export const SESSION_COOKIE_NAME = "automation_session";
@@ -27,4 +28,12 @@ export function isValidSession(token: string | undefined | null): boolean {
 
 export function destroySession(token: string | undefined | null): void {
   if (token) signedOut.add(token);
+}
+
+/** Who a session cookie belongs to (a user id), or null: nobody is signed in, or sign-in is off (then the engine's own, unrestricted view applies). */
+export function sessionUserId(token: string | undefined | null): string | null {
+  if (!isAuthRequired() || !token || signedOut.has(token)) return null;
+  const key = sessionKeyOrNull();
+  const email = key ? verifySession(token, key) : null;
+  return email ? userIdForEmail(email) : null;
 }
