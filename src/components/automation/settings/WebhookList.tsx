@@ -71,7 +71,7 @@ export function NewWebhookDrawer({ onCreate, onClose }: { onCreate: (name: strin
   );
 }
 
-/** The pencil: rename a webhook, or switch it on or off. (Deleting is the trash can on its row, offered only when nothing uses it.) */
+/** The pencil: rename a webhook, or switch it on or off. (Deleting is the trash can on its row.) */
 export function EditWebhookDrawer({
   hook,
   onRename,
@@ -133,7 +133,7 @@ const IconTrash = (p: React.SVGProps<SVGSVGElement>) => (
 
 /**
  * One webhook, laid out like Option Alpha's list: the name, "Test Hook" (grey when it can't be used), a pencil, and a trash
- * can only when nothing uses it; then "Usages: N bots" (opens to show where); then "URL:" with a copy icon.
+ * can; then "Usages: N bots" (opens to show where); then "URL:" with a copy icon.
  */
 export function WebhookRow({
   hook,
@@ -147,7 +147,7 @@ export function WebhookRow({
   /** The test form, shown under the row when "Test Hook" is opened (mock and Tradier sandbox only). */
   testSlot?: ReactNode;
   onEdit: () => void;
-  /** Offered only while the webhook is attached to nothing. */
+  /** The trash can: deleting an attached webhook detaches it from its trigger first (logged). */
   onDelete?: (id: string) => void;
 }) {
   const [testing, setTesting] = useState(false);
@@ -169,13 +169,14 @@ export function WebhookRow({
         <button type="button" onClick={onEdit} aria-label={`Edit ${hook.name}`} title="Rename or switch on or off" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
           <IconEdit width={15} height={15} />
         </button>
-        {used === 0 && onDelete && (
+        {onDelete && (
           <button
             type="button"
             aria-label={`Delete ${hook.name}`}
-            title="Delete this webhook"
+            title={used === 0 ? "Delete this webhook" : "Delete this webhook (it is detached from its trigger first)"}
             onClick={() => {
-              if (window.confirm(`Delete the webhook "${hook.name}"? A TradingView alert using its URL will stop working.`)) onDelete(hook.id);
+              const detail = used === 0 ? "" : ` It is attached to the ${hook.direction === "bullish" ? "Bullish" : "Bearish"} trigger of ${hook.botName}: that trigger will have no webhook until you attach another.`;
+              if (window.confirm(`Delete the webhook "${hook.name}"?${detail} A TradingView alert using its URL will stop working.`)) onDelete(hook.id);
             }}
             className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-down"
           >

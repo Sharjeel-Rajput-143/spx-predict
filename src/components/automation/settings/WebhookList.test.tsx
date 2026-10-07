@@ -61,7 +61,7 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
     expect(out).toContain("http://localhost:3000/hook/••••••••••••c0de");
     expect(out).toContain('aria-label="Copy webhook URL"');
     expect(out).not.toContain("TEST-FORM"); // the test form opens on click
-    expect(out).not.toContain("Delete BullishNDX"); // no trash can while it is in use
+    expect(out).toContain('aria-label="Delete BullishNDX"'); // a trash can even while it is in use: deleting detaches it first
   });
 
   it("an unused webhook shows 'Usages: 0 bots', a grey Test Hook that isn't a button, and a trash can", () => {
@@ -73,7 +73,7 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
     expect(out).toContain('aria-label="Delete BullishNDX"');
   });
 
-  it("the pencil opens Edit Webhook: rename, and switch on or off (delete is the trash can on an unused row)", () => {
+  it("the pencil opens Edit Webhook: rename, and switch on or off (delete is the trash can on its row)", () => {
     const out = html(<EditWebhookDrawer hook={hook()} onRename={async () => null} onToggle={noop} onClose={noop} />);
     for (const t of ["Edit Webhook", 'value="BullishNDX"', ">Save<", ">Switch off<"]) expect(out, t).toContain(t);
     expect(out).not.toContain(">Delete<");
