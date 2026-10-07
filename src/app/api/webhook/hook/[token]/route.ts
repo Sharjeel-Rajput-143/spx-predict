@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
-import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
+import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, isAttached, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
 import { getLastTick } from "@/lib/marketData/tickStore";
 
 /** A live quote older than this isn't a price to trade on. */
@@ -20,6 +20,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const hook = findWebhookByToken(token);
   // Unknown or switched-off URLs look exactly the same from outside.
   if (!hook || !hook.active) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  // A webhook that isn't attached to a trigger has no bot or direction to run: refused until it is attached.
+  if (!isAttached(hook)) return NextResponse.json({ error: "This webhook isn't attached to a trigger. Attach it from the bot's Bullish or Bearish trigger." }, { status: 409 });
 
   const now = Date.now();
   const raw = await req.text().catch(() => "");

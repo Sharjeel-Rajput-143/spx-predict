@@ -188,6 +188,53 @@ describe("bot off: a webhook may still close, and may never open", () => {
   });
 });
 
+describe("Always On (per trigger): copied only for closes", () => {
+  it("defaults to on for both triggers", () => {
+    expect(bot().alwaysOn).toBeUndefined(); // unset = on
+  });
+
+  it("Always On off for the Bullish trigger: with the bot off, a bullish signal closes nothing and opens nothing", async () => {
+    positionsStore.insert(call({ id: "held" }));
+    botOff();
+    updateBot(NDX_BOT_ID, { alwaysOn: { bullish: false, bearish: true } });
+    await emit("bullish");
+    expect(outcomes()).toEqual(["automations_off"]);
+    expect(decisionsStore.all()[0].reason).toContain("Always On is off");
+    expect(executor.placedOrders).toHaveLength(0);
+    expect(positionsStore.get("held")?.status).toBe("open");
+  });
+
+  it("each direction has its own: the Bearish trigger, still on, closes with the bot off", async () => {
+    positionsStore.insert(put({ id: "held" }));
+    botOff();
+    updateBot(NDX_BOT_ID, { alwaysOn: { bullish: false, bearish: true } });
+    await emit("bearish");
+    expect(outcomes()).toEqual(["bot_off_close_only", "closed", "automations_off"]);
+    expect(opens()).toHaveLength(0);
+  });
+
+  it("with the bot on, Always On makes no difference", async () => {
+    updateBot(NDX_BOT_ID, { alwaysOn: { bullish: false, bearish: false } });
+    await emit("bullish");
+    expect(outcomes()).toEqual(["opened"]);
+  });
+
+  it("it is saved through the bot's settings and kept", () => {
+    updateBot(NDX_BOT_ID, { alwaysOn: { bullish: false, bearish: true } });
+    expect(bot().alwaysOn).toEqual({ bullish: false, bearish: true });
+    updateBot(NDX_BOT_ID, { alwaysOn: { bullish: true, bearish: true } });
+    expect(bot().alwaysOn).toEqual({ bullish: true, bearish: true });
+  });
+
+  it("the kill switch still beats it", async () => {
+    positionsStore.insert(call({ id: "held" }));
+    botOff();
+    killOn();
+    await emit("bullish");
+    expect(outcomes()).toEqual(["kill_switch"]);
+  });
+});
+
 describe("kill switch: stops every webhook run completely", () => {
   it("blocks the close and the open: an opposite signal does nothing", async () => {
     positionsStore.insert(call({ id: "held" }));

@@ -144,7 +144,7 @@ interface Pricing {
   width: number;
 }
 
-const pricingFor = (config: BotStaticConfig, side: "open" | "close", stepMs?: number): Pricing => ({
+export const pricingFor = (config: BotStaticConfig, side: "open" | "close", stepMs?: number): Pricing => ({
   mode: config.smartPricing ?? "normal",
   percent: (side === "open" ? config.openPricePercent : config.closePricePercent) ?? 100,
   stepMs,
@@ -294,7 +294,7 @@ function priceRangeProblem(price: number, config: BotStaticConfig): string | nul
   return null;
 }
 
-const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
+export const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
 
 /** The settings a close order is sent with - a snapshot for the run log. */
 function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100, how?: { note?: string; quotes: boolean; mode: SmartPricingMode }): { label: string; value: string }[] {
@@ -382,9 +382,16 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     log("kill_switch", "Kill switch is on: nothing was closed or opened.");
     return;
   }
-  const closeOnly = !bot.enabled;
+  const direction = signal.signal as SignalDirection;
+  // "Always On" (per trigger, on unless a person turned it off): with the bot off the trigger still runs its close part.
+  const alwaysOn = bot.alwaysOn?.[direction] !== false;
+  const closeOnly = !bot.enabled && alwaysOn;
   const closableNow = closeOnly ? activePositionsForBot(botId, oppositeType(wantedType(signal.signal as SignalDirection))) : [];
-  rec.decision("Bot is switched on", bot.enabled, bot.enabled ? "Bot is on" : closableNow.length > 0 ? "Bot is off - this run may close, never open" : "Bot is off");
+  rec.decision("Bot is switched on", bot.enabled, bot.enabled ? "Bot is on" : !alwaysOn ? "Bot is off and this trigger's Always On is off" : closableNow.length > 0 ? "Bot is off - this run may close, never open" : "Bot is off");
+  if (!bot.enabled && !alwaysOn) {
+    log("automations_off", "Bot off, and this trigger's Always On is off: nothing runs.");
+    return;
+  }
   if (closeOnly && closableNow.length === 0) {
     log("automations_off", "Bot off: nothing to close, and the Open step is blocked. Nothing was opened.");
     return;

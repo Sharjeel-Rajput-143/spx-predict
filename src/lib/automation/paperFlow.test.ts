@@ -2,7 +2,10 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as hookRoute } from "@/app/api/webhook/hook/[token]/route";
 import { createWebhook } from "./webhooks";
-import { decisionsStore, ordersStore, positionsStore, signalsStore } from "./store";
+import { decisionsStore as allDecisions, ordersStore, positionsStore, signalsStore } from "./store";
+
+// Attaching a webhook to a trigger is logged too; these tests are about what a TradingView call does.
+const decisionsStore = { all: () => allDecisions.all().filter((d) => d.signalId !== null) };
 import { BASE_NOW, NDX_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 
 // The whole NDX path, from a TradingView call to an order on Tradier's SANDBOX, with Tradier replaced by a fake

@@ -86,6 +86,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       tags: record.tags ?? [],
       notes: record.notes ?? "",
       triggers: record.triggers ?? { bullish: true, bearish: true },
+      alwaysOn: record.alwaysOn ?? { bullish: true, bearish: true },
+      monitors: record.monitors ?? {},
       alerts: { ...DEFAULT_ALERTS, ...record.alerts },
       safeguards: record.safeguards ?? {},
       logClearedAt: record.logClearedAt ?? 0,

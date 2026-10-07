@@ -22,6 +22,8 @@ import {
   type StrikePriceSource,
   type Bot,
   type BotInputs,
+  type CloseMonitorSettings,
+  type MonitorKey,
   type EodSweepMode,
   type BotSafeguards,
   type BotStaticConfig,
@@ -458,6 +460,8 @@ export interface BotPatch {
   inputs?: BotInputs;
   safeguards?: BotSafeguards;
   triggers?: { bullish: boolean; bearish: boolean };
+  alwaysOn?: { bullish: boolean; bearish: boolean };
+  monitors?: Partial<Record<MonitorKey, Partial<CloseMonitorSettings>>>;
   alerts?: Partial<Bot["alerts"]>;
   accountId?: string;
 }
@@ -503,6 +507,21 @@ export function updateBot(botId: string, patch: BotPatch): Bot {
     if (draft && patch.safeguards.allocationLimit != null) next.draftInputs = { ...draft, allocationLimit: patch.safeguards.allocationLimit };
   }
   if (patch.triggers !== undefined) next.triggers = patch.triggers;
+  if (patch.monitors !== undefined) {
+    const merged: NonNullable<Bot["monitors"]> = { ...record.monitors };
+    for (const key of ["bullishClose", "bearishClose"] as const) {
+      const change = patch.monitors[key];
+      if (!change) continue;
+      const before = merged[key] ?? { enabled: false };
+      merged[key] = {
+        enabled: change.enabled ?? before.enabled,
+        ...(change.memo !== undefined ? (change.memo.trim() ? { memo: change.memo.trim().slice(0, 500) } : {}) : before.memo ? { memo: before.memo } : {}),
+        ...(change.tags !== undefined ? { tags: cleanTags(change.tags) } : before.tags ? { tags: before.tags } : {}),
+      };
+    }
+    next.monitors = merged;
+  }
+  if (patch.alwaysOn !== undefined) next.alwaysOn = { bullish: patch.alwaysOn.bullish !== false, bearish: patch.alwaysOn.bearish !== false };
   if (patch.alerts !== undefined) next.alerts = { ...DEFAULT_ALERTS, ...record.alerts, ...patch.alerts };
   if (patch.archived !== undefined) {
     next.archived = patch.archived;

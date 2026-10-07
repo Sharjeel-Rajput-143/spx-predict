@@ -13,7 +13,7 @@ export interface BotSummary {
   mode: "paper";
   builtIn: boolean;
   enabled: boolean;
-  killSwitch: boolean;
+  killSwitch?: boolean;
   archived: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;

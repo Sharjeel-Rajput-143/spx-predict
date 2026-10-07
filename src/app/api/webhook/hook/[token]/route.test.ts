@@ -181,13 +181,17 @@ describe("managing webhooks through the API", () => {
     const made = await create(json("POST", { name: "BullishNDX", botId: NDX_BOT_ID, direction: "bullish" }));
     expect(made.status).toBe(201);
     const hook = (await made.json()).webhook;
-    expect(hook).toMatchObject({ name: "BullishNDX", botName: "NDX Bias Bot", underlying: "NDX", path: `/hook/${hook.token}` });
+    expect(hook).toMatchObject({ name: "BullishNDX", botName: "NDX Bias Bot", underlying: "NDX", attached: true, direction: "bullish" });
+    expect(hook.token).toBeUndefined(); // the secret is never in a list or create answer
+    expect(hook.path).toMatch(/^\/hook\/•+[0-9a-f]{4}$/); // masked: only the last four characters show
+    const token = webhooksStore.get(hook.id)!.token;
+    expect(hook.path).not.toContain(token);
 
     await create(json("POST", { name: "BearishNDX", botId: NDX_BOT_ID, direction: "bearish" }));
     expect((await (await list(json("GET"))).json()).webhooks.map((w: { name: string }) => w.name)).toEqual(["BearishNDX", "BullishNDX"]);
 
     expect((await patch(json("PATCH", { active: false }), ctx(hook.id))).status).toBe(200);
-    expect((await call(hook.token, '{"price":21003.7}')).status).toBe(404);
+    expect((await call(token, '{"price":21003.7}')).status).toBe(404);
 
     expect((await remove(json("DELETE"), ctx(hook.id))).status).toBe(200);
     expect(webhooksStore.get(hook.id)).toBeUndefined();

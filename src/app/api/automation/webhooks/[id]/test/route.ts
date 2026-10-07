@@ -3,7 +3,7 @@ import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/ro
 import { executorStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
-import { webhookUnderlying } from "@/lib/automation/webhooks";
+import { isAttached, webhookUnderlying } from "@/lib/automation/webhooks";
 
 const WAIT_FOR_DECISION_MS = 45_000;
 
@@ -17,6 +17,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   return guarded(async () => {
     const hook = webhooksStore.get(id);
     if (!hook) return badRequest("Webhook not found.", 404);
+    if (!isAttached(hook)) return badRequest("Attach this webhook to a trigger first: a test call needs to know which bot and signal it is.", 409);
     const status = executorStatus();
     if (!(status.venue === "mock" || (status.venue === "tradier" && status.sandbox === true))) {
       return badRequest("A test call is only possible on the mock executor or the Tradier sandbox - never against real money.", 409);

@@ -26,6 +26,12 @@ export type DecisionOutcome =
   | "automations_off"
   /** The kill switch is on: nothing runs for this bot. */
   | "kill_switch"
+  /** A Close Monitor closed a position that was on the wrong side of the latest confirmed signal. */
+  | "monitor_closed"
+  /** A webhook was attached to, changed on, or detached from a trigger (logged, never with the URL). */
+  | "webhook_attached"
+  | "webhook_changed"
+  | "webhook_detached"
   /** The bot is off, and a webhook is closing the opposite position (it may close, never open). */
   | "bot_off_close_only"
   | "outside_hours"
@@ -119,6 +125,17 @@ export interface BotStaticConfig {
 export type EodSweepMode = "estimate" | "market" | "manual";
 export const EOD_SWEEP_MODES: readonly EodSweepMode[] = ["estimate", "market", "manual"];
 
+/** A Close Monitor (Option Alpha's "BullishSpx Close Monitor"): every minute inside the trading window it looks for a position
+ * on the wrong side of the latest confirmed signal and closes it. OFF by default, as in Option Alpha. */
+export interface CloseMonitorSettings {
+  enabled: boolean;
+  /** Written on the position it closes (the Close Position form's Memo). */
+  memo?: string;
+  /** Labels added to the position it closes (the form's Tags). */
+  tags?: string[];
+}
+export type MonitorKey = "bullishClose" | "bearishClose";
+
 /** The inputs a bot trades with - everything in BotStaticConfig except its id. */
 export type BotInputs = Omit<BotStaticConfig, "id">;
 
@@ -171,6 +188,12 @@ export interface Bot {
   safeguards?: BotSafeguards;
   /** Each signal direction can be switched off on its own; unset = on. */
   triggers?: { bullish: boolean; bearish: boolean };
+  /** Option Alpha's trigger setting "Always On - run even if automations are turned off", per direction; unset = on.
+   * Copied only for closes: with the bot off, an Always On trigger may still close the opposite position and never opens.
+   * Off = with the bot off the trigger does nothing at all. */
+  alwaysOn?: { bullish: boolean; bearish: boolean };
+  /** Close Monitors, by key. Unset = off. */
+  monitors?: Partial<Record<MonitorKey, CloseMonitorSettings>>;
   alerts?: BotAlerts;
   /** The Log view hides entries before this; the data itself is kept. */
   logClearedAt?: number;
@@ -398,7 +421,7 @@ export interface Run {
   id: string;
   botId: string;
   signalId: string | null;
-  source: "webhook" | "manual" | "ui";
+  source: "webhook" | "manual" | "ui" | "monitor";
   /** Which automation ran: "Bullish signal", "Bearish signal", "Manual open"... */
   automation: string;
   /** What set it off: "Webhook", "Manual run", "Manual action". */
@@ -432,14 +455,26 @@ export interface Webhook {
   name: string;
   /** The secret part of the URL: whoever has the URL can trigger it. */
   token: string;
-  botId: string;
-  /** Which signal a call to this URL means. */
-  direction: SignalDirection;
+  /** The trigger it is attached to (a bot and a direction): a call to the URL means that signal for that bot. Null =
+   * not attached yet, and a call to it is refused. One webhook, one trigger; a trigger holds one webhook. */
+  botId: string | null;
+  direction: SignalDirection | null;
   active: boolean;
   createdAt: number;
   lastTriggeredAt: number | null;
   /** Calls accepted (not counting ones ignored by the once-a-minute limit). */
   triggerCount: number;
+}
+
+export interface TriggerOption {
+  id: string;
+  name: string;
+  active: boolean;
+  /** Can this trigger take it? False when it is attached to another trigger. */
+  available: boolean;
+  attachedHere: boolean;
+  /** Why it can't be picked, in words. */
+  reason: string | null;
 }
 
 // --- App-wide settings (Settings page) ---

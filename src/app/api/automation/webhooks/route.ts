@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { botDisplayName } from "@/lib/automation/bots";
 import { guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { webhooksStore } from "@/lib/automation/store";
-import { createWebhook, webhookUnderlying, webhookUrlPath } from "@/lib/automation/webhooks";
-import type { Webhook } from "@/lib/automation/types";
+import { createWebhook, webhookView } from "@/lib/automation/webhooks";
 
-const view = (w: Webhook) => ({ ...w, botName: botDisplayName(w.botId), underlying: webhookUnderlying(w.botId), path: webhookUrlPath(w) });
+const view = webhookView;
 
 export async function GET(req: NextRequest) {
   const denied = unauthorized(req);
@@ -18,7 +16,7 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
   return guarded(async () => {
     const body = await readJson(req);
-    const hook = createWebhook({ name: String(body.name ?? ""), botId: String(body.botId ?? ""), direction: body.direction as "bullish" | "bearish" });
+    const hook = createWebhook({ name: String(body.name ?? ""), botId: typeof body.botId === "string" && body.botId ? body.botId : null, direction: body.direction === "bullish" || body.direction === "bearish" ? body.direction : null });
     return NextResponse.json({ webhook: view(hook) }, { status: 201 });
   });
 }

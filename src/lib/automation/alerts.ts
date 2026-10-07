@@ -10,6 +10,7 @@ import { DEFAULT_ALERTS, type AlertKind, type Decision, type DecisionOutcome } f
 const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   opened: "open",
   closed: "close",
+  monitor_closed: "close",
 
   // Something went wrong or needs a person.
   error_failsafe: "error",

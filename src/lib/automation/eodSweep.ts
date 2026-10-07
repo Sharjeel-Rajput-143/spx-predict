@@ -7,6 +7,7 @@ import { recordError } from "./errors";
 import { closePosition } from "./engine";
 import { payoffAt } from "./payoff";
 import { positionQuantity } from "./pnl";
+import { runDueMonitors } from "./monitors";
 import { recoverInFlightPositions } from "./recovery";
 import { flagMismatches, reconcile } from "./reconcile";
 import { executorStatus, sharedExecutor } from "./sharedExecutor";
@@ -229,6 +230,7 @@ async function tick(): Promise<void> {
   state.ticking = true;
   try {
     await runDueSweeps(Date.now());
+    await runDueMonitors(Date.now()); // Close Monitors (off unless a person switched one on); quiet when there is nothing to do
 
     // Optional periodic check of our open positions against the broker's (RECONCILE_INTERVAL_MINUTES, off by default).
     const everyMinutes = envNumber("RECONCILE_INTERVAL_MINUTES", 0);
