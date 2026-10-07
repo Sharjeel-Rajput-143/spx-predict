@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureBotRecord, getBotStaticConfig, isKnownBot } from "@/lib/automation/bots";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { botsStore } from "@/lib/automation/store";
+import { withStorage } from "@/lib/automation/withStorage";
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!isValidSession(token)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
@@ -29,3 +30,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   return NextResponse.json({ bot: updated });
 }
+
+export const POST = withStorage(handlePOST);

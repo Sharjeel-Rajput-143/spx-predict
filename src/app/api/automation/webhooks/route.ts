@@ -2,16 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { webhooksStore } from "@/lib/automation/store";
 import { createWebhook, webhookView } from "@/lib/automation/webhooks";
+import { withStorage } from "@/lib/automation/withStorage";
 
 const view = webhookView;
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return NextResponse.json({ webhooks: webhooksStore.all().reverse().sort((a, b) => b.createdAt - a.createdAt).map(view) });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return guarded(async () => {
@@ -20,3 +21,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ webhook: view(hook) }, { status: 201 });
   });
 }
+
+export const GET = withStorage(handleGET);
+export const POST = withStorage(handlePOST);

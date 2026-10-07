@@ -377,7 +377,7 @@ export function WebhooksSection({
   /** Renames a webhook; resolves to a problem to show, or null. */
   onRename?: (id: string, name: string) => Promise<string | null>;
   /** Sends this webhook's signal through the real path with a price. Offered on the mock and the Tradier sandbox only. */
-  onTest?: (id: string, price: number | null) => Promise<string>;
+  onTest?: (id: string) => Promise<string>;
   canTest?: boolean;
 }) {
   const [creating, setCreating] = useState(false);
@@ -407,32 +407,24 @@ export function WebhooksSection({
   );
 }
 
-/** A test call: the same path as TradingView's. The price is optional, as it is for the real call: blank uses the live quote. */
-function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string, price: number | null) => Promise<string> }) {
-  const [price, setPrice] = useState("");
+/** A test call: the same path as TradingView's, on the live quote (no price to type, as a real call has none). */
+function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string) => Promise<string> }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
-  const n = Number(price.replace(/,/g, ""));
-  const ok = price.trim() === "" || (Number.isFinite(n) && n > 0);
   return (
     <div className="space-y-1.5 border-t border-line pt-2">
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="text-xs text-muted">
-          Test call, price (optional)
-          <input className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder={`live ${hook.underlying ?? ""} quote`.trim()} aria-label={`Test price for ${hook.name}`} />
-        </label>
-        <button
-          className={buttonClass.secondary}
-          disabled={busy || !ok}
-          onClick={async () => {
-            setBusy(true);
-            setResult(await onTest(hook.id, price.trim() === "" ? null : n));
-            setBusy(false);
-          }}
-        >
-          {busy ? "Sending…" : "Send a test call"}
-        </button>
-      </div>
+      <button
+        className={buttonClass.secondary}
+        disabled={busy}
+        aria-label={`Send a test call for ${hook.name}`}
+        onClick={async () => {
+          setBusy(true);
+          setResult(await onTest(hook.id));
+          setBusy(false);
+        }}
+      >
+        {busy ? "Sending…" : "Send a test call"}
+      </button>
       {result && <p className="text-xs text-muted">{result}</p>}
     </div>
   );

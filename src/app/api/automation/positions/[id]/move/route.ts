@@ -3,9 +3,10 @@ import { withBotLock } from "@/lib/automation/botLock";
 import { movePosition } from "@/lib/automation/positionsAdmin";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { positionsStore } from "@/lib/automation/store";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** "Move": reassign an open position to another bot on the same account. */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -24,3 +25,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ position: moved });
   });
 }
+
+export const POST = withStorage(handlePOST);

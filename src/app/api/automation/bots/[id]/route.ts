@@ -17,6 +17,7 @@ import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk 
 import { MOCK_PRICING_SIMULATED } from "@/lib/automation/sharedExecutor";
 import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
 import { DEFAULT_ALERTS, type BotStaticConfig } from "@/lib/automation/types";
+import { withStorage } from "@/lib/automation/withStorage";
 
 const LOG_LIMIT = 300;
 
@@ -25,7 +26,7 @@ function clock(minutes: number): string {
 }
 
 /** Everything the bot page shows, in one read-only payload. */
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -132,7 +133,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 /** Edit labels, notes, inputs, safeguards, trigger switches, alert prefs, account or archive state. */
-export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -144,7 +145,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleDELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -153,3 +154,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ ok: true });
   });
 }
+
+export const GET = withStorage(handleGET);
+export const PATCH = withStorage(handlePATCH);
+export const DELETE = withStorage(handleDELETE);

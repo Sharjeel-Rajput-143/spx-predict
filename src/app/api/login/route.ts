@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SECRET_MISSING, checkCredentials, clearFailures, loginConfigured, lockedOut, recordFailure, safeNext, sessionKeyOrNull } from "@/lib/auth/credentials";
 import { SESSION_COOKIE_NAME, createSession } from "@/lib/automation/session";
+import { withStorage } from "@/lib/automation/withStorage";
 import { getAppSettings } from "@/lib/automation/appSettings";
 
 const NO_STORE = { "Cache-Control": "no-store" };
@@ -8,7 +9,7 @@ const who = (req: NextRequest) => req.headers.get("x-forwarded-for")?.split(",")
 
 /** The sign-in form posts here: email and password, checked against the login set in the environment. On success the
  * session cookie is set (signed, HttpOnly, expires with the session timeout) and the page to open next is returned. */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   if (!loginConfigured()) {
     return NextResponse.json({ error: "Sign-in isn't set up on this server: APP_LOGIN_EMAIL and APP_LOGIN_PASSWORD are not set." }, { status: 503, headers: NO_STORE });
   }
@@ -39,3 +40,5 @@ export async function POST(req: NextRequest) {
   });
   return res;
 }
+
+export const POST = withStorage(handlePOST);

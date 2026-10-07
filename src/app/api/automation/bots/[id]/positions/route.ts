@@ -6,6 +6,7 @@ import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/ro
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { getLastTick } from "@/lib/marketData/tickStore";
 import type { PositionType } from "@/lib/automation/types";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** The bot's own underlying (the live quote it records is that symbol's, not always SPX's). */
 function botUnderlying(id: string): string {
@@ -18,7 +19,7 @@ function botUnderlying(id: string): string {
 
 /** "+ New Position": opens a spread at an explicit short strike, through the
  * same guards as a signal. The long strike comes from the bot's width. */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -36,3 +37,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ result }, { status: result.ok ? 201 : 409 });
   });
 }
+
+export const POST = withStorage(handlePOST);

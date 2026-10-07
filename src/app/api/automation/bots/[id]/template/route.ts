@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isKnownBot, saveTemplate } from "@/lib/automation/bots";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
+import { withStorage } from "@/lib/automation/withStorage";
 
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -12,3 +13,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ template: saveTemplate(id, String(body.name ?? "")) }, { status: 201 });
   });
 }
+
+export const POST = withStorage(handlePOST);

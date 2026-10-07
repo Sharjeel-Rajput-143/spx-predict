@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The database client has a native part for local files: left to Node, not bundled.
+  serverExternalPackages: ["@libsql/client", "libsql"],
   // A named webhook's short URL, in the shape Option Alpha uses: /hook/<secret>. A second segment is allowed
   // (/hook/<anything>/<secret>) and ignored, so a URL copied from that style of address still resolves.
   // Headers on every response: no framing of the app (clickjacking), no guessing of file types, no address sent along when

@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { ensureBotRecord, isKnownBot } from "@/lib/automation/bots";
 import { badRequest, unauthorized } from "@/lib/automation/routeAuth";
 import { botsStore } from "@/lib/automation/store";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** "Clear Log": hides everything so far from the Log view. Nothing is deleted -
  * the engine's duplicate protection and the export still see every signal. */
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleDELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -14,3 +15,5 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   botsStore.update(id, { logClearedAt: Date.now() });
   return NextResponse.json({ ok: true });
 }
+
+export const DELETE = withStorage(handleDELETE);

@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBotStaticConfig, listBotIds } from "@/lib/automation/bots";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { botsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** Every position across every bot, newest first, plus what the drawer needs
  * (orders, the signals that opened/closed each one, each bot's name and the
  * credit estimate used until a fill reports a real one). */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   if (!isValidSession(req.cookies.get(SESSION_COOKIE_NAME)?.value)) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
@@ -32,3 +33,5 @@ export async function GET(req: NextRequest) {
     signals: signalsStore.query((s) => signalIds.has(s.id)),
   });
 }
+
+export const GET = withStorage(handleGET);

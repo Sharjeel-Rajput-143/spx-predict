@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBotStaticConfig, isKnownBot } from "@/lib/automation/bots";
 import { badRequest, unauthorized } from "@/lib/automation/routeAuth";
 import { decisionsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
+import { withStorage } from "@/lib/automation/withStorage";
 
 function csv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return "";
@@ -14,7 +15,7 @@ function csv(rows: Record<string, unknown>[]): string {
 }
 
 /** GET ?kind=all|positions|decisions|signals&format=json|csv (csv needs a single kind). */
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -43,3 +44,5 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="${filename}.json"` },
   });
 }
+
+export const GET = withStorage(handleGET);

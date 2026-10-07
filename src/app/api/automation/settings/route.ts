@@ -6,6 +6,7 @@ import { guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { executorStatus } from "@/lib/automation/sharedExecutor";
 import { botsStore } from "@/lib/automation/store";
 import { listAccounts } from "@/lib/automation/summary";
+import { withStorage } from "@/lib/automation/withStorage";
 
 const clock = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 
@@ -44,13 +45,13 @@ function snapshot() {
   };
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return NextResponse.json(snapshot());
 }
 
-export async function PATCH(req: NextRequest) {
+async function handlePATCH(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return guarded(async () => {
@@ -59,3 +60,6 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(snapshot());
   });
 }
+
+export const GET = withStorage(handleGET);
+export const PATCH = withStorage(handlePATCH);

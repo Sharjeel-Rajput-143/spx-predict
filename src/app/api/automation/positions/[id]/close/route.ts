@@ -5,9 +5,10 @@ import { badRequest, guarded, unauthorized } from "@/lib/automation/routeAuth";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { positionsStore } from "@/lib/automation/store";
 import { getLastTick } from "@/lib/marketData/tickStore";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** "Close Position": sends a close order for one open position now. */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -21,3 +22,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ result }, { status: result.ok ? 200 : 409 });
   });
 }
+
+export const POST = withStorage(handlePOST);

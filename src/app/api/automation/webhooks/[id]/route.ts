@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { deleteWebhook, updateWebhook } from "@/lib/automation/webhooks";
+import { withStorage } from "@/lib/automation/withStorage";
 
-export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -13,7 +14,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handleDELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -22,3 +23,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ ok: true });
   });
 }
+
+export const PATCH = withStorage(handlePATCH);
+export const DELETE = withStorage(handleDELETE);

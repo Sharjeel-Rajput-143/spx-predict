@@ -5,6 +5,7 @@ import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/ro
 import { executorStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
+import { withStorage } from "@/lib/automation/withStorage";
 
 const WAIT_FOR_DECISION_MS = 20_000;
 
@@ -13,7 +14,7 @@ const WAIT_FOR_DECISION_MS = 20_000;
  * dedupe, per-bot lock, the decision logic, the executor). The only
  * differences: the secret is added here on the server (the browser never sees
  * it), and the saved signal is flagged as a test so its trades are labelled. */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
 
@@ -53,3 +54,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signalId, finished, decisions: decisionsStore.query((d) => d.signalId === signalId) });
   });
 }
+
+export const POST = withStorage(handlePOST);

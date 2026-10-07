@@ -4,8 +4,9 @@ import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/ro
 import { listAccounts, summarizeAllBots } from "@/lib/automation/summary";
 import { templatesStore } from "@/lib/automation/store";
 import type { BotInputs, BotSafeguards } from "@/lib/automation/types";
+import { withStorage } from "@/lib/automation/withStorage";
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return NextResponse.json({ bots: summarizeAllBots(), accounts: listAccounts(), templates: templatesStore.all().sort((a, b) => b.createdAt - a.createdAt) });
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
  *  - "template": from `templateId`, with its own name/account/allocation
  *  - omitted:    explicit full `inputs` (every trading input required)
  */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return guarded(async () => {
@@ -57,3 +58,6 @@ function getName(id: string): string {
     return id;
   }
 }
+
+export const GET = withStorage(handleGET);
+export const POST = withStorage(handlePOST);

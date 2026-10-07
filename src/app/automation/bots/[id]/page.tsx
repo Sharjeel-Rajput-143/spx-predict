@@ -4,6 +4,7 @@ import { AutomationLogin } from "@/components/automation/AutomationLogin";
 import { BotDetail } from "@/components/automation/bot/BotDetail";
 import { isKnownBot } from "@/lib/automation/bots";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
+import { loadStorage } from "@/lib/automation/withStorage";
 
 export default async function BotPage({
   params,
@@ -13,6 +14,7 @@ export default async function BotPage({
   searchParams: Promise<{ tab?: string; error?: string }>;
 }) {
   const [{ id }, { tab, error }, cookieStore] = await Promise.all([params, searchParams, cookies()]);
+  await loadStorage(); // a bot made in the UI lives in the database on a host without a disk
   if (!isKnownBot(id)) notFound();
 
   if (!isValidSession(cookieStore.get(SESSION_COOKIE_NAME)?.value)) {

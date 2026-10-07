@@ -4,6 +4,7 @@ import { isKnownBot } from "@/lib/automation/bots";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { attachWebhook, detachTrigger, optionsForTrigger, webhookForTrigger, webhookView } from "@/lib/automation/webhooks";
 import type { SignalDirection } from "@/lib/automation/types";
+import { withStorage } from "@/lib/automation/withStorage";
 
 type Ctx = { params: Promise<{ id: string; dir: string }> };
 
@@ -20,7 +21,7 @@ const state = (botId: string, direction: SignalDirection) => {
 };
 
 /** A trigger's webhook: the one attached (URL masked) and every webhook as a dropdown option with its status. */
-export async function GET(req: NextRequest, ctx: Ctx) {
+async function handleGET(req: NextRequest, ctx: Ctx) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const r = await resolve(ctx);
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 }
 
 /** Attaches (or changes to) the chosen webhook. It stays until a person changes or detaches it. */
-export async function PUT(req: NextRequest, ctx: Ctx) {
+async function handlePUT(req: NextRequest, ctx: Ctx) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const r = await resolve(ctx);
@@ -42,7 +43,7 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   });
 }
 
-export async function DELETE(req: NextRequest, ctx: Ctx) {
+async function handleDELETE(req: NextRequest, ctx: Ctx) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const r = await resolve(ctx);
@@ -52,3 +53,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx) {
     return NextResponse.json(state(r.botId, r.direction));
   });
 }
+
+export const GET = withStorage(handleGET);
+export const PUT = withStorage(handlePUT);
+export const DELETE = withStorage(handleDELETE);

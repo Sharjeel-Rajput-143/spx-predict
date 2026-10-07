@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { executorStatus } from "@/lib/automation/sharedExecutor";
 import { resetTestData } from "@/lib/automation/testing";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** Wipes the recorded test data (signals, positions, orders, decisions, runs,
  * errors). Mock executor only: with a real broker selected, what's recorded
  * is not test data and this refuses. */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return guarded(async () => {
@@ -16,3 +17,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ cleared: resetTestData() });
   });
 }
+
+export const POST = withStorage(handlePOST);

@@ -26,6 +26,14 @@ export interface StorageBackend {
   repository<T extends { id: string }>(name: CollectionName): Repository<T>;
   /** Null when every collection reads cleanly; otherwise the first problem, in words a person can act on. */
   check(): string | null;
+  /** True for a backend kept in a database on another machine: each request then loads before it runs and saves before it answers (withStorage.ts). */
+  readonly remote?: boolean;
+  /** Remote only: load the records. `maxAgeMs` keeps a copy that is at least that fresh. */
+  hydrate?(maxAgeMs?: number): Promise<void>;
+  /** Remote only: save what this request changed. */
+  flush?(): Promise<void>;
+  /** Forgets the in-memory copy, as after a restart. */
+  dropCaches?(): void;
 }
 
 export type StorageErrorCode = "corrupt" | "missing" | "schema" | "unwritable";

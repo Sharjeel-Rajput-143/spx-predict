@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { JsonFileBackend } from "./storage/jsonFileBackend";
-import type { CollectionName, Repository } from "./storage/repository";
+import type { CollectionName, Repository, StorageBackend } from "./storage/repository";
+import { TursoBackend } from "./storage/tursoBackend";
 import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal } from "./types";
 
 /**
@@ -39,6 +40,18 @@ function writable(dir: string): boolean {
   }
 }
 
+/** Turso (a hosted database) holds the records when it is asked for (AUTOMATION_STORAGE=turso) or, on Vercel, whenever
+ * its credentials are set: a serverless host has no disk of its own. Otherwise (a laptop, a server with a disk) the records
+ * are JSON files, whatever is in TURSO_*; AUTOMATION_STORAGE=files forces that. Null means: use the files. */
+export function tursoChoice(env: Record<string, string | undefined> = process.env): { url: string; authToken: string } | null {
+  const url = env.TURSO_DB_URL?.trim();
+  const authToken = env.TURSO_DB_TOKEN?.trim();
+  const wanted = env.AUTOMATION_STORAGE === "turso" || (env.AUTOMATION_STORAGE !== "files" && Boolean(env.VERCEL));
+  if (!wanted || !url || !authToken) return null;
+  return { url, authToken };
+}
+
+const TURSO = tursoChoice();
 const CHOICE = resolveDataDir();
 const DATA_DIR = CHOICE.dir;
 
@@ -47,6 +60,13 @@ const DATA_DIR = CHOICE.dir;
  * waiting up to minutes for fills), which a serverless function may stop. With only the mock executor (a demo) none of that
  * matters, so nothing is reported - the pages simply run on a temporary folder when the disk is read-only. */
 export function storageProblem(): string | null {
+  if (TURSO) {
+    // The records are in the database, so there is no folder to check. A broker still can't be driven from a serverless host.
+    if (process.env.VERCEL && process.env.EXECUTOR?.trim().toLowerCase() === "tradier") {
+      return "A broker can't be driven from Vercel: it is a serverless host, and the engine keeps working after it answers an alert (placing orders, waiting for fills), which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
+    }
+    return storage.check();
+  }
   const broker = process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
   if (process.env.VERCEL && broker) {
     return "A broker can't be driven from Vercel: it is a serverless host, and the engine keeps working after it answers an alert (placing orders, waiting for fills), which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
@@ -64,7 +84,7 @@ export function storageProblem(): string | null {
 /** The one storage backend: JSON files in DATA_DIR (storage/jsonFileBackend.ts). The engine, the routes and the pages
  * only use the repositories below - nothing else opens a file - so a database implementation of the same
  * Repository interface can replace this one later without any engine change. */
-export const storage = new JsonFileBackend(DATA_DIR);
+export const storage: StorageBackend = TURSO ? new TursoBackend({ url: TURSO.url, authToken: TURSO.authToken }) : new JsonFileBackend(DATA_DIR);
 
 const repo = <T extends { id: string }>(name: CollectionName): Repository<T> => storage.repository<T>(name);
 
@@ -83,7 +103,7 @@ export const settingsStore = repo<AppSettingsRow>("settings");
 
 /** Test hook: forget what is in memory so the next read comes from the files, as after a restart. */
 export function __simulateRestart(): void {
-  storage.dropCaches();
+  storage.dropCaches?.();
 }
 
 export function __resetAllStores(): void {

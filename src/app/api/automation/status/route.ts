@@ -10,6 +10,7 @@ import { alertsStore, decisionsStore, ordersStore, positionsStore, signalsStore,
 import { describeWindow, hoursConfigFor } from "@/lib/automation/tradingHours";
 import { DEFAULT_ALERTS, type BotStaticConfig, type Decision } from "@/lib/automation/types";
 import { getLastTick } from "@/lib/marketData/tickStore";
+import { withStorage } from "@/lib/automation/withStorage";
 
 function staticConfigSafe(id: string): { config: BotStaticConfig | null; error: string | null; missing: { key: string; why: string }[] | null } {
   try {
@@ -33,7 +34,7 @@ function suggestedPrice(botId: string, config: BotStaticConfig | null): number |
   return null;
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!isValidSession(token)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
@@ -146,3 +147,5 @@ export async function GET(req: NextRequest) {
     alertEmail: { enabled: getAlertEmail().enabled, to: getAlertEmail().to },
   });
 }
+
+export const GET = withStorage(handleGET);

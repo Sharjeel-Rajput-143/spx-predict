@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guarded, unauthorized } from "@/lib/automation/routeAuth";
 import { executorStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** The broker account behind the executor: which one, and its balances (read-only). Nothing here can trade. */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
   return guarded(async () => {
@@ -18,3 +19,5 @@ export async function GET(req: NextRequest) {
     }
   });
 }
+
+export const GET = withStorage(handleGET);

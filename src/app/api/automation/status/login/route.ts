@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { checkCredentials, clearFailures, loginConfigured, lockedOut, recordFailure, sessionKeyOrNull } from "@/lib/auth/credentials";
 import { isAuthRequired } from "@/lib/automation/config";
 import { createSession, SESSION_COOKIE_NAME } from "@/lib/automation/session";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** Plain-form POST (no client JS needed) - checks the password, then
  * redirects back to the status page, setting the session cookie on success. */
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const form = await req.formData().catch(() => null);
   // Sign-in is required but no password was ever set on this server: say so, instead of an opaque 500.
   const misconfigured = isAuthRequired() && (!loginConfigured() || !sessionKeyOrNull());
@@ -37,3 +38,5 @@ export async function POST(req: NextRequest) {
   });
   return res;
 }
+
+export const POST = withStorage(handlePOST);

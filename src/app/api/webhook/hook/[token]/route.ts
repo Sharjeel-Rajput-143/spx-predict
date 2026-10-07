@@ -5,10 +5,11 @@ import { signalsStore, storageProblem, webhooksStore } from "@/lib/automation/st
 import { ingestWebhook, settleIfServerless } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, findWebhookByToken, isAttached, parseHookBody, webhookUnderlying } from "@/lib/automation/webhooks";
 import { resolveHookPrice } from "@/lib/automation/hookPrice";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself, so the alert message
  * only needs to carry the price (or nothing, when there is a fresh live quote for the bot's underlying). */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   // A host that can't keep records can't run the engine: say so before touching any of them.
   const storage = storageProblem();
   if (storage) return NextResponse.json({ error: storage }, { status: 503 });
@@ -65,3 +66,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   else giveBack();
   return NextResponse.json(result.body, { status: result.status });
 }
+
+export const POST = withStorage(handlePOST);

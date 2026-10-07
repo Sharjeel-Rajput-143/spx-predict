@@ -159,26 +159,22 @@ export function TriggerWebhook({
   );
 }
 
-/** "Test hook": sends this webhook's signal through the real path (mock or Tradier sandbox only). As for a real call, no
- * price is needed: left blank it runs on the live quote; a typed price overrides it. */
+/** "Test hook": sends this webhook's signal through the real path (mock or Tradier sandbox only), on the live quote:
+ * no price to type, as a real call has none. */
 function TestHook({ webhookId }: { webhookId: string }) {
-  const [price, setPrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
-  const n = Number(price.replace(/,/g, ""));
-  const blank = price.trim() === "";
-  const ok = blank || (Number.isFinite(n) && n > 0);
 
   const run = async () => {
     setBusy(true);
     setResult(null);
     try {
-      const res = await fetch(`/api/automation/webhooks/${webhookId}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price: blank ? null : n }) });
+      const res = await fetch(`/api/automation/webhooks/${webhookId}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) setResult(`Not sent: ${j.error ?? res.status}`);
       else {
         const steps = ((j.decisions ?? []) as { outcome: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-        setResult(`Sent at ${Number(j.price).toLocaleString("en-US")}${blank ? " (live quote)" : ""} → ${steps}${j.finished ? "" : " (still working…)"}`);
+        setResult(`Sent at ${Number(j.price).toLocaleString("en-US")} (live quote) → ${steps}${j.finished ? "" : " (still working…)"}`);
       }
     } catch {
       setResult("Couldn't reach the server.");
@@ -188,22 +184,9 @@ function TestHook({ webhookId }: { webhookId: string }) {
 
   return (
     <div className="space-y-1.5 border-t border-line pt-3">
-      <div className="flex flex-wrap items-end gap-2">
-        <label className="text-xs text-muted">
-          Price (optional)
-          <input
-            className="ml-2 w-28 rounded-lg border border-line bg-bg px-2 py-1 text-right text-sm text-fg outline-none focus:border-accent"
-            inputMode="decimal"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            placeholder="live quote"
-            aria-label="Test hook price"
-          />
-        </label>
-        <button className={buttonClass.secondary} disabled={busy || !ok} onClick={run}>
-          {busy ? "Sending…" : "Test hook"}
-        </button>
-      </div>
+      <button className={buttonClass.secondary} disabled={busy} onClick={run}>
+        {busy ? "Sending…" : "Test hook"}
+      </button>
       <p className="text-xs text-faint">Runs the real path on the mock executor or the Tradier sandbox (paper money), never against real money.</p>
       {result && <p className="text-xs text-muted">{result}</p>}
     </div>

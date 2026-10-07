@@ -5,13 +5,14 @@ import { decisionsStore, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { resolveHookPrice } from "@/lib/automation/hookPrice";
 import { isAttached, webhookUnderlying } from "@/lib/automation/webhooks";
+import { withStorage } from "@/lib/automation/withStorage";
 
 const WAIT_FOR_DECISION_MS = 45_000;
 
 /** "Test call": sends this webhook's signal through the real path, as TradingView's call would - the engine's
  * decisions, the executor, the order. On the Tradier SANDBOX that places a real order on the paper account; on the
  * mock, nothing leaves this machine. Never against a production account. */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -41,3 +42,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ signalId, price, finished, venue: status.venue, decisions: decisionsStore.query((d) => d.signalId === signalId).map((d) => ({ outcome: d.outcome, reason: d.reason })) });
   });
 }
+
+export const POST = withStorage(handlePOST);

@@ -6,11 +6,12 @@ import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/ro
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore, signalsStore } from "@/lib/automation/store";
 import { getLastTick } from "@/lib/marketData/tickStore";
+import { withStorage } from "@/lib/automation/withStorage";
 
 /** Runs the bot's logic once, as if that signal had just arrived by webhook.
  * It goes through the same lock, guards and decision log; the saved signal is
  * marked manual. Returns what the engine decided. */
-export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = unauthorized(req);
   if (denied) return denied;
   const { id } = await params;
@@ -46,3 +47,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ signalId: saved.id, decisions: decisionsStore.query((d) => d.signalId === saved.id) });
   });
 }
+
+export const POST = withStorage(handlePOST);
