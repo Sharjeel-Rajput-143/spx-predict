@@ -64,3 +64,24 @@ export function builtInFlow(direction: "bullish" | "bearish", cfg: BotStaticConf
   steps = appendStep(steps, hasOpposite.id, "no", holdsWanted());
   return steps;
 }
+
+export type MonitorDirection = "bullish" | "bearish";
+
+/**
+ * A Close Monitor drawn as a flow, like Option Alpha's "BullishSpx Close Monitor": the position check, then (our safety
+ * addition) "the latest confirmed signal is bullish", then Close Position. The second check is what stops it closing the
+ * position a signal has just opened - without it a monitor would fight the flip.
+ */
+export function monitorFlow(direction: MonitorDirection, cfg: BotStaticConfig | null): Step[] {
+  const wrong = direction === "bullish" ? "call" : "put";
+  const hasWrong = newStep("decision", [holds(wrong)]);
+  const latest = newCondition("bot_latest_signal");
+  const confirmed = newStep("decision", [{ ...latest, values: { ...latest.values, signal: direction } }]);
+  const close = newStep("close_position");
+  close.config = { ...close.config, type: TYPE_KEY[wrong], symbol: cfg?.underlying ?? "NDX", price: `${cfg?.closePricePercent ?? 100}% of bid/ask, waits for the fill`, qty: "100% of position" };
+
+  let steps: Step[] = [hasWrong];
+  steps = appendStep(steps, hasWrong.id, "yes", confirmed);
+  steps = appendStep(steps, confirmed.id, "yes", close);
+  return steps;
+}

@@ -195,9 +195,21 @@ describe("Log", () => {
 describe("Settings", () => {
   it("shows monitors, triggers, inputs, notes, safeguards, timing, symbols and alerts", () => {
     const out = html(<SettingsTab ctx={ctxFor(fixture())} />);
-    for (const text of ["Monitors", "Triggers", "End-of-day expiry sweep", "Bullish signal", "Bearish signal", "Bot inputs", "Short put offset", "Notes", "Watch the opening bias.", "Safeguards", "Daily positions", "Timing", "Symbols", "SPX", "Activity alerts", "Open position", "Automation error", "Decision flow"]) {
+    for (const text of ["Monitors", "Triggers", "Bullish signal", "Bearish signal", "Bot inputs", "Bot inputs are variables shared by your bot", "Notes", "Watch the opening bias.", "Safeguards", "Daily positions", "Symbols", "SPX", "Activity Alerts", "Scan Speeds", "Open position", "Automation error"]) {
       expect(out, text).toContain(text);
     }
+  });
+
+  it("both Close Monitors are listed, switched off, and the switches are locked until they are attached to the triggers", () => {
+    const out = html(<SettingsTab ctx={ctxFor(fixture())} />);
+    for (const name of ["Bullish Close Monitor", "Bearish Close Monitor"]) {
+      const m = new RegExp(`<button[^>]*aria-label="${name} on/off \\(off for now\\)"[^>]*>`).exec(out);
+      expect(m, name).not.toBeNull();
+      expect(m![0]).toContain('aria-checked="false"');
+      expect(m![0]).toContain("disabled");
+    }
+    // The system monitors (end-of-day sweep, stale-position check) still run, but aren't listed: they aren't settings to manage here.
+    for (const hidden of ["End-of-day expiry sweep", "Stale-position check", "can&#x27;t be switched off"]) expect(out, hidden).not.toContain(hidden);
   });
 
   it("flags missing required inputs instead of inventing values", () => {

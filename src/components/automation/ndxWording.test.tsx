@@ -25,7 +25,7 @@ describe("the NDX bot has no EMA wording", () => {
   it("the duplicate-entry warning replaces every 'never the raw EMA cross' line", () => {
     expect(read("docs/ndx-paper-trading-setup.md")).toContain(WARNING);
     expect(read(".env.example")).toContain("Only the confirmed bullish and bearish alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.");
-    expect(read("src/components/automation/bot/SettingsTab.tsx")).toContain(WARNING);
+    expect(read("src/components/automation/settings/sections.tsx")).toContain("extra alerts cause duplicate entries");
     for (const file of ["docs/ndx-paper-trading-setup.md", ".env.example", "src/components/automation/bot/SettingsTab.tsx", "src/components/automation/settings/sections.tsx"]) {
       expect(read(file), file).not.toMatch(/raw EMA/i);
     }

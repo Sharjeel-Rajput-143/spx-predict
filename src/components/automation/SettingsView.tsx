@@ -66,8 +66,8 @@ export function SettingsView() {
     if (section === "accounts" && data?.executor.venue === "tradier") loadBroker();
   }, [section, data?.executor.venue, loadBroker]);
 
-  const createHook = async (name: string, botId: string, direction: "bullish" | "bearish"): Promise<string | null> => {
-    const res = await fetch("/api/automation/webhooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, botId, direction }) });
+  const createHook = async (name: string): Promise<string | null> => {
+    const res = await fetch("/api/automation/webhooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return json.error ?? "Couldn't create it.";
     load();
@@ -112,6 +112,12 @@ export function SettingsView() {
               onCreate={createHook}
               onToggle={(id, active) => fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }) }).then(load)}
               onDelete={(id) => fetch(`/api/automation/webhooks/${id}`, { method: "DELETE" }).then(load)}
+              onRename={async (id, name) => {
+                const res = await fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+                const json = await res.json().catch(() => ({}));
+                load();
+                return res.ok ? null : (json.error ?? "Couldn't rename it.");
+              }}
               canTest={data.executor.venue === "mock" || (data.executor.venue === "tradier" && data.executor.sandbox === true)}
               onTest={async (id, price) => {
                 const res = await fetch(`/api/automation/webhooks/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price }) });

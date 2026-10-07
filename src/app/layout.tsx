@@ -20,12 +20,12 @@ export const viewport: Viewport = {
   ],
 };
 
-// Applies the saved theme before first paint to avoid a light/dark flash.
-const themeScript = `try{var s=JSON.parse(localStorage.getItem("spx-predict:v1")||"null");if(s&&s.theme==="light"){document.documentElement.classList.remove("dark");document.documentElement.style.colorScheme="light"}}catch(e){}`;
+// Light is the default. Applies a saved "dark" choice before first paint to avoid a light/dark flash.
+const themeScript = `try{if(localStorage.getItem("spx-predict:theme")==="dark"){document.documentElement.classList.add("dark");document.documentElement.style.colorScheme="dark"}}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="dark" style={{ colorScheme: "dark" }} suppressHydrationWarning>
+    <html lang="en" style={{ colorScheme: "light" }} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>

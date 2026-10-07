@@ -225,8 +225,13 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           <HeaderBox label="Automations">
             <OnOffSwitch on={bot.enabled} onChange={toggle} disabled={pending} label="Bot on/off" />
           </HeaderBox>
+          <HeaderBox label="Exit options">
+            <span title="Profit targets and stop losses aren't built: a position is held until the opposite signal or the end-of-day sweep.">
+              <OnOffSwitch on={false} onChange={() => undefined} disabled label="Exit options (not built)" />
+            </span>
+          </HeaderBox>
           <HeaderBox label="Kill switch">
-            <OnOffSwitch on={bot.killSwitch} onChange={kill} disabled={pending} label="Kill switch (blocks every webhook run, closes included)" />
+            <OnOffSwitch on={!!bot.killSwitch} onChange={kill} disabled={pending} label="Kill switch (blocks every webhook run, closes included)" />
           </HeaderBox>
           <div className="flex items-center pl-4">
             <Dropdown

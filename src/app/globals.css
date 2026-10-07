@@ -92,3 +92,26 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
+
+/* Tailwind's reset gives buttons the default arrow. Anything that can be clicked shows the pointer hand;
+   a disabled control says so. Unstyled "close menu" backdrops stay as they are (they use cursor-default). */
+button:not(:disabled):not(.cursor-default),
+[role="button"]:not([aria-disabled="true"]),
+[role="menuitem"]:not([aria-disabled="true"]),
+[role="option"]:not([aria-disabled="true"]),
+[role="tab"],
+a[href],
+summary,
+select:not(:disabled),
+label:has(input[type="checkbox"]:not(:disabled)),
+label:has(input[type="radio"]:not(:disabled)),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"],
+select:disabled {
+  cursor: not-allowed;
+}

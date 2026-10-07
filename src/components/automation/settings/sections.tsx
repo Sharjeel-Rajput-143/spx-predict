@@ -5,6 +5,8 @@ import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import { Checkbox, Field, KeyValue, Pill, buttonClass, inputClass } from "../bot/primitives";
 import { clock12 } from "../builder/builtin";
+import { SecretUrl } from "../SecretUrl";
+import { EditWebhookDrawer, NewWebhookDrawer, WebhookIntro, WebhookRow } from "./WebhookList";
 
 /** Shape of GET /api/automation/settings. */
 export interface SettingsData {
@@ -372,12 +374,13 @@ function CopyBox({ label, text }: { label: string; text: string }) {
 export interface WebhookView {
   id: string;
   name: string;
-  token: string;
+  /** The URL path with its secret masked. The full one is fetched on demand (Reveal / Copy). */
   path: string;
-  botId: string;
-  botName: string;
+  attached: boolean;
+  botId: string | null;
+  botName: string | null;
   underlying: string | null;
-  direction: "bullish" | "bearish";
+  direction: "bullish" | "bearish" | null;
   active: boolean;
   createdAt: number;
   lastTriggeredAt: number | null;
@@ -387,59 +390,6 @@ export interface WebhookView {
 /** What each TradingView alert sends to a named webhook: the URL already says which bot and signal, so only the price (and bar time) are needed. */
 export const HOOK_MESSAGE = '{"price":{{close}},"bar_time":"{{timenow}}","interval":"{{interval}}"}';
 
-function NewWebhookForm({ bots, onCreate }: { bots: SettingsData["webhook"]["bots"]; onCreate: (name: string, botId: string, direction: "bullish" | "bearish") => Promise<string | null> }) {
-  const [name, setName] = useState("");
-  const [botId, setBotId] = useState(bots[0]?.id ?? "");
-  const [direction, setDirection] = useState<"bullish" | "bearish">("bullish");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const bot = bots.find((b) => b.id === botId);
-  const suggested = bot ? `${direction === "bullish" ? "Bullish" : "Bearish"}${bot.underlying ?? bot.name}` : "";
-
-  return (
-    <div className="space-y-3 rounded-xl border border-line p-3">
-      <div className="text-sm font-medium">New webhook</div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="Name">
-          <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder={suggested || "e.g. BullishNDX"} aria-label="Webhook name" />
-        </Field>
-        <Field label="Bot">
-          <select className={inputClass} value={botId} onChange={(e) => setBotId(e.target.value)} aria-label="Webhook bot">
-            {bots.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="A call means">
-          <select className={inputClass} value={direction} onChange={(e) => setDirection(e.target.value as "bullish" | "bearish")} aria-label="Webhook signal">
-            <option value="bullish">Bullish → short put spread</option>
-            <option value="bearish">Bearish → short call spread</option>
-          </select>
-        </Field>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          className={buttonClass.primary}
-          disabled={busy || !botId}
-          onClick={async () => {
-            setBusy(true);
-            setError(null);
-            const problem = await onCreate(name.trim() || suggested, botId, direction);
-            setBusy(false);
-            if (problem) setError(problem);
-            else setName("");
-          }}
-        >
-          {busy ? "Creating..." : "Create webhook"}
-        </button>
-        {error && <span className="text-sm text-down">{error}</span>}
-      </div>
-    </div>
-  );
-}
-
 export function WebhooksSection({
   data,
   origin,
@@ -448,6 +398,7 @@ export function WebhooksSection({
   onCreate = async () => null,
   onToggle = noopHook,
   onDelete = noopHook,
+  onRename = async () => null,
   onTest,
   canTest = false,
 }: {
@@ -455,61 +406,46 @@ export function WebhooksSection({
   origin: string;
   outbound: ReactNode;
   hooks?: WebhookView[];
-  onCreate?: (name: string, botId: string, direction: "bullish" | "bearish") => Promise<string | null>;
+  onCreate?: (name: string) => Promise<string | null>;
   onToggle?: (id: string, active: boolean) => void;
   onDelete?: (id: string) => void;
+  /** Renames a webhook; resolves to a problem to show, or null. */
+  onRename?: (id: string, name: string) => Promise<string | null>;
   /** Sends this webhook's signal through the real path with a price. Offered on the mock and the Tradier sandbox only. */
   onTest?: (id: string, price: number) => Promise<string>;
   canTest?: boolean;
 }) {
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const editingHook = hooks.find((h) => h.id === editing);
   return (
     <div className="space-y-4">
-      <Section title="Your webhooks" hint="One secret URL per bot and signal, like Option Alpha's. A call to the URL means that signal for that bot - paste it into a TradingView alert. Each webhook can only be triggered once a minute; extra calls are ignored.">
+      <Section title="Webhooks">
+        <WebhookIntro />
+        <div>
+          <button className={buttonClass.primary} onClick={() => setCreating(true)}>
+            New Webhook
+          </button>
+        </div>
         {hooks.length === 0 ? (
-          <p className="text-sm text-muted">No webhooks yet. Create one below, for example a Bullish and a Bearish one for each bot.</p>
+          <p className="border-t border-line pt-4 text-sm text-muted">No webhooks yet. Create one with New Webhook, for example BullishNDX and BearishNDX, then attach each to its trigger (the gear icon on the bot&apos;s Bullish or Bearish trigger).</p>
         ) : (
-          <ul className="space-y-3">
+          <ul>
             {hooks.map((h) => (
-              <li key={h.id} className={cn("space-y-2 rounded-xl border border-line p-3", !h.active && "opacity-60")}>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-medium">
-                      {h.name} <Pill tone={h.direction === "bullish" ? "ok" : "error"}>{h.direction}</Pill>
-                    </div>
-                    <div className="text-xs text-muted">
-                      {h.botName} · {h.direction === "bullish" ? "opens a short put spread" : "opens a short call spread"} · {h.triggerCount} call{h.triggerCount === 1 ? "" : "s"}
-                      {h.lastTriggeredAt ? `, last ${new Date(h.lastTriggeredAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : ", never called"}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button className={buttonClass.secondary} onClick={() => onToggle(h.id, !h.active)}>
-                      {h.active ? "Switch off" : "Switch on"}
-                    </button>
-                    <button
-                      className={buttonClass.secondary}
-                      onClick={() => {
-                        if (window.confirm(`Delete the webhook "${h.name}"? A TradingView alert using its URL will stop working.`)) onDelete(h.id);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-                <CopyBox label="Webhook URL (keep it secret)" text={`${origin}${h.path}`} />
-                {canTest && onTest && h.active && <TestCall hook={h} onTest={onTest} />}
-              </li>
+              <WebhookRow key={h.id} hook={h} origin={origin} onEdit={() => setEditing(h.id)} testSlot={canTest && onTest && h.active && h.attached ? <TestCall hook={h} onTest={onTest} /> : undefined} />
             ))}
           </ul>
         )}
-        <NewWebhookForm bots={data.webhook.bots} onCreate={onCreate} />
+        {creating && <NewWebhookDrawer onCreate={onCreate} onClose={() => setCreating(false)} />}
+        {editingHook && <EditWebhookDrawer key={editingHook.id} hook={editingHook} onRename={onRename} onToggle={onToggle} onDelete={onDelete} onClose={() => setEditing(null)} />}
       </Section>
 
       <Section title="Use it in a TradingView alert">
         <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted">
           <li>On the chart for the bot&apos;s index, create an alert for the <span className="text-fg">confirmed</span> bullish signal and another for the bearish one. Only those two alerts should call the webhook. Do not send any other alert, because extra alerts cause duplicate entries.</li>
           <li>Under <span className="text-fg">Notifications</span>, tick <span className="text-fg">Webhook URL</span> and paste the matching webhook&apos;s URL. (TradingView only allows webhook alerts on accounts with two-factor authentication on.)</li>
-          <li>Under <span className="text-fg">Message</span>, paste the message below. The URL already says which bot and signal it is, so it only needs the price.</li>
-          <li>Bullish alert → the Bullish webhook, Bearish alert → the Bearish one. Save, and watch the Automation status page for the first call.</li>
+          <li>Under <span className="text-fg">Message</span>, paste the message below. The webhook is attached to a trigger, which already says which bot and signal it is, so the message only needs the price.</li>
+          <li>Bullish alert → the webhook attached to the Bullish trigger, Bearish alert → the one attached to the Bearish trigger. Save, and watch the Automation status page for the first call.</li>
         </ol>
         <CopyBox label="Alert message" text={HOOK_MESSAGE} />
         <p className="text-xs text-muted">If the message has no price, the bot uses its underlying&apos;s live quote when it is fresh (under 5 minutes old), and refuses the call otherwise.</p>

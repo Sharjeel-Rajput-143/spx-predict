@@ -9,7 +9,7 @@ export interface BotDetailData {
     name: string;
     builtIn: boolean;
     enabled: boolean;
-    killSwitch: boolean;
+    killSwitch?: boolean;
     archived: boolean;
     needsAttention: boolean;
     needsAttentionReason: string | null;
@@ -23,6 +23,8 @@ export interface BotDetailData {
     tags: string[];
     notes: string;
     triggers: { bullish: boolean; bearish: boolean };
+    alwaysOn?: { bullish: boolean; bearish: boolean };
+    monitors?: Partial<Record<"bullishClose" | "bearishClose", { enabled: boolean; memo?: string; tags?: string[] }>>;
     alerts: BotAlerts;
     safeguards: BotSafeguards;
     logClearedAt: number;
@@ -65,6 +67,10 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   dry_run: { label: "Dry run", tone: "skip" },
   automations_off: { label: "Bot off", tone: "skip" },
   kill_switch: { label: "Kill switch", tone: "warn" },
+  monitor_closed: { label: "Monitor closed position", tone: "ok" },
+  webhook_attached: { label: "Webhook attached", tone: "ok" },
+  webhook_changed: { label: "Webhook changed", tone: "ok" },
+  webhook_detached: { label: "Webhook detached", tone: "skip" },
   bot_off_close_only: { label: "Bot off, close only", tone: "skip" },
   outside_hours: { label: "Outside hours", tone: "skip" },
   duplicate_signal: { label: "Duplicate", tone: "skip" },

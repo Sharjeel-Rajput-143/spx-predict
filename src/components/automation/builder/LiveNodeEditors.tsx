@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { Drawer, Field, buttonClass, inputClass } from "../bot/primitives";
 import type { BotContext } from "../bot/BotDetail";
-import type { BotInputs, StrikeRounding } from "@/lib/automation/types";
+import type { BotInputs, MonitorKey, StrikeRounding } from "@/lib/automation/types";
 import { clock12 } from "./builtin";
 import type { Step } from "./model";
 
@@ -248,5 +248,57 @@ export function liveNodeEditor({ step, direction, ctx, onClose }: { step: Step; 
       );
     }
   }
+  return null;
+}
+
+/** "Close Position" behind a Close Monitor, laid out like Option Alpha's form. The price and quantity are the engine's (the
+ * bot's close price setting, 100% of the position); Memo and Tags are real: they are written on the position the monitor closes. */
+export function MonitorCloseEditor({ monitor, ctx, onClose }: { monitor: MonitorKey; ctx: BotContext; onClose: () => void }) {
+  const cfg = ctx.data.config;
+  const saved = ctx.data.bot.monitors?.[monitor];
+  const [memo, setMemo] = useState(saved?.memo ?? "");
+  const [tags, setTags] = useState((saved?.tags ?? []).join(", "));
+  const [busy, setBusy] = useState(false);
+  const spread = monitor === "bullishClose" ? "Short Call Spread" : "Short Put Spread";
+
+  const save = async () => {
+    setBusy(true);
+    const ok = await ctx.patch({ monitors: { [monitor]: { memo, tags: tags.split(",").map((t) => t.trim()).filter(Boolean) } } }, "Monitor saved.");
+    setBusy(false);
+    if (ok) onClose();
+  };
+
+  return (
+    <Drawer title="Close Position" onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
+      <div className="space-y-5">
+        <div className="grid grid-cols-[6rem_1fr] items-center gap-3 text-sm">
+          <span>Position</span>
+          <span className="inline-flex w-fit items-center gap-2 rounded-lg border border-dashed border-accent/50 bg-accent/5 px-3 py-1.5 text-accent">{`Position (${cfg?.underlying ?? "NDX"}, ${spread})`}</span>
+          <span>Price</span>
+          <span className="rounded-lg border border-line bg-surface-2/60 px-3 py-2.5">{cfg?.closePricePercent ?? 100}% of bid/ask</span>
+          <span>Quantity</span>
+          <span className="rounded-lg border border-line bg-surface-2/60 px-3 py-2.5">100% of position</span>
+        </div>
+        <p className="-mt-2 text-xs text-muted">Price and quantity are the bot&apos;s own close settings (Final price, SmartPricing); they aren&apos;t edited here.</p>
+        <Field label="Memo" hint="Written on the position this monitor closes.">
+          <textarea className={`${inputClass} min-h-24`} value={memo} onChange={(e) => setMemo(e.target.value)} aria-label="Memo" maxLength={500} />
+        </Field>
+        <Field label="Tags" hint="Added immediately after the trade is filled. Separate with commas.">
+          <input className={inputClass} value={tags} onChange={(e) => setTags(e.target.value)} aria-label="Tags" />
+        </Field>
+        <div>
+          <div className="mb-2 text-sm font-semibold">Options</div>
+          <label className="flex items-center gap-2 text-sm text-faint" title="Not applicable: a spread is closed as one multi-leg order, and NDX options are cash settled.">
+            <input type="checkbox" disabled /> Discard expiring OTM long leg(s) with no bid price
+          </label>
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+/** The nodes of a Close Monitor's flow: the two checks are fixed (the default read-only Decision drawer is enough); Close Position has Memo and Tags. */
+export function monitorNodeEditor({ step, monitor, ctx, onClose }: { step: Step; monitor: MonitorKey; ctx: BotContext; onClose: () => void }): ReactNode | null {
+  if (step.kind === "close_position") return <MonitorCloseEditor key={step.id} monitor={monitor} ctx={ctx} onClose={onClose} />;
   return null;
 }

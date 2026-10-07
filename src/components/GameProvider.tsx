@@ -49,6 +49,8 @@ interface GameState {
 
 const GameContext = createContext<GameState | null>(null);
 const STORAGE_KEY = "spx-predict:v1";
+/** The explicit light/dark choice, kept apart from the rest of the saved state. Unset = light. */
+const THEME_KEY = "spx-predict:theme";
 
 interface Persisted {
   symbol: string;
@@ -90,7 +92,7 @@ export function GameProvider({
   const [pending, setPending] = useState<Record<string, PendingGuess>>({});
   const [settlingIds, setSettlingIds] = useState<string[]>([]);
   const [lastReveal, setLastReveal] = useState<RoundResult | null>(null);
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
   const [soundEnabled, setSoundEnabled] = useState(false);
   const settlingRef = useRef(new Set<string>());
   const soundEnabledRef = useRef(soundEnabled);
@@ -104,10 +106,16 @@ export function GameProvider({
       setProfile(saved.profile);
       setResults(saved.results);
       setPending(saved.pending);
-      setTheme(saved.theme);
       setSoundEnabled(saved.soundEnabled ?? false);
     } else {
       setResults(seedUserHistory(Date.now()));
+    }
+    // Light is the default. Only a choice made with the theme button (kept under its own key) changes it - the theme the
+    // app used to save on its own is ignored, so nobody is stuck in the old default.
+    try {
+      if (localStorage.getItem(THEME_KEY) === "dark") setTheme("dark");
+    } catch {
+      /* storage unavailable: stay light */
     }
     setHydrated(true);
   }, []);
@@ -189,7 +197,16 @@ export function GameProvider({
     dismissReveal: () => setLastReveal(null),
     placeGuess,
     theme,
-    toggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+    toggleTheme: () =>
+      setTheme((t) => {
+        const next: Theme = t === "dark" ? "light" : "dark";
+        try {
+          localStorage.setItem(THEME_KEY, next);
+        } catch {
+          /* storage unavailable */
+        }
+        return next;
+      }),
     soundEnabled,
     toggleSound: () => setSoundEnabled((s) => !s),
     resetDemo: () => {
