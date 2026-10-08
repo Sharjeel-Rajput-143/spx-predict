@@ -11,6 +11,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   opened: "open",
   closed: "close",
   monitor_closed: "close",
+  exit_closed: "close",
 
   // Something went wrong or needs a person.
   error_failsafe: "error",
@@ -32,6 +33,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   total_position_limit_reached: "warning",
   daily_limit_reached: "warning",
   overlapping_strikes: "warning",
+  size_too_small: "warning",
   day_trading_blocked: "warning",
   cooldown_active: "warning",
 };

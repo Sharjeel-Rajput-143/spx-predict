@@ -64,7 +64,7 @@ export const sharedExecutor: BrokerExecutor = {
     return executorStatus().venue ?? undefined;
   },
   placeOpenOrder: (req: OpenSpreadRequest) => getExecutor().placeOpenOrder(req),
-  placeCloseOrder: (position: Position, options?: { pricePercent?: number; limitDebit?: number }) => getExecutor().placeCloseOrder(position, options),
+  placeCloseOrder: (position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }) => getExecutor().placeCloseOrder(position, options),
   getOrder: (ref: string): Promise<OrderState> => getExecutor().getOrder(ref),
   cancelOrder: (ref: string) => getExecutor().cancelOrder(ref),
   listPositions: (botId: string) => getExecutor().listPositions(botId),

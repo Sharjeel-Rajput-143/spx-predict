@@ -190,8 +190,8 @@ export class MockExecutor implements BrokerExecutor {
     );
   }
 
-  async placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number }): Promise<{ ref: string }> {
-    const quantity = position.filledQuantity || position.requestedQuantity;
+  async placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }): Promise<{ ref: string }> {
+    const quantity = options?.quantity ?? (position.filledQuantity || position.requestedQuantity);
     return this.place(
       {
         kind: "close",

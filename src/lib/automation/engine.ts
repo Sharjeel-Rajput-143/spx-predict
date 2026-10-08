@@ -18,7 +18,9 @@ import { expireStalePositions } from "./expiry";
 import { watchOrder } from "./orderWatch";
 import { placeAndWatch } from "./placeAndWatch";
 import { getLastTick } from "@/lib/marketData/tickStore";
-import { DEFAULT_PRICE_TICK, buildLadder, describeLadder, type Ladder, type SmartPricingMode } from "./smartPricing";
+import { applyTradeOp, contractsToClose, describeFinals, describeClosePricing, describeQuantity, type ClosePricing } from "./closePricing";
+import { resolveQuantity, resolveStrikeInputs } from "./openSettings";
+import { DEFAULT_PRICE_TICK, buildLadder, describeLadder, spreadMarket, type Ladder, type SmartPricingMode } from "./smartPricing";
 import {
   activePositionsForBot,
   activePositionsForBots,
@@ -144,6 +146,17 @@ interface Pricing {
   /** Seconds of waiting per rung, overriding the preset (tests use milliseconds). */
   stepMs?: number;
   width: number;
+  /** A trigger's own Close Position pricing (several final prices, or a market order); the fields above are then its choices. */
+  close?: ClosePricing;
+  /** Send a market order: no ladder and no limit price. */
+  market?: boolean;
+}
+
+/** The bot's pricing for a close, replaced by the trigger's own Close Position pricing when one was saved. */
+export function applyClosePricing(base: Pricing, own?: ClosePricing): Pricing {
+  if (!own) return base;
+  if (own.speed === "market") return { ...base, market: true, close: own };
+  return { ...base, mode: own.speed, percent: own.percent ?? base.percent, close: own };
 }
 
 export const pricingFor = (config: BotStaticConfig, side: "open" | "close", stepMs?: number): Pricing => ({
@@ -164,7 +177,7 @@ interface PricePlan {
 
 /** SmartPricing needs a market: the executor's quote of the spread. An executor without quotes (the mock) gets one
  * price, as before. A quote that fails to arrive falls back to that single price too - and says so. */
-async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spread: SpreadQuoteRequest, pricing: Pricing): Promise<PricePlan> {
+async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spread: SpreadQuoteRequest, pricing: Pricing, openedFor?: number | null): Promise<PricePlan> {
   if (!executor.getSpreadQuote) return { ladder: null, note: "One price (this executor has no market to quote)" };
   let legs: Awaited<ReturnType<NonNullable<BrokerExecutor["getSpreadQuote"]>>>;
   try {
@@ -173,12 +186,14 @@ async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spr
     return { ladder: null, note: `One price (the quote failed: ${errorMessage(err)})` };
   }
   if (!legs) return { ladder: null, note: "One price (no quote available)" };
-  const built = buildLadder({ side, legs, mode: pricing.mode, finalPercent: pricing.percent, width: pricing.width, tick: DEFAULT_PRICE_TICK });
+  const own = pricing.close;
+  const finals = own ? { percent: own.percent, slippage: own.slippage, flat: own.flat, ...(own.tradePrice ? { tradePrice: applyTradeOp(openedFor, own.tradePrice) ?? undefined } : {}) } : undefined;
+  const built = buildLadder({ side, legs, mode: pricing.mode, finalPercent: pricing.percent, ...(finals ? { finals } : {}), width: pricing.width, tick: DEFAULT_PRICE_TICK });
   if (!built.ok) return { ladder: null, note: `No usable price: ${built.reason}`, unusable: built.reason };
-  return { ladder: built.ladder, note: describeLadder(built.ladder, pricing.percent) };
+  return { ladder: built.ladder, note: describeLadder(built.ladder, own ? describeFinals(own) : pricing.percent) };
 }
 
-const spreadOf = (p: Position): SpreadQuoteRequest => ({ underlying: p.underlying, optionRoot: p.optionRoot, expiry: p.expiry, type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike });
+export const spreadOf = (p: Position): SpreadQuoteRequest => ({ underlying: p.underlying, optionRoot: p.optionRoot, expiry: p.expiry, type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike });
 
 interface CloseResult {
   ok: boolean;
@@ -188,6 +203,8 @@ interface CloseResult {
   pricing?: string;
   /** One line per price the close tried. */
   steps?: string[];
+  /** When only part of the position was closed: the closed record that part became. */
+  closedPositionId?: string;
 }
 
 export async function closePosition(
@@ -198,12 +215,21 @@ export async function closePosition(
   pollIntervalMs: number,
   now: number,
   pricing?: Pricing,
+  /** How many of the position's contracts to close; unset or all of them = the whole position. */
+  contracts?: number,
 ): Promise<CloseResult> {
+  const total = position.filledQuantity || position.requestedQuantity;
+  const target = contracts !== undefined ? Math.min(total, Math.max(1, contracts)) : total;
+  const partial = target < total;
   positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
 
   // Closing is a debit: buy the spread back. With a market to look at, walk from the mid toward the full spread;
   // with none (or an unusable quote) the executor's own default applies, as it always has.
-  const plan = pricing && executor.getSpreadQuote ? await planPrice(executor, "debit", spreadOf(position), pricing) : null;
+  const plan: PricePlan | null = pricing?.market
+    ? { ladder: null, note: "Market order (no limit price)" }
+    : pricing && executor.getSpreadQuote
+      ? await planPrice(executor, "debit", spreadOf(position), pricing, position.credit)
+      : null;
   const ladder = plan?.ladder ?? null;
   const pricingNote = plan?.note;
 
@@ -212,13 +238,13 @@ export async function closePosition(
     kind: "close",
     positionId: position.id,
     now,
-    place: (price) => executor.placeCloseOrder(position, { pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}) }),
+    place: (price) => executor.placeCloseOrder(position, { pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
     prices: ladder?.prices ?? null,
     stepMs: pricing?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
     finalMs: timeoutMs,
     pollMs: pollIntervalMs,
     defaultLimit: 0,
-    quantity: position.filledQuantity || position.requestedQuantity,
+    quantity: target,
   });
   if (!result.ok) {
     // Left "closing": we can't know the broker didn't take the order, so the
@@ -229,7 +255,26 @@ export async function closePosition(
   }
   const { state, timedOut, steps } = result;
 
-  const targetQuantity = position.filledQuantity || position.requestedQuantity;
+  const targetQuantity = target;
+  if (state.status === "filled" && state.filledQuantity >= targetQuantity && partial) {
+    // Part of the position was closed: that part becomes its own closed record (so its result is counted), and the rest stays open.
+    const closedAt = Date.now();
+    const part: Position = {
+      ...position,
+      id: `pos-${now}-${crypto.randomUUID()}`,
+      requestedQuantity: target,
+      filledQuantity: target,
+      status: "closed",
+      closedAt,
+      closePrice: state.averagePrice ?? null,
+      underlyingAtClose: signal?.price ?? null,
+      closeSignalId: signal?.id ?? null,
+      splitFrom: position.id,
+    };
+    positionsStore.insert(part);
+    positionsStore.update(position.id, { status: "open", requestedQuantity: total - target, filledQuantity: total - target, closeSignalId: null });
+    return { ok: true, outcome: "closed", reason: `Close order filled: ${target} of ${total} contracts closed, ${total - target} still open.`, pricing: pricingNote, steps, closedPositionId: part.id };
+  }
   if (state.status === "filled" && state.filledQuantity >= targetQuantity) {
     positionsStore.update(position.id, {
       status: "closed",
@@ -299,13 +344,14 @@ function priceRangeProblem(price: number, config: BotStaticConfig): string | nul
 export const closeTitle = (p: Position) => `Close Position (${p.underlying}, ${typeName(p.type)})`;
 
 /** The settings a close order is sent with - a snapshot for the run log. */
-function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100, how?: { note?: string; quotes: boolean; mode: SmartPricingMode }): { label: string; value: string }[] {
+function closeParamsFor(p: Position, timeoutMs: number, pricePercent = 100, how?: { note?: string; quotes: boolean; mode: SmartPricingMode }, closing?: { contracts: number; setting?: string }): { label: string; value: string }[] {
   const qty = p.filledQuantity || p.requestedQuantity;
+  const n = closing?.contracts ?? qty;
   // With a market to price against the order walks a SmartPricing ladder; without one it goes out at a single price.
   const price = how?.note ?? (how?.quotes ? `SmartPricing ${how.mode}, final price ${pricePercent}% of bid/ask` : `${pricePercent}% of bid/ask (no limit price is sent yet)`);
   return [
     { label: "Price", value: price },
-    { label: "Quantity", value: `${qty} contract${qty === 1 ? "" : "s"} (100% of position)` },
+    { label: "Quantity", value: `${n} contract${n === 1 ? "" : "s"} (${closing?.setting ?? "100% of position"})` },
     { label: "Confirm timeout", value: `${Math.round(timeoutMs / 1000)}s` },
   ];
 }
@@ -537,26 +583,31 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
 
     rec.decision("The position isn't already closing", true, "No close order is working");
 
-    const closeHow = { quotes: !!options.executor.getSpreadQuote, mode: staticConfig.smartPricing ?? "normal" };
-    const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, closeHow);
+    const ownClose = bot.closeSettings?.[direction]?.pricing;
+    const ownQuantity = bot.closeSettings?.[direction]?.quantity;
+    const total = position.filledQuantity || position.requestedQuantity;
+    const contracts = contractsToClose(total, ownQuantity);
+    const closeHow = { quotes: !!options.executor.getSpreadQuote, mode: staticConfig.smartPricing ?? "normal", ...(ownClose ? { note: describeClosePricing(ownClose) } : {}) };
+    const closeParams = closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, closeHow, { contracts, setting: describeQuantity(ownQuantity) });
     if (dryRun) {
-      wouldClose.add(position.id);
+      if (contracts >= total) wouldClose.add(position.id); // a partial close leaves the position held
       rec.action({ action: "close", title: closeTitle(position), position, params: closeParams, outcome: "dry_run", reason: "Dry run: would close; nothing sent." });
       log("dry_run", `Dry run: would close ${position.type} position.`, { positionId: position.id, wouldClose: true });
       continue;
     }
 
-    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, pricingFor(staticConfig, "close", options.ladderStepMs));
+    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, applyClosePricing(pricingFor(staticConfig, "close", options.ladderStepMs), ownClose), contracts < total ? contracts : undefined);
     // The Memo and Tags set on this trigger's Close Position step go on the position it closed.
     const stepNote = bot.closeSettings?.[direction];
     if (stepNote?.memo || stepNote?.tags?.length) {
-      const now2 = positionsStore.get(position.id) ?? position;
-      positionsStore.update(position.id, {
+      const noted = result.closedPositionId ?? position.id;
+      const now2 = positionsStore.get(noted) ?? position;
+      positionsStore.update(noted, {
         ...(stepNote.memo ? { notes: [now2.notes, stepNote.memo].filter(Boolean).join("\n") } : {}),
         ...(stepNote.tags?.length ? { tags: [...new Set([...(now2.tags ?? []), ...stepNote.tags])] } : {}),
       });
     }
-    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [...closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }), ...(stepNote?.memo ? [{ label: "Memo", value: stepNote.memo }] : []), ...(stepNote?.tags?.length ? [{ label: "Tags", value: stepNote.tags.join(", ") }] : [])], steps: result.steps, outcome: result.outcome, reason: result.reason });
+    rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(result.closedPositionId ?? position.id) ?? position, params: [...closeParamsFor(position, closeTimeoutMs, staticConfig.closePricePercent, { ...closeHow, note: result.pricing }, { contracts, setting: describeQuantity(ownQuantity) }), ...(stepNote?.memo ? [{ label: "Memo", value: stepNote.memo }] : []), ...(stepNote?.tags?.length ? [{ label: "Tags", value: stepNote.tags.join(", ") }] : [])], steps: result.steps, outcome: result.outcome, reason: result.reason });
     if (!result.ok) {
       recordError(botId, "close_failed", { positionId: position.id, reason: result.reason }, now);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });
@@ -632,9 +683,12 @@ export interface StageResult {
 /** Guards, strike validation, the order, and its fill - shared by the signal
  * path and a manually placed position. Writes exactly one decision row. */
 async function openStage(ctx: OpenStageContext): Promise<StageResult> {
-  const { botId, staticConfig, wanted, signal, executor, now } = ctx;
+  const { botId, wanted, signal, executor, now } = ctx;
+  // What this trigger's Open Position step was edited to do replaces the bot's own strike, size and price inputs below.
+  let staticConfig = ctx.staticConfig;
   const limits = getBotLimits(botId);
   const bot = ensureBotRecord(botId);
+  const openSettings = ctx.manual ? undefined : bot.openSettings?.[wanted === "short_put_spread" ? "bullish" : "bearish"];
 
   const rec = ctx.rec;
   let created: Position | null = null;
@@ -733,6 +787,22 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return stopAtLimit("daily_limit_reached", "Daily new-position limit reached.", { limit: limits.dailyNewPositionLimit, openedToday: todayNewPositions });
   }
 
+  // The Entry Criteria ticked on this trigger's Open step: not meeting one means nothing is opened (nothing is wrong, so the bot stays on).
+  const entry = openSettings?.entry;
+  if (entry) {
+    const checks: { text: string; pass: boolean; measured: string }[] = [];
+    if (entry.lessOpen !== undefined) checks.push({ text: `Bot has less than ${entry.lessOpen} open position${entry.lessOpen === 1 ? "" : "s"}`, pass: totalActive.length < entry.lessOpen, measured: `${totalActive.length} open` });
+    if (entry.lessToday !== undefined) checks.push({ text: `Bot opened less than ${entry.lessToday} new position${entry.lessToday === 1 ? "" : "s"} today`, pass: todayNewPositions < entry.lessToday, measured: `${todayNewPositions} opened today` });
+    if (entry.lessForSymbol !== undefined) {
+      const forSymbol = totalActive.filter((p) => p.underlying === staticConfig.underlying).length;
+      checks.push({ text: `Bot has less than ${entry.lessForSymbol} open position${entry.lessForSymbol === 1 ? "" : "s"} with symbol ${staticConfig.underlying}`, pass: forSymbol < entry.lessForSymbol, measured: `${forSymbol} open with ${staticConfig.underlying}` });
+    }
+    for (const c of checks) {
+      rec?.decision(c.text, c.pass, c.measured);
+      if (!c.pass) return finish("entry_criteria_not_met", `Entry criteria not met: ${c.text.toLowerCase()} (${c.measured}). Nothing was opened.`, { criterion: c.text });
+    }
+  }
+
   // Which price the strikes are built from. The alert's (default), or - for a bot set to "live" - a quote taken now,
   // as the Open step runs (after a flip's close this can be minutes after the alert). Either way the choice, the
   // price and its age are logged, and the price-range check runs on the price that is actually used.
@@ -766,6 +836,28 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
       if (problem) return finish("price_out_of_range", problem, { price: quote.price, range: staticConfig.priceRange ?? null });
       usedPrice = quote.price;
       usedPlan = planStrikes(wanted, quote.price, staticConfig);
+    }
+  }
+
+  // The short and long strike methods and the position size set on this trigger's Open step.
+  if (openSettings && !ctx.strikes) {
+    const eff = resolveStrikeInputs(staticConfig, wanted, usedPrice ?? 0, openSettings);
+    if (!eff.ok) {
+      rec?.decision("The strikes follow this trigger's settings", false, eff.reason);
+      recordError(botId, "invalid_strikes", { reason: eff.reason }, now);
+      botsStore.update(botId, { needsAttention: true, needsAttentionReason: `invalid_strikes: ${eff.reason}` });
+      return finish("invalid_strikes", eff.reason);
+    }
+    staticConfig = { ...staticConfig, ...eff.inputs };
+    if (eff.words.length > 0) {
+      usedPlan = planStrikes(wanted, usedPrice ?? 0, staticConfig);
+      rec?.decision("The strikes follow this trigger's settings", true, eff.words.join("; "));
+    }
+    if (openSettings.size) {
+      const sized = resolveQuantity(staticConfig, openSettings.size, staticConfig.widthPoints);
+      rec?.decision("The position size is at least 1 contract", sized.quantity >= 1, `${sized.quantity} contract${sized.quantity === 1 ? "" : "s"}: ${sized.words}`);
+      if (sized.quantity < 1) return finish("size_too_small", `The position size works out to less than 1 contract (${sized.words}); nothing was opened.`, { sizing: sized.words });
+      staticConfig = { ...staticConfig, quantity: sized.quantity };
     }
   }
 
@@ -810,9 +902,49 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("overlapping_strikes", "New legs collide with an existing active position.", { overlapPositionId: overlap.id });
   }
 
+  // The Position Criteria ticked on this trigger's Open step. The ones about the spread's own quote need one; with none they can't be met.
+  const wantsPosition = openSettings?.position;
+  if (wantsPosition && Object.keys(wantsPosition).length > 0) {
+    const c = wantsPosition;
+    const checks: { text: string; pass: boolean; measured: string }[] = [];
+    const width = staticConfig.widthPoints;
+    if (c.widthMin !== undefined || c.widthMax !== undefined) {
+      checks.push({ text: `The spread width is between ${c.widthMin ?? "any"} and ${c.widthMax ?? "any"}`, pass: width >= (c.widthMin ?? 0) && width <= (c.widthMax ?? Infinity), measured: `Width ${width}` });
+    }
+    if (c.otmPercentAbove !== undefined) {
+      const px = usedPrice ?? 0;
+      const otm = px > 0 ? ((wanted === "short_put_spread" ? px - strikes.shortStrike : strikes.shortStrike - px) / px) * 100 : -100;
+      checks.push({ text: `The short strike is more than ${c.otmPercentAbove}% out of the money`, pass: otm > c.otmPercentAbove, measured: `${(Math.round(otm * 1000) / 1000).toString()}% out of the money` });
+    }
+    if (c.maxBidAskSpread !== undefined || c.midMin !== undefined || c.midMax !== undefined) {
+      let market: ReturnType<typeof spreadMarket> = null;
+      if (executor.getSpreadQuote) {
+        try {
+          const legs = await executor.getSpreadQuote({ underlying: staticConfig.underlying, optionRoot: staticConfig.optionRoot, expiry, type: wanted, shortStrike: strikes.shortStrike, longStrike: strikes.longStrike });
+          market = legs ? spreadMarket("credit", legs) : null;
+        } catch {
+          market = null;
+        }
+      }
+      const note = market ? "" : "No quote for the spread, so this can't be checked";
+      if (c.maxBidAskSpread !== undefined) {
+        const gap = market ? Math.round((market.best - market.natural) * 100) / 100 : null;
+        checks.push({ text: `The bid/ask spread is less than $${c.maxBidAskSpread}`, pass: gap !== null && gap < c.maxBidAskSpread, measured: gap !== null ? `$${gap.toFixed(2)}` : note });
+      }
+      if (c.midMin !== undefined || c.midMax !== undefined) {
+        const mid = market ? Math.round(market.mid * 100) / 100 : null;
+        checks.push({ text: `The mid price is between $${c.midMin ?? "any"} and $${c.midMax ?? "any"}`, pass: mid !== null && mid >= (c.midMin ?? 0) && mid <= (c.midMax ?? Infinity), measured: mid !== null ? `$${mid.toFixed(2)}` : note });
+      }
+    }
+    for (const check of checks) {
+      rec?.decision(check.text, check.pass, check.measured);
+      if (!check.pass) return finish("position_criteria_not_met", `Position criteria not met: ${check.text.toLowerCase()} (${check.measured}). Nothing was opened.`, { criterion: check.text });
+    }
+  }
+
   // With a market to look at (a real executor), price the order off the spread's own bid/ask: a SmartPricing ladder.
   if (executor.getSpreadQuote) {
-    const priced = await planPrice(executor, "credit", { underlying: staticConfig.underlying, optionRoot: staticConfig.optionRoot, expiry, type: wanted, shortStrike: strikes.shortStrike, longStrike: strikes.longStrike }, pricingFor(staticConfig, "open", ctx.ladderStepMs));
+    const priced = await planPrice(executor, "credit", { underlying: staticConfig.underlying, optionRoot: staticConfig.optionRoot, expiry, type: wanted, shortStrike: strikes.shortStrike, longStrike: strikes.longStrike }, applyClosePricing(pricingFor(staticConfig, "open", ctx.ladderStepMs), openSettings?.pricing));
     ladderPrices = priced.ladder?.prices ?? null;
     ladderStepMs = (priced.ladder?.secondsEach ?? 0) * 1000;
     priceNote = priced.note;
@@ -847,6 +979,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     manual: ctx.manual,
     venue: executor.venue ?? "mock",
     optionRoot: staticConfig.optionRoot,
+    ...(openSettings?.exit && Object.keys(openSettings.exit).length > 0 ? { exitOptions: openSettings.exit } : {}),
     ...((signal?.raw as { test?: unknown } | null)?.test === true ? { test: true } : {}),
   };
   positionsStore.insert(position);
@@ -907,6 +1040,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     status: "open",
     filledQuantity: state.filledQuantity,
     credit: state.averagePrice ?? staticConfig.openingCreditEstimate,
+    ...(openSettings?.tags?.length ? { tags: [...new Set([...(positionsStore.get(position.id)?.tags ?? []), ...openSettings.tags])] } : {}),
   });
   const partial = state.filledQuantity < staticConfig.quantity;
   return finish(

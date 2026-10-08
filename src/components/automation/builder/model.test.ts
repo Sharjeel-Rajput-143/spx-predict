@@ -52,7 +52,7 @@ describe("conditions", () => {
   });
 
   it("presets the market-time condition with the engine's window", () => {
-    expect(describeCondition(newCondition("bot_time"))).toBe("Current market time is between 9:35am and 3:55pm");
+    expect(describeCondition(newCondition("bot_time"))).toBe("Current market time is between 9:35am - 3:55pm");
     expect(isConditionComplete(newCondition("bot_time"))).toBe(true);
   });
 
@@ -159,7 +159,7 @@ describe("previewTrace", () => {
     steps = appendStep(steps, d.id, "yes", newStep("open_position"));
     const lines = previewTrace(steps);
     expect(lines.map((l) => `${"  ".repeat(l.depth)}${l.label} ${l.text}`.trim())).toEqual([
-      "Decision: Current market time is between 9:35am and 3:55pm",
+      "Decision: Current market time is between 9:35am - 3:55pm",
       "YES Open Position: Open SPX Short Put Spread",
       "NO (nothing)",
     ]);
@@ -169,7 +169,7 @@ describe("previewTrace", () => {
 describe("multiple conditions, captions, bound inputs", () => {
   it("joins stacked conditions with AND", () => {
     const d = newStep("decision", [newCondition("bot_time"), { ...newCondition("bot_pl"), values: { metric: "open P/L", cmp: "less than", value: "0" } }]);
-    expect(describeStep(d)).toBe("Current market time is between 9:35am and 3:55pm and Bot open P/L is less than 0");
+    expect(describeStep(d)).toBe("Current market time is between 9:35am - 3:55pm and Bot open P/L is less than 0");
   });
 
   it("a caption replaces the automatic description", () => {

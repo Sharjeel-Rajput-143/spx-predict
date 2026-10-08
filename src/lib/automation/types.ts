@@ -46,6 +46,12 @@ export type DecisionOutcome =
   | "symbol_mismatch"
   | "price_out_of_range"
   | "overlapping_strikes"
+  /** The Open step's entry or position criteria, or the size it works out to, said not to open (nothing is wrong: it simply did not qualify). */
+  | "entry_criteria_not_met"
+  | "position_criteria_not_met"
+  | "size_too_small"
+  /** A position was closed by its exit options (profit taking, stop loss, touch). */
+  | "exit_closed"
   | "close_rejected"
   | "close_timeout"
   | "close_partial_fill"
@@ -199,7 +205,9 @@ export interface Bot {
   /** The position checks edited on each trigger's canvas (see positionChecks.ts). Unset = the engine's defaults. */
   positionChecks?: import("./positionChecks").PositionChecks;
   /** The Memo and Tags on each trigger's Close Position step: written on the position that step closes. */
-  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
+  /** What each trigger's Open Position step is set to do (see openSettings.ts). Unset = the bot's own inputs. */
+  openSettings?: Partial<Record<"bullish" | "bearish", import("./openSettings").OpenSettings>>;
+  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[]; pricing?: import("./closePricing").ClosePricing; quantity?: import("./closePricing").CloseQuantity }>>;
   /** Close Monitors, by key. Unset = off. */
   monitors?: Partial<Record<MonitorKey, CloseMonitorSettings>>;
   alerts?: BotAlerts;
@@ -267,6 +275,10 @@ export interface Position {
   /** Underlying price at the signal that opened / closed it. */
   underlyingAtOpen?: number | null;
   underlyingAtClose?: number | null;
+  /** The exit options the position was opened with (a later edit does not change an open position). */
+  exitOptions?: import("./openSettings").ExitOptions;
+  /** Set on the closed record a partial close leaves behind: the position it was split from. It is not a new position (it does not count toward the daily limit). */
+  splitFrom?: string;
   /** True when a person placed it from the UI rather than a signal. */
   manual?: boolean;
   /** Labels and a free-form note a person added to this position. */
@@ -385,7 +397,7 @@ export interface BrokerExecutor {
   readonly venue?: ExecutorVenue;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
   /** `limitDebit`: the most to pay to buy the spread back. Unset = the executor's own default (the mock fills; Tradier sends a market order). */
-  placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number }): Promise<{ ref: string }>;
+  placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }): Promise<{ ref: string }>;
   getOrder(ref: string): Promise<OrderState>;
   cancelOrder(ref: string): Promise<void>;
   listPositions(botId: string): Promise<Position[]>;

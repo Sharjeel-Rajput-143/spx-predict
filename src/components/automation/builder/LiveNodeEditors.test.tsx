@@ -65,7 +65,7 @@ describe("live editors on a built-in flow", () => {
     const ctx = ctxFor();
     const render = (step: Step) => html(<>{liveNodeEditor({ step, direction: "bullish", ctx, onClose: noop })}</>);
     expect(render(timeStep())).toContain("Market time window");
-    expect(render(stepOf("open_position"))).toContain("Open short put spread");
+    expect(render(stepOf("open_position"))).toContain("Open Short Put Spread");
     expect(render(stepOf("close_position"))).toContain("Close Position");
     const wanted = render(stepOf("decision", (x) => x.conditions?.[0]?.templateId === "bot_has_type" && x.conditions[0].values.type === "Short put spread"));
     expect(wanted).toContain("Decision");
@@ -112,18 +112,26 @@ describe("live editors on a built-in flow", () => {
     expect(html(<TimeWindowEditor ctx={ctxFor({ config: { ...config, hours: { start: "10:00", end: "15:00" } } })} onClose={noop} />)).toContain("Use the default window (9:35am - 3:55pm)");
   });
 
-  it("the open editor shows the real values, decimals included, for the right side", () => {
+  it("the open editor lays out Position Details like Option Alpha, from the bot's own values", () => {
     const put = html(<OpenEditor direction="bullish" ctx={ctxFor()} onClose={noop} />);
-    expect(put).toContain("Open short put spread");
-    expect(put).toContain('aria-label="Short put offset" value="-0.01"');
-    expect(put).toContain('aria-label="Spread width" value="10"');
-    expect(put).toContain('aria-label="Contracts" value="1"');
-    expect(put).toContain('aria-label="Expected credit" value="3.5"');
+    expect(put).toContain("Open Short Put Spread");
+    expect(put).toContain("Position Details");
+    for (const label of ["Symbol", "Expiration", "Long Put", "Short Put", "Position Size", "Price", "Exit Options", "Tags"]) expect(put).toContain(`>${label}<`);
     expect(put).toContain("NDX");
-    expect(put).toContain("Exactly 0 days (same day)");
+    expect(put).toContain("exactly 0 days");
+    expect(put).toContain("$10.00 below short put leg");
+    expect(put).toContain("$0.01 below underlying price");
+    expect(put).toContain("1 contract");
+    expect(put).toContain("100% of bid/ask");
+    expect(put.indexOf(">Long Put<")).toBeLessThan(put.indexOf(">Short Put<"));
+    expect(put).toContain("Entry Criteria");
+    expect(put).toContain("Position Criteria");
+    expect(put).not.toContain("Bot Settings");
+    expect(put).not.toContain("Expected credit");
     const call = html(<OpenEditor direction="bearish" ctx={ctxFor()} onClose={noop} />);
-    expect(call).toContain("Open short call spread");
-    expect(call).toContain('aria-label="Short call offset" value="0.01"');
+    expect(call).toContain("Open Short Call Spread");
+    expect(call).toContain("$10.00 above short call leg");
+    expect(call).toContain("$0.01 above underlying price");
   });
 
   it("the close editor shows the close side and its price", () => {

@@ -58,12 +58,26 @@ export function spreadMarket(side: SpreadSide, legs: LegQuotes): { mid: number; 
   return { mid: (natural + best) / 2, natural, best };
 }
 
+/** Final prices other than "% of bid/ask", as Option Alpha lets several be set at once: the best one is the final price. */
+export interface FinalPrices {
+  /** % of the way from the mid to the bid/ask. */
+  percent?: number;
+  /** At most this much from the mid price (never beyond the bid/ask). */
+  slippage?: number;
+  /** A fixed price. */
+  flat?: number;
+  /** A price worked out from the position's own trade price. */
+  tradePrice?: number;
+}
+
 export interface LadderInput {
   side: SpreadSide;
   legs: LegQuotes;
   mode: SmartPricingMode;
   /** The final price as a percent of the way from mid to bid/ask. 100 = the full spread. */
   finalPercent: number;
+  /** When given, these replace `finalPercent`: each is a candidate final price and the best one wins (the lowest to pay, the highest to receive). */
+  finals?: FinalPrices;
   tick?: number;
   /** A credit can't be worth more than the width. */
   width?: number;
@@ -89,7 +103,16 @@ export function buildLadder(input: LadderInput): LadderResult {
   if (!(mid > 0)) return { ok: false, reason: `The spread's mid price is ${cents(mid)}, not a price worth trading at.` };
 
   const pct = Math.min(Math.max(input.finalPercent, 0), 100) / 100;
-  const finalRaw = mid + (natural - mid) * pct;
+  let finalRaw = mid + (natural - mid) * pct;
+  if (input.finals) {
+    const f = input.finals;
+    const candidates: number[] = [];
+    if (f.percent !== undefined) candidates.push(mid + (natural - mid) * (Math.min(Math.max(f.percent, 0), 100) / 100));
+    if (f.slippage !== undefined) candidates.push(input.side === "debit" ? Math.min(mid + f.slippage, natural) : Math.max(mid - f.slippage, natural));
+    if (f.flat !== undefined) candidates.push(f.flat);
+    if (f.tradePrice !== undefined) candidates.push(f.tradePrice);
+    if (candidates.length > 0) finalRaw = input.side === "debit" ? Math.min(...candidates) : Math.max(...candidates);
+  }
   const preset = SMART_PRICING_PRESETS[input.mode];
   const raw: number[] = [];
   if (preset.prices === 1) raw.push(finalRaw);
@@ -106,7 +129,8 @@ export function buildLadder(input: LadderInput): LadderResult {
 }
 
 /** "SmartPricing Normal: 3.55, 3.45, 3.35, 3.30 (10s each, mid 3.55, final 100% of bid/ask)" */
-export function describeLadder(l: Ladder, finalPercent: number): string {
-  if (l.mode === "off") return `Limit at ${l.final.toFixed(2)} (${finalPercent}% of bid/ask, mid ${l.mid.toFixed(2)})`;
-  return `SmartPricing ${l.mode[0].toUpperCase()}${l.mode.slice(1)}: ${l.prices.map((p) => p.toFixed(2)).join(", ")} (${l.secondsEach}s each, mid ${l.mid.toFixed(2)}, final ${finalPercent}% of bid/ask)`;
+export function describeLadder(l: Ladder, finalPercent: number | string): string {
+  const final = typeof finalPercent === "number" ? `${finalPercent}% of bid/ask` : finalPercent;
+  if (l.mode === "off") return `Limit at ${l.final.toFixed(2)} (${final}, mid ${l.mid.toFixed(2)})`;
+  return `SmartPricing ${l.mode[0].toUpperCase()}${l.mode.slice(1)}: ${l.prices.map((p) => p.toFixed(2)).join(", ")} (${l.secondsEach}s each, mid ${l.mid.toFixed(2)}, final ${final})`;
 }

@@ -23,7 +23,7 @@ export function activePositionsForBots(botIds: string[]): Position[] {
 export function countTodayNewPositions(botId: string, nowMs: number, resetAt = 0): number {
   const today = easternDateKey(nowMs);
   return positionsStore.query(
-    (p) => p.botId === botId && p.openedAt != null && p.openedAt > resetAt && easternDateKey(p.openedAt) === today,
+    (p) => p.botId === botId && !p.splitFrom && p.openedAt != null && p.openedAt > resetAt && easternDateKey(p.openedAt) === today,
   ).length;
 }
 

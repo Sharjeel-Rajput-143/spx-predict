@@ -2,12 +2,16 @@
 
 import { useState, type ReactNode } from "react";
 import { IconLink } from "@/components/icons";
-import { Drawer, Field, Modal, buttonClass, inputClass } from "../bot/primitives";
-import type { SmartPricingMode } from "@/lib/automation/smartPricing";
+import { Drawer, Dropdown, Field, InfoTip, Modal, buttonClass, inputClass } from "../bot/primitives";
+import { TRADE_OPS, describeFinals, describeQuantity, validateCloseQuantity, validateClosePricing, type CloseSpeed, type ClosePricing, type TradeOp } from "@/lib/automation/closePricing";
 import type { BotContext } from "../bot/BotDetail";
 import type { BotInputs, MonitorKey, StrikeRounding } from "@/lib/automation/types";
 import { CHECK_MAX_COUNT, CHECK_OPS, CHECK_STATUSES, CHECK_TYPES, defaultCheck, positionsWord, type CheckOp, type CheckSlot, type CheckStatus, type CheckType, type PositionCheck } from "@/lib/automation/positionChecks";
 import { clock12 } from "./builtin";
+import { NeedsInputs, SmartPricingModal, Shell, Row, inputsWith, num, priceLabel, type Direction } from "./editorParts";
+import { OpenEditor } from "./OpenPositionEditor";
+
+export { OpenEditor, inputsWith };
 import type { Step } from "./model";
 
 /**
@@ -18,20 +22,10 @@ import type { Step } from "./model";
  * on its nodes can change, and only the ones the engine really reads.
  */
 
-type Direction = "bullish" | "bearish";
-
 /** Every 5 minutes from 9:30am to 4:00pm, the way Option Alpha lists its times. */
 const MARKS: string[] = [];
 for (let m = 9 * 60 + 30; m <= 16 * 60; m += 5) MARKS.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
 const withCurrent = (options: string[], current: string) => (options.includes(current) ? options : [...options, current].sort());
-
-/** The bot's saved inputs with some values replaced; `hours: null` returns it to the default window. */
-export function inputsWith(config: NonNullable<BotContext["data"]["config"]>, changes: Omit<Partial<BotInputs>, "hours"> & { hours?: { start: string; end: string } | null }): Record<string, unknown> {
-  const { id: _id, ...base } = config;
-  const next: Record<string, unknown> = { ...base, ...changes };
-  if (changes.hours === null) delete next.hours;
-  return next;
-}
 
 function useSave(ctx: BotContext, onClose: () => void) {
   const [busy, setBusy] = useState(false);
@@ -44,33 +38,6 @@ function useSave(ctx: BotContext, onClose: () => void) {
   };
   return { busy, save };
 }
-
-const num = (v: string) => (v.trim() === "" ? NaN : Number(v));
-
-function Shell({ title, ctx, onClose, footer, children }: { title: string; ctx: BotContext; onClose: () => void; footer?: ReactNode; children: ReactNode }) {
-  return (
-    <Drawer title={title} onClose={onClose} footer={footer}>
-      <div className="space-y-5">
-        {children}
-      </div>
-    </Drawer>
-  );
-}
-
-function NeedsInputs({ ctx, onClose }: { ctx: BotContext; onClose: () => void }) {
-  return (
-    <Drawer title="Not set up yet" onClose={onClose} footer={<button className={`${buttonClass.secondary} w-full`} onClick={onClose}>Close</button>}>
-      <p className="text-sm text-muted">{ctx.data.bot.configError ?? "This bot has no trading inputs yet."} Set them first under Settings &gt; Bot inputs; then this step can be edited here.</p>
-    </Drawer>
-  );
-}
-
-const Row = ({ label, value }: { label: string; value: string }) => (
-  <div className="flex items-center justify-between gap-3 rounded-lg bg-surface-2/60 px-3 py-2 text-sm">
-    <span className="text-muted">{label}</span>
-    <span className="font-medium">{value}</span>
-  </div>
-);
 
 /** "Current market time is between X and Y". */
 export function TimeWindowEditor({ ctx, onClose }: { ctx: BotContext; onClose: () => void }) {
@@ -124,129 +91,33 @@ export function TimeWindowEditor({ ctx, onClose }: { ctx: BotContext; onClose: (
   );
 }
 
-/** "Open Short Put/Call Spread". */
-export function OpenEditor({ direction, ctx, onClose }: { direction: Direction; ctx: BotContext; onClose: () => void }) {
-  const cfg = ctx.data.config;
-  const put = direction === "bullish";
-  const side = put ? "put" : "call";
-  const [offset, setOffset] = useState(cfg ? String(put ? cfg.putShortOffset : cfg.callShortOffset) : "");
-  const [width, setWidth] = useState(cfg ? String(cfg.widthPoints) : "");
-  const [quantity, setQuantity] = useState(cfg ? String(cfg.quantity) : "");
-  const [credit, setCredit] = useState(cfg ? String(cfg.openingCreditEstimate) : "");
-  const [percent, setPercent] = useState(cfg ? String(cfg.openPricePercent ?? 100) : "100");
-  const [rounding, setRounding] = useState<StrikeRounding>(cfg?.strikeRounding ?? "outward");
-  const { busy, save } = useSave(ctx, onClose);
-  if (!cfg) return <NeedsInputs ctx={ctx} onClose={onClose} />;
-
-  return (
-    <Shell
-      title={`Open short ${side} spread`}
-      ctx={ctx}
-      onClose={onClose}
-      footer={
-        <button
-          className={`${buttonClass.primary} w-full`}
-          disabled={busy}
-          onClick={() =>
-            save({
-              ...(put ? { putShortOffset: num(offset) } : { callShortOffset: num(offset) }),
-              widthPoints: num(width),
-              quantity: num(quantity),
-              openingCreditEstimate: num(credit),
-              openPricePercent: num(percent),
-              strikeRounding: rounding,
-            })
-          }
-        >
-          {busy ? "Saving..." : "Save"}
-        </button>
-      }
-    >
-      <div className="space-y-2">
-        <Row label="Symbol" value={cfg.underlying} />
-        <Row label="Expiration" value="Exactly 0 days (same day)" />
-      </div>
-      <Field label={`Short ${side} strike`}>
-        <input className={inputClass} inputMode="decimal" value={offset} onChange={(e) => setOffset(e.target.value)} aria-label={`Short ${side} offset`} />
-      </Field>
-      <Field label="Rounding">
-        <select className={inputClass} value={rounding} onChange={(e) => setRounding(e.target.value as StrikeRounding)} aria-label="Strike rounding">
-          <option value="outward">Out of the money</option>
-          <option value="nearest">Nearest strike</option>
-        </select>
-      </Field>
-      <Field label={`Long ${side} strike`}>
-        <input className={inputClass} inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} aria-label="Spread width" />
-      </Field>
-      <Field label="Position size">
-        <input className={inputClass} inputMode="numeric" value={quantity} onChange={(e) => setQuantity(e.target.value)} aria-label="Contracts" />
-      </Field>
-      <Field label="Expected credit">
-        <input className={inputClass} inputMode="decimal" value={credit} onChange={(e) => setCredit(e.target.value)} aria-label="Expected credit" />
-      </Field>
-      <Field label="Final price (%)">
-        <input className={inputClass} inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} aria-label="Open price percent" />
-      </Field>
-    </Shell>
-  );
-}
-
-const SMART_MODES: { mode: SmartPricingMode; label: string }[] = [
-  { mode: "normal", label: "Normal - up to 4 prices, 10 seconds each" },
-  { mode: "fast", label: "Fast - up to 3 prices, 5 seconds each" },
-  { mode: "patient", label: "Patient - up to 5 prices, 20 seconds each" },
-  { mode: "off", label: "Off - 1 limit price" },
-];
-
-/** Option Alpha's SmartPricing dialog: the ladder preset and the final price. Both are the bot's real settings. */
-function SmartPricingModal({ mode, percent, onApply, onClose }: { mode: SmartPricingMode; percent: string; onApply: (mode: SmartPricingMode, percent: string) => void; onClose: () => void }) {
-  const [m, setM] = useState(mode);
-  const [pct, setPct] = useState(percent);
-  const bad = !(num(pct) > 0 && num(pct) <= 100);
-  return (
-    <Modal title="SmartPricing" onClose={onClose} footer={<button className={`${buttonClass.primary} px-8`} disabled={bad} onClick={() => onApply(m, pct)}>Save</button>}>
-      <div className="space-y-5">
-        <p className="text-sm text-muted">The bot places timed, limit orders traversing the bid/ask spread to the final price set below.</p>
-        <select className={inputClass} value={m} onChange={(e) => setM(e.target.value as SmartPricingMode)} aria-label="SmartPricing">
-          {SMART_MODES.map((o) => (
-            <option key={o.mode} value={o.mode}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <div>
-          <div className="text-sm font-semibold">Final Price</div>
-          <p className="mt-1 text-sm text-muted">The price for the final order placed by your bot: the worst price it will accept when closing. The last price waits for the order timeout, then cancels.</p>
-          <div className="mt-3 flex items-center gap-2 text-sm">
-            <input className={`${inputClass} !w-24`} inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} aria-label="Final price percent" />
-            <span>% of bid/ask spread</span>
-          </div>
-          {bad && <p className="mt-2 text-xs text-down">Enter a percent above 0, up to 100.</p>}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 /** "Close Position", laid out like Option Alpha's form. Price (SmartPricing and the final price) is the bot's own close setting;
  * Memo and Tags are written on the position this trigger closes. The position is the opposite side's spread and the quantity is all of it. */
 export function CloseEditor({ direction, ctx, onClose }: { direction: Direction; ctx: BotContext; onClose: () => void }) {
   const cfg = ctx.data.config;
   const spread = direction === "bullish" ? "Short call spread" : "Short put spread";
   const saved = ctx.data.bot.closeSettings?.[direction];
-  const [percent, setPercent] = useState(cfg ? String(cfg.closePricePercent ?? 100) : "100");
-  const [mode, setMode] = useState<SmartPricingMode>(cfg?.smartPricing ?? "normal");
+  // Unless this trigger has its own pricing, the step uses the bot's SmartPricing setting and close price.
+  const [pricing, setPricingValue] = useState<ClosePricing>(saved?.pricing ?? { speed: cfg?.smartPricing ?? "normal", percent: cfg?.closePricePercent ?? 100 });
+  const [qMode, setQMode] = useState<"percent" | "contracts">(saved?.quantity?.mode ?? "percent");
+  const [qPercent, setQPercent] = useState(saved?.quantity?.mode === "percent" ? String(saved.quantity.value) : "100");
+  const [qContracts, setQContracts] = useState(saved?.quantity?.mode === "contracts" ? String(saved.quantity.value) : "");
   const [memo, setMemo] = useState(saved?.memo ?? "");
   const [tags, setTags] = useState((saved?.tags ?? []).join(", "));
-  const [pricing, setPricing] = useState(false);
+  const [pricingOpen, setPricingOpen] = useState(false);
   const [lookup, setLookup] = useState(false);
   const [busy, setBusy] = useState(false);
   if (!cfg) return <NeedsInputs ctx={ctx} onClose={onClose} />;
 
+  const quantity = validateCloseQuantity(qMode === "percent" ? { mode: "percent", value: num(qPercent) } : { mode: "contracts", value: num(qContracts) });
+  const allOfIt = quantity.ok && quantity.quantity.mode === "percent" && quantity.quantity.value === 100;
+  const quantityLabel = quantity.ok ? describeQuantity(quantity.quantity) : "Check the quantity";
+
   const save = async () => {
+    if (!quantity.ok) return;
     setBusy(true);
     const ok = await ctx.patch(
-      { inputs: inputsWith(cfg, { closePricePercent: num(percent), smartPricing: mode }), closeSettings: { [direction]: { memo, tags: tags.split(",").map((t) => t.trim()).filter(Boolean) } } },
+      { closeSettings: { [direction]: { memo, tags: tags.split(",").map((t) => t.trim()).filter(Boolean), pricing, quantity: allOfIt ? null : quantity.quantity } } },
       "Saved to the bot's settings. It applies to the next signal.",
     );
     setBusy(false);
@@ -255,7 +126,7 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
 
   return (
     <>
-      <Shell title="Close Position" ctx={ctx} onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy || !(num(percent) > 0 && num(percent) <= 100)} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
+      <Shell title="Close Position" ctx={ctx} onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy || !quantity.ok} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
         <div className="grid grid-cols-[5.5rem_1fr] items-center gap-x-3 gap-y-5 text-sm">
           <span>Position</span>
           <button onClick={() => setLookup(true)} className="inline-flex w-fit max-w-full items-center gap-2 rounded-lg border border-dashed border-accent/50 bg-accent/5 px-3 py-1.5 text-accent" title="Open the position lookup">
@@ -263,14 +134,43 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
             <span className="truncate">{`Position (${cfg.underlying}, ${spread})`}</span>
           </button>
           <span>Price</span>
-          <button onClick={() => setPricing(true)} className={`${inputClass} flex items-center justify-between text-left`} aria-label="Price">
-            <span>{percent}% of bid/ask</span>
+          <button onClick={() => setPricingOpen(true)} className={`${inputClass} flex items-center justify-between text-left`} aria-label="Price">
+            <span>{priceLabel(pricing)}</span>
             <span className="text-faint">▾</span>
           </button>
           <span>Quantity</span>
-          <select className={inputClass} value="100" onChange={() => undefined} aria-label="Quantity">
-            <option value="100">100% of position</option>
-          </select>
+          <div>
+            <Dropdown
+              width="w-72"
+              trigger={({ toggle }) => (
+                <button onClick={toggle} className={`${inputClass} flex items-center justify-between text-left`} aria-label="Quantity">
+                  <span>{quantityLabel}</span>
+                  <span className="text-faint">▾</span>
+                </button>
+              )}
+            >
+              {() => (
+                <div className="space-y-3 p-3 text-sm">
+                  <label className="flex items-center gap-3">
+                    <input type="radio" name="quantity" checked={qMode === "percent"} onChange={() => setQMode("percent")} aria-label="Percent of position" className="h-4 w-4 accent-[var(--accent)]" />
+                    <input className={`${inputClass} !w-20`} inputMode="decimal" value={qPercent} onFocus={() => setQMode("percent")} onChange={(e) => { setQMode("percent"); setQPercent(e.target.value); }} aria-label="Percent of position value" />
+                    <span>% of position</span>
+                  </label>
+                  <label className="flex items-center gap-3">
+                    <input type="radio" name="quantity" checked={qMode === "contracts"} onChange={() => setQMode("contracts")} aria-label="Contracts" className="h-4 w-4 accent-[var(--accent)]" />
+                    <input className={`${inputClass} !w-20`} inputMode="numeric" placeholder="1" value={qContracts} onFocus={() => setQMode("contracts")} onChange={(e) => { setQMode("contracts"); setQContracts(e.target.value); }} aria-label="Contracts value" />
+                    <span>contract</span>
+                  </label>
+                  <label className="flex items-center gap-3 text-faint" title="Index option spreads trade in contracts, not shares.">
+                    <input type="radio" name="quantity" disabled aria-label="Shares" className="h-4 w-4" />
+                    <input className={`${inputClass} !w-20`} placeholder="1" disabled aria-label="Shares value" />
+                    <span>share</span>
+                  </label>
+                </div>
+              )}
+            </Dropdown>
+            {!quantity.ok && <p className="mt-1 text-xs text-down">{quantity.reason}</p>}
+          </div>
           <span>Memo</span>
           <textarea className={`${inputClass} min-h-24`} value={memo} onChange={(e) => setMemo(e.target.value)} aria-label="Memo" maxLength={500} />
           <span>Tags</span>
@@ -286,16 +186,14 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
           </label>
         </div>
       </Shell>
-      {pricing && (
+      {pricingOpen && (
         <SmartPricingModal
-          mode={mode}
-          percent={percent}
-          onApply={(m, p) => {
-            setMode(m);
-            setPercent(p);
-            setPricing(false);
+          pricing={pricing}
+          onApply={(p) => {
+            setPricingValue(p);
+            setPricingOpen(false);
           }}
-          onClose={() => setPricing(false)}
+          onClose={() => setPricingOpen(false)}
         />
       )}
       {lookup && (

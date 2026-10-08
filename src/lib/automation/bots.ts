@@ -1,4 +1,6 @@
 import "server-only";
+import { validateOpenSettings, type OpenSettings } from "./openSettings";
+import { validateCloseQuantity, validateClosePricing, type CloseQuantity, type ClosePricing } from "./closePricing";
 import { validateCheck, type PositionCheck, type PositionChecks } from "./positionChecks";
 import crypto from "node:crypto";
 import { ownerUserId } from "@/lib/auth/users";
@@ -472,8 +474,10 @@ export interface BotPatch {
   alwaysOn?: { bullish: boolean; bearish: boolean };
   /** Replaces the check(s) given for each direction; a direction or slot left out keeps what it had. `null` returns a slot to the default. */
   positionChecks?: Partial<Record<"bullish" | "bearish", Partial<Record<"close" | "open", PositionCheck | null>>>>;
+  /** Replaces the Open Position settings of the direction(s) given; null returns that trigger to the bot's own inputs. */
+  openSettings?: Partial<Record<"bullish" | "bearish", OpenSettings | null>>;
   /** Replaces the Memo and Tags of the direction(s) given. */
-  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
+  closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[]; pricing?: ClosePricing | null; quantity?: CloseQuantity | null }>>;
   monitors?: Partial<Record<MonitorKey, Partial<CloseMonitorSettings>>>;
   alerts?: Partial<Bot["alerts"]>;
   accountId?: string;
@@ -551,6 +555,21 @@ export function updateBot(botId: string, patch: BotPatch): Bot {
     }
     next.positionChecks = merged;
   }
+  if (patch.openSettings !== undefined) {
+    const merged: NonNullable<Bot["openSettings"]> = { ...record.openSettings };
+    for (const dir of ["bullish", "bearish"] as const) {
+      const change = patch.openSettings[dir];
+      if (change === undefined) continue;
+      if (change === null) {
+        delete merged[dir];
+        continue;
+      }
+      const checked = validateOpenSettings(change);
+      if (!checked.ok) throw new Error(checked.reason);
+      merged[dir] = checked.value;
+    }
+    next.openSettings = merged;
+  }
   if (patch.closeSettings !== undefined) {
     const merged: NonNullable<Bot["closeSettings"]> = { ...record.closeSettings };
     for (const dir of ["bullish", "bearish"] as const) {
@@ -558,7 +577,22 @@ export function updateBot(botId: string, patch: BotPatch): Bot {
       if (!change) continue;
       const memo = typeof change.memo === "string" ? change.memo.trim().slice(0, 500) : "";
       const tags = cleanTags(change.tags);
-      merged[dir] = { ...(memo ? { memo } : {}), ...(tags.length ? { tags } : {}) };
+      // `pricing` left out keeps what was saved; null returns the step to the bot's own pricing.
+      let pricing = merged[dir]?.pricing;
+      if (change.pricing === null) pricing = undefined;
+      else if (change.pricing !== undefined) {
+        const checked = validateClosePricing(change.pricing);
+        if (!checked.ok) throw new Error(checked.reason);
+        pricing = checked.pricing;
+      }
+      let quantity = merged[dir]?.quantity;
+      if (change.quantity === null) quantity = undefined;
+      else if (change.quantity !== undefined) {
+        const checked = validateCloseQuantity(change.quantity);
+        if (!checked.ok) throw new Error(checked.reason);
+        quantity = checked.quantity;
+      }
+      merged[dir] = { ...(memo ? { memo } : {}), ...(tags.length ? { tags } : {}), ...(pricing ? { pricing } : {}), ...(quantity ? { quantity } : {}) };
     }
     next.closeSettings = merged;
   }

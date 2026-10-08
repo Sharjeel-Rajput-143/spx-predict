@@ -21,7 +21,7 @@ const cfg: BotStaticConfig = {
 describe("built-in flow", () => {
   it("draws the engine's bullish logic: hours -> close the calls if held -> open puts unless held", () => {
     const lines = previewTrace(builtInFlow("bullish", cfg)).map((l) => l.text);
-    expect(lines[0]).toBe("Decision: Current market time is between 9:35am and 3:55pm");
+    expect(lines[0]).toBe("Decision: Current market time is between 9:35am - 3:55pm");
     expect(lines).toContain("Decision: Bot has exactly or more than 1 position with Short call spread type and any status");
     expect(lines).toContain("Close Position: Close Position (SPX, Short Call Spread)");
     // The open appears on both paths (opposite held-and-closed, and opposite not held).
@@ -51,8 +51,8 @@ describe("built-in flow", () => {
 
   it("draws the bot's own trading window on the time check, not a made-up one", () => {
     const lines = previewTrace(builtInFlow("bullish", cfg, { start: "10:00", end: "15:30" })).map((l) => l.text);
-    expect(lines[0]).toBe("Decision: Current market time is between 10:00am and 3:30pm");
-    expect(previewTrace(builtInFlow("bullish", cfg, { start: "09:35", end: "12:05" })).map((l) => l.text)[0]).toBe("Decision: Current market time is between 9:35am and 12:05pm");
+    expect(lines[0]).toBe("Decision: Current market time is between 10:00am - 3:30pm");
+    expect(previewTrace(builtInFlow("bullish", cfg, { start: "09:35", end: "12:05" })).map((l) => l.text)[0]).toBe("Decision: Current market time is between 9:35am - 12:05pm");
   });
 
   it("shows the order price as a percent of bid/ask on the open and close steps", () => {

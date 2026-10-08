@@ -25,7 +25,8 @@ export interface BotDetailData {
     triggers: { bullish: boolean; bearish: boolean };
     alwaysOn?: { bullish: boolean; bearish: boolean };
     positionChecks?: import("@/lib/automation/positionChecks").PositionChecks;
-    closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[] }>>;
+    openSettings?: Partial<Record<"bullish" | "bearish", import("@/lib/automation/openSettings").OpenSettings>>;
+    closeSettings?: Partial<Record<"bullish" | "bearish", { memo?: string; tags?: string[]; pricing?: import("@/lib/automation/closePricing").ClosePricing; quantity?: import("@/lib/automation/closePricing").CloseQuantity }>>;
     monitors?: Partial<Record<"bullishClose" | "bearishClose", { enabled: boolean; memo?: string; tags?: string[] }>>;
     alerts: BotAlerts;
     safeguards: BotSafeguards;
@@ -85,6 +86,10 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   daily_limit_reached: { label: "Daily limit", tone: "warn" },
   allocation_limit_reached: { label: "Allocation limit", tone: "warn" },
   overlapping_strikes: { label: "Strikes overlap", tone: "warn" },
+  entry_criteria_not_met: { label: "Entry criteria not met", tone: "skip" },
+  position_criteria_not_met: { label: "Position criteria not met", tone: "skip" },
+  size_too_small: { label: "Size under 1 contract", tone: "warn" },
+  exit_closed: { label: "Closed by exit options", tone: "ok" },
   no_live_price: { label: "No live price", tone: "warn" },
   invalid_strikes: { label: "Invalid strikes", tone: "error" },
   close_rejected: { label: "Close rejected", tone: "error" },

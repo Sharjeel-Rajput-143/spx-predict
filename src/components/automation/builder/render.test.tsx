@@ -65,7 +65,7 @@ describe("Decision slide-over", () => {
       <DecisionDrawer title="Decision" heading="Follow the “Yes” path if…" initial={[newCondition("bot_time"), newCondition("bot_has_type")]} onSave={noop} onClose={noop} />,
     );
     expect(out).toContain("Follow the “Yes” path if…");
-    expect(out).toContain("Current market time is between 9:35am and 3:55pm");
+    expect(out).toContain("Current market time is between 9:35am - 3:55pm");
     expect(out).toContain("Bot has exactly or more than 1 position with Short put spread type and any status");
     expect(out).toContain("AND");
     expect(out).toContain('aria-label="Add condition"');
@@ -144,8 +144,8 @@ describe("Automation builder (full page)", () => {
     }
     expect(out.match(/aria-label="Add step"/g)).toHaveLength(1);
     expect(out).toContain("Preview");
-    // A brand-new flow reads Inputs 0, Opportunities 0, Warnings 0.
-    expect(out.match(/<span class="[^"]*">0<\/span>/g)).toHaveLength(3);
+    // A brand-new flow reads Opportunities 0 and Warnings 0 (Inputs has no count, as in Option Alpha).
+    expect(out.match(/<span class="[^"]*">0<\/span>/g)).toHaveLength(2);
   });
 
   it("draws a flow as pill nodes with YES/NO badges, node menus and live counts", () => {
@@ -153,13 +153,13 @@ describe("Automation builder (full page)", () => {
     let steps = appendStep([], null, "root", guard);
     steps = appendStep(steps, guard.id, "yes", newStep("open_position"));
     const out = render({ ...blankDraft(), steps });
-    expect(out).toContain("Current market time is between 9:35am and 3:55pm");
+    expect(out).toContain("Current market time is between 9:35am - 3:55pm");
     expect(out).toContain("Open SPX Short Put Spread");
     expect(out).toContain(">YES<");
     expect(out).toContain(">NO<");
     expect(out).toContain("Decision actions");
     expect(out).toContain("Collapse branches");
-    expect(out).toMatch(/Opportunities\s*<span[^>]*>1</); // one open step
+    expect(out).toMatch(/Opportunities<\/span><span[^>]*>1</); // one open step
   });
 
   it("opens a built-in trigger as a read-only reference with no add buttons, no Save, and the explanation", () => {

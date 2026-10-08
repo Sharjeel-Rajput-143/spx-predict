@@ -260,9 +260,9 @@ export class TradierExecutor implements BrokerExecutor {
   /** Closing: buy back the short, sell the long. With a limit debit from the SmartPricing ladder it is a
    * debit order at that price; with none it is a market multileg order.
    * TODO(unconfirmed): that the sandbox/production accept type=market for a multileg index spread. */
-  async placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number }): Promise<{ ref: string }> {
+  async placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }): Promise<{ ref: string }> {
     const { underlying, short, long } = this.legs({ root: position.optionRoot, underlying: position.underlying, expiry: position.expiry, type: position.type, shortStrike: position.shortStrike, longStrike: position.longStrike });
-    const quantity = String(position.filledQuantity || position.requestedQuantity);
+    const quantity = String(options?.quantity ?? (position.filledQuantity || position.requestedQuantity));
     return this.submit({
       class: "multileg",
       symbol: underlying,
