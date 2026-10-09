@@ -15,7 +15,7 @@ import { WebhookAttachPanel, WebhookOptionList, optionLabel } from "@/components
 import { WebhooksSection, type SettingsData, type WebhookView } from "@/components/automation/settings/sections";
 import { alertsStore, decisionsStore, errorsStore, ordersStore, positionsStore, runsStore, signalsStore, storageProblem, webhooksStore, __simulateRestart } from "./store";
 import { ensureBotRecord } from "./bots";
-import { attachWebhook, createWebhook, detachTrigger, deleteWebhook, optionsForTrigger, webhookForTrigger } from "./webhooks";
+import { attachWebhook, createWebhook, detachTrigger, deleteWebhook, findWebhookByToken, optionsForTrigger, webhookForTrigger } from "./webhooks";
 import { NDX_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 
 // The bot's own live quote, as the app's price feed would give it: a webhook call carries no price. No network.
@@ -42,7 +42,7 @@ const attach = (dir: string, webhookId: string) => attachRoute(send(TRIGGER(dir)
 const detach = (dir: string) => detachRoute(send(TRIGGER(dir), "DELETE"), ctx(dir));
 const botLog = () => decisionsStore.all().filter((d) => d.botId === NDX_BOT_ID && d.signalId === null).map((d) => d.outcome);
 const tokenOf = (id: string) => webhooksStore.get(id)!.token;
-const callHook = (token: string, body = '{"price":21003.7}') => hookRoute(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body }), { params: Promise.resolve({ token }) });
+const callHook = (token: string, body = '{"price":21003.7}') => hookRoute(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body: `${body} ${findWebhookByToken(token)?.direction ?? ""}` }), { params: Promise.resolve({ token }) });
 async function until(cond: () => boolean) {
   for (let i = 0; i < 300 && !cond(); i++) await new Promise((r) => setTimeout(r, 10));
   expect(cond()).toBe(true);
@@ -264,7 +264,8 @@ describe("a damaged data file stops the engine with a clear message", () => {
       __simulateRestart();
 
       expect(storageProblem()).toContain(file);
-      const res = await callHook(token);
+      // (not through callHook: it looks the webhook up to word the alert's text, and the file is damaged)
+      const res = await hookRoute(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body: "bullish" }), { params: Promise.resolve({ token }) });
       expect(res.status).toBe(503);
       expect((await res.json()).error).toMatch(/damaged/);
       expect(fs.readFileSync(file, "utf8")).toBe('{"schemaVersion":1,"collection":"webhooks","items":[{"id":');

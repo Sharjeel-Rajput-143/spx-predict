@@ -50,7 +50,7 @@ describe("what the log records", () => {
     const bull = createWebhook({ name: "BullishNDX", botId: null, direction: null });
     attachWebhook(bull.id, NDX_BOT_ID, "bullish");
 
-    await hookRoute(new NextRequest(`http://localhost/api/webhook/hook/${bull.token}`, { method: "POST", body: "", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: bull.token }) });
+    await hookRoute(new NextRequest(`http://localhost/api/webhook/hook/${bull.token}`, { method: "POST", body: "bullish", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: bull.token }) });
     await settle();
     const real = signalsStore.all().at(-1)!;
     expect(signalOrigin(real)).toBe("tradingview");

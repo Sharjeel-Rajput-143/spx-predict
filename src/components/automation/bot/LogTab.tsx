@@ -29,6 +29,15 @@ interface Entry {
 
 const PROCESSING_WINDOW_MS = 3 * 60_000;
 
+/** Why a call was refused, in words (the stored reason is a short code). */
+const REJECT_WORDS: Record<string, string> = {
+  alert_text_mismatch: "the alert's text doesn't match this webhook's direction",
+  alert_text_missing: "the alert's text doesn't say this webhook's direction",
+  webhook_rate_limited: "called again within a minute",
+  no_price: "no live price",
+};
+const rejectWords = (code: string | undefined | null) => (code ? (REJECT_WORDS[code] ?? code) : "unknown");
+
 const isManualSignal = (s: Signal) => signalOrigin(s) === "manual";
 
 /** Things the system did on its own, with no signal behind them: named for what they are, not "Manual position". */
@@ -271,12 +280,12 @@ function LogRow({ entry, now, onOpen, onAutomation, onDelete }: { entry: Entry; 
         {/* Where the call came from: a real TradingView alert, or somebody pressing Test Hook. */}
         {signal && (
           <Pill tone={signalOrigin(signal) === "test_hook" ? "info" : "neutral"} >
-            <span title={originLabel(signal)}>{ORIGIN_LABEL[signalOrigin(signal)]}</span>
+            <span title={originLabel(signal)}>{originLabel(signal)}</span>
           </Pill>
         )}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
-        {signal?.status === "rejected" && <ErrorPill text={`Rejected: ${signal.rejectReason ?? "unknown"}`} />}
+        {signal?.status === "rejected" && <ErrorPill text={`Rejected: ${rejectWords(signal.rejectReason)}`} />}
         {processing && <Pill tone="info">Processing…</Pill>}
         {signal?.status === "accepted" && decisions.length === 0 && !processing && <Pill>No decision recorded</Pill>}
         {opened > 0 && <Pill tone="ok">{opened} open position{opened === 1 ? "" : "s"}</Pill>}
@@ -345,7 +354,7 @@ function TraceDrawer({ entry, onClose }: { entry: Entry; onClose: () => void }) 
         />
 
         <ol className="relative space-y-3 border-l border-line pl-5">
-          <TraceNode tone="info" title={signal ? "Signal received" : "Manual action"} body={signal?.status === "rejected" ? `Rejected: ${signal.rejectReason}` : signal ? "Saved, then queued behind this bot's lock." : undefined} />
+          <TraceNode tone="info" title={signal ? "Signal received" : "Manual action"} body={signal?.status === "rejected" ? `Rejected: ${rejectWords(signal.rejectReason)}` : signal ? "Saved, then queued behind this bot's lock." : undefined} />
           {decisions.map((d) => {
             const info = outcomeInfo(d.outcome);
             return (

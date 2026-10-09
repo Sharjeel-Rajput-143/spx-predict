@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as hookRoute } from "@/app/api/webhook/hook/[token]/route";
-import { createWebhook } from "./webhooks";
+import { createWebhook, findWebhookByToken } from "./webhooks";
 import { decisionsStore as allDecisions, ordersStore, positionsStore, signalsStore } from "./store";
 
 // Attaching a webhook to a trigger is logged too; these tests are about what a TradingView call does.
@@ -59,7 +59,7 @@ function fakeTradier() {
   );
 }
 
-const call = (token: string, body: string) => hookRoute(new NextRequest(`http://localhost/hook/${token}`, { method: "POST", body }), { params: Promise.resolve({ token }) });
+const call = (token: string, body: string) => hookRoute(new NextRequest(`http://localhost/hook/${token}`, { method: "POST", body: `${body} ${findWebhookByToken(token)?.direction ?? ""}` }), { params: Promise.resolve({ token }) });
 async function until(cond: () => boolean, ms = 3000) {
   const end = Date.now() + ms;
   while (!cond() && Date.now() < end) await new Promise((r) => setTimeout(r, 10));

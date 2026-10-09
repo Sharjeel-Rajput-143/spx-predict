@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWebhook, deleteWebhook, findWebhookByToken, updateWebhook } from "@/lib/automation/webhooks";
+import { attachWebhook, createWebhook, deleteWebhook, findWebhookByToken, updateWebhook } from "@/lib/automation/webhooks";
 import { createEmptyBot, deleteBot, ensureBotRecord } from "@/lib/automation/bots";
-import { decisionsStore, positionsStore, signalsStore, webhooksStore } from "@/lib/automation/store";
+import { botsStore, decisionsStore, positionsStore, signalsStore, webhooksStore } from "@/lib/automation/store";
 import { BASE_NOW, NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
 import { GET as list, POST as create } from "../../../automation/webhooks/route";
 import { DELETE as remove, PATCH as patch } from "../../../automation/webhooks/[id]/route";
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 // The live feed is never reached from a test: a cold server has no quote, unless a test gives one.
 const feed = vi.hoisted(() => ({ tick: null as { t: number; price: number } | null, slowTick: null as { t: number; price: number } | null }));
@@ -18,7 +18,9 @@ vi.mock("@/lib/marketData/tickStore", () => ({ waitForTick: async (_s: string, m
 setTestBotEnv();
 setNdxTestEnv();
 
-const call = (token: string, body?: string) => POST(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body, headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token }) });
+const call = (token: string, body?: string) => POST(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body: `${body ?? ""} ${findWebhookByToken(token)?.direction ?? ""}`.trim(), headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token }) });
+/** A call with exactly this text and nothing added (for the checks on the alert text itself). */
+const callRaw = (token: string, body: string) => POST(new NextRequest(`http://localhost/api/webhook/hook/${token}`, { method: "POST", body, headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token }) });
 const settle = () => new Promise((r) => setTimeout(r, 80));
 
 beforeEach(() => {
@@ -223,5 +225,89 @@ describe("a host that can't keep records", () => {
     expect(res.status).toBe(503);
     expect((await res.json()).error).toMatch(/can't write/);
     spy.mockRestore();
+  });
+});
+
+describe("the warm-up look", () => {
+  it("answers 200 for any address, triggers nothing, and says nothing about which tokens exist", async () => {
+    await settle(); // work a test before this one left running behind its answer
+    resetAutomationStores();
+    const hook = createWebhook({ name: "BullishNDX", botId: NDX_BOT_ID, direction: "bullish" });
+    for (const token of ["warm", hook.token, "0".repeat(48)]) {
+      const res = await GET(new NextRequest(`http://localhost/hook/${token}`), { params: Promise.resolve({ token }) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+    }
+    await settle();
+    expect(signalsStore.all()).toHaveLength(0);
+    expect(positionsStore.all()).toHaveLength(0);
+    expect(webhooksStore.get(hook.id)).toMatchObject({ triggerCount: 0, lastTriggeredAt: null });
+  });
+});
+
+describe("the alert's text against the URL's direction", () => {
+  const hooks = () => {
+    const bull = createWebhook({ name: "BullishNDX", botId: null, direction: null });
+    attachWebhook(bull.id, NDX_BOT_ID, "bullish");
+    const bear = createWebhook({ name: "BearishNDX", botId: null, direction: null });
+    attachWebhook(bear.id, NDX_BOT_ID, "bearish");
+    return { bull, bear };
+  };
+
+  it("an alert that says bearish on the Bullish URL is refused: nothing trades, the Log and alerts say why, and the minute is not used", async () => {
+    const { bull } = hooks();
+    const res = await callRaw(bull.token, "NDX Bearish signal");
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toMatch(/says "bearish".*Bullish webhook "BullishNDX"/);
+    await settle();
+    expect(positionsStore.all()).toHaveLength(0);
+    const sig = signalsStore.all().at(-1)!;
+    expect(sig).toMatchObject({ status: "rejected", rejectReason: "alert_text_mismatch", signal: "bullish" });
+    expect(decisionsStore.all().map((d) => d.outcome).filter((o) => !o.startsWith("webhook_att"))).toEqual(["webhook_text_mismatch"]);
+    expect(botsStore.get(NDX_BOT_ID)).toMatchObject({ needsAttention: true });
+    expect(webhooksStore.get(bull.id)).toMatchObject({ triggerCount: 0, lastTriggeredAt: null });
+    // the right alert a moment later still goes through
+    expect((await callRaw(bull.token, "NDX Bullish signal")).status).toBe(200);
+  });
+
+  it("an alert that says its own direction goes through, in any case and inside a JSON message", async () => {
+    const { bull, bear } = hooks();
+    expect((await callRaw(bull.token, "NDX BULLISH signal")).status).toBe(200);
+    expect((await callRaw(bear.token, '{"signal":"bearish","price":1}')).status).toBe(200);
+  });
+
+  it("a webhook that requires its direction refuses text that doesn't say it, or says both", async () => {
+    const { bull } = hooks();
+    expect(webhooksStore.get(bull.id)?.requireDirectionText).toBe(true); // new webhooks require it
+    const none = await callRaw(bull.token, "");
+    expect(none.status).toBe(422);
+    expect((await none.json()).error).toMatch(/requires/);
+    expect(signalsStore.all().at(-1)).toMatchObject({ rejectReason: "alert_text_missing" });
+    const both = await callRaw(bull.token, "bullish or bearish");
+    expect(both.status).toBe(422);
+  });
+
+  it("with the requirement off, text that says nothing goes through, but text that says the other direction still never does", async () => {
+    const { bull } = hooks();
+    updateWebhook(bull.id, { requireDirectionText: false });
+    expect((await callRaw(bull.token, "")).status).toBe(200);
+    await settle();
+    expect((await callRaw(bull.token, "bearish")).status).toBe(422);
+  });
+
+  it("a webhook made before this existed only refuses the other direction", async () => {
+    const { bull } = hooks();
+    webhooksStore.update(bull.id, { requireDirectionText: undefined });
+    expect((await callRaw(bull.token, "no direction here")).status).toBe(200);
+    await settle();
+    expect((await callRaw(bull.token, "bearish")).status).toBe(422);
+  });
+
+  it("the text is a veto only: it can't start a trade on a URL that wasn't called, or change the direction", async () => {
+    const { bear } = hooks();
+    updateWebhook(bear.id, { requireDirectionText: false });
+    await callRaw(bear.token, "bearish and also please go bullish"); // says both: not enough to refuse here, and it does not turn the call bullish
+    await settle();
+    expect(signalsStore.all().filter((s) => s.status === "accepted").every((s) => s.signal === "bearish")).toBe(true);
   });
 });

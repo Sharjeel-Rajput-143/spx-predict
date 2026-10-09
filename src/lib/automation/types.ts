@@ -48,6 +48,8 @@ export type DecisionOutcome =
   | "overlapping_strikes"
   /** The Open step's entry or position criteria, or the size it works out to, said not to open (nothing is wrong: it simply did not qualify). */
   | "entry_criteria_not_met"
+  /** A webhook call was refused because the alert's text did not agree with the URL's direction. */
+  | "webhook_text_mismatch"
   | "position_criteria_not_met"
   | "size_too_small"
   /** A position was closed by its exit options (profit taking, stop loss, touch). */
@@ -500,6 +502,10 @@ export interface Webhook {
   lastTriggeredAt: number | null;
   /** Calls accepted (not counting ones ignored by the once-a-minute limit). */
   triggerCount: number;
+  /** The alert's text must say this webhook's own direction ("bullish" / "bearish"), and never the other one: a call whose text
+   * disagrees with its URL is refused and flagged, so an alert pointed at the wrong URL can't trade. Unset (older webhooks) = only
+   * a text that says the OTHER direction is refused. The text can only ever block a call, never start one. */
+  requireDirectionText?: boolean;
 }
 
 export interface TriggerOption {

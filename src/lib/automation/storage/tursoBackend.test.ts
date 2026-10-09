@@ -207,7 +207,7 @@ describe("through the app's own routes, as on Vercel", () => {
     attachWebhook(made.id, "ndx_ema_bias", "bullish");
     await GET(json("GET")); // saved
 
-    const res = await hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
+    const res = await hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "bullish", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
     expect(res.status).toBe(200);
 
     // Anything that asks next waits its turn behind the bot's work, then sees everything it did.
@@ -244,7 +244,7 @@ describe("through the app's own routes, as on Vercel", () => {
     await GET(json("GET"));
     storage.dropCaches?.(); // a cold instance: nothing in memory
 
-    const call = hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
+    const call = hook(new NextRequest(`http://localhost/api/webhook/hook/${made.token}`, { method: "POST", body: "bullish", headers: { "Content-Type": "text/plain" } }), { params: Promise.resolve({ token: made.token }) });
     const first = await Promise.race([call.then((r) => r.status), new Promise<string>((r) => setTimeout(() => r("still waiting for the quote"), 3000))]);
     expect(first).toBe(200); // answered with the quote still on its way
 

@@ -76,11 +76,14 @@ export function EditWebhookDrawer({
   hook,
   onRename,
   onToggle,
+  onRequireText = () => undefined,
   onClose,
 }: {
   hook: WebhookView;
   onRename: (id: string, name: string) => Promise<string | null>;
   onToggle: (id: string, active: boolean) => void;
+  /** Whether the alert's text must say this webhook's direction. */
+  onRequireText?: (id: string, on: boolean) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(hook.name);
@@ -119,6 +122,16 @@ export function EditWebhookDrawer({
               {hook.active ? "Switch off" : "Switch on"}
             </button>
           </div>
+          {hook.direction && (
+            <div className="flex items-center justify-between gap-3 border-t border-line pt-3">
+              <span className="text-muted">
+                {hook.requireDirectionText ? `Alert text must say "${hook.direction}": a call without it is refused.` : `Alert text isn't required to say "${hook.direction}". A text that says the other direction is still refused.`}
+              </span>
+              <button className={buttonClass.secondary} onClick={() => { onRequireText(hook.id, !hook.requireDirectionText); onClose(); }}>
+                {hook.requireDirectionText ? "Don't require" : "Require"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </Drawer>

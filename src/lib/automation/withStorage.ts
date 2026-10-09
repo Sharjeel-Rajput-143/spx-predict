@@ -44,6 +44,13 @@ const READ_FRESH_MS = 2_000;
 export interface WithStorageOptions {
   /** Load only these collections before the handler runs, instead of everything (the handler must `loadEverything()` before it touches the rest). For a call that has to be answered fast. */
   load?: CollectionName[];
+  /**
+   * For a call that must be answered in time (TradingView gives up after about 3 seconds): if loading the records and running the
+   * handler hasn't finished within `ms`, answer with `response()` at once and let the handler carry on behind it, as it would
+   * have (its checks, its saves, its deferred work). The handler's own answer is then not seen by the caller, which is the price of
+   * not timing out: this is what happens on a function that has to start up and open the database first.
+   */
+  answerWithin?: { ms: number; response: () => Response };
 }
 
 export function withStorage<A extends unknown[]>(handler: (...args: A) => Response | Promise<Response>, options: WithStorageOptions = {}): (...args: A) => Promise<Response> {
@@ -64,6 +71,49 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
   }
   const problem = (err: unknown) => Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 503 });
 
+  /** Loads, runs the handler, and saves, in that order: the answer and the work still to do behind it. */
+  const job = async (args: A, method: string): Promise<{ response: Response; work: Deferred | null }> => {
+    try {
+      if (options.load && storage.hydrateCollections) await storage.hydrateCollections(options.load);
+      else await storage.hydrate?.(method === "GET" ? READ_FRESH_MS : 0);
+    } catch (err) {
+      return { response: problem(err), work: null };
+    }
+    let response: Response | undefined;
+    let failure: unknown = null;
+    try {
+      response = await asUser(args);
+    } catch (err) {
+      failure = err;
+    }
+    // Saved before the answer leaves, whatever the handler did (a thrown error included).
+    let saveError: unknown = null;
+    try {
+      await storage.flush?.();
+    } catch (err) {
+      saveError = err;
+    }
+    if (failure) throw failure;
+    if (saveError) return { response: problem(saveError), work: null };
+    return { response: response!, work: deferredOf(response) };
+  };
+
+  /** Everything that carries on after the answer: the handler's deferred work, a last save, and letting the next request in. */
+  const finishBehind = (work: Deferred | null, release: () => void) =>
+    afterResponse(async () => {
+      try {
+        if (work) await start(work);
+      } catch {
+        /* the work records its own failures */
+      }
+      try {
+        await storage.flush?.();
+      } catch {
+        /* kept and tried again by the next save */
+      }
+      release();
+    });
+
   return async (...args: A) => {
     const previous = g.__storageQueue ?? Promise.resolve();
     let release!: () => void;
@@ -72,46 +122,49 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
     let held = false; // the work after the answer keeps the queue until it is done
     try {
       const method = (args[0] as { method?: string } | undefined)?.method ?? "GET";
-      try {
-        if (options.load && storage.hydrateCollections) await storage.hydrateCollections(options.load);
-        else await storage.hydrate?.(method === "GET" ? READ_FRESH_MS : 0);
-      } catch (err) {
-        return problem(err);
+      const running = job(args, method);
+      if (options.answerWithin) {
+        // Too slow to answer in time (a cold start, a slow database): answer now, finish behind the answer.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const slow = new Promise<"slow">((r) => (timer = setTimeout(() => r("slow"), options.answerWithin!.ms)));
+        const first = await Promise.race([running.then((out) => out, (err) => ({ failure: err })), slow]);
+        clearTimeout(timer);
+        if (first === "slow") {
+          held = true;
+          afterResponse(async () => {
+            let work: Deferred | null = null;
+            try {
+              work = (await running).work;
+            } catch {
+              /* the handler failed after the answer: nothing to wait for */
+            }
+            try {
+              if (work) await start(work);
+            } catch {
+              /* the work records its own failures */
+            }
+            try {
+              await storage.flush?.();
+            } catch {
+              /* kept and tried again by the next save */
+            }
+            release();
+          });
+          return options.answerWithin.response();
+        }
+        if ("failure" in first) throw first.failure;
+        if (first.work) {
+          held = true;
+          finishBehind(first.work, release);
+        }
+        return first.response;
       }
-      let response: Response | undefined;
-      let failure: unknown = null;
-      try {
-        response = await asUser(args);
-      } catch (err) {
-        failure = err;
-      }
-      // Saved before the answer leaves, whatever the handler did (a thrown error included).
-      let saveError: unknown = null;
-      try {
-        await storage.flush?.();
-      } catch (err) {
-        saveError = err;
-      }
-      if (failure) throw failure;
-      if (saveError) return problem(saveError);
-      const work = deferredOf(response);
-      if (work) {
+      const out = await running;
+      if (out.work) {
         held = true;
-        afterResponse(async () => {
-          try {
-            await start(work);
-          } catch {
-            /* the work records its own failures */
-          }
-          try {
-            await storage.flush?.();
-          } catch {
-            /* kept and tried again by the next save */
-          }
-          release();
-        });
+        finishBehind(out.work, release);
       }
-      return response!;
+      return out.response;
     } finally {
       if (!held) release();
     }

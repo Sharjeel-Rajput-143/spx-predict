@@ -355,6 +355,8 @@ export interface WebhookView {
   createdAt: number;
   lastTriggeredAt: number | null;
   triggerCount: number;
+  /** The alert's text must say the webhook's direction. */
+  requireDirectionText?: boolean;
 }
 
 export function WebhooksSection({
@@ -363,6 +365,7 @@ export function WebhooksSection({
   hooks = [],
   onCreate = async () => null,
   onToggle = noopHook,
+  onRequireText = noopHook,
   onDelete = noopHook,
   onRename = async () => null,
   onTest,
@@ -373,6 +376,7 @@ export function WebhooksSection({
   hooks?: WebhookView[];
   onCreate?: (name: string) => Promise<string | null>;
   onToggle?: (id: string, active: boolean) => void;
+  onRequireText?: (id: string, on: boolean) => void;
   onDelete?: (id: string) => void;
   /** Renames a webhook; resolves to a problem to show, or null. */
   onRename?: (id: string, name: string) => Promise<string | null>;
@@ -400,7 +404,7 @@ export function WebhooksSection({
           </ul>
         )}
         {creating && <NewWebhookDrawer onCreate={onCreate} onClose={() => setCreating(false)} />}
-        {editingHook && <EditWebhookDrawer key={editingHook.id} hook={editingHook} onRename={onRename} onToggle={onToggle} onClose={() => setEditing(null)} />}
+        {editingHook && <EditWebhookDrawer key={editingHook.id} hook={editingHook} onRename={onRename} onToggle={onToggle} onRequireText={onRequireText} onClose={() => setEditing(null)} />}
       </Section>
 
     </div>

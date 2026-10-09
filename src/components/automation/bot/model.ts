@@ -86,6 +86,7 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   daily_limit_reached: { label: "Daily limit", tone: "warn" },
   allocation_limit_reached: { label: "Allocation limit", tone: "warn" },
   overlapping_strikes: { label: "Strikes overlap", tone: "warn" },
+  webhook_text_mismatch: { label: "Alert text doesn't match", tone: "error" },
   entry_criteria_not_met: { label: "Entry criteria not met", tone: "skip" },
   position_criteria_not_met: { label: "Position criteria not met", tone: "skip" },
   size_too_small: { label: "Size under 1 contract", tone: "warn" },

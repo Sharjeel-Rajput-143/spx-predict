@@ -9,8 +9,8 @@ async function handlePATCH(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   return guarded(async () => {
     const body = await readJson(req);
-    const w = updateWebhook(id, { name: typeof body.name === "string" ? body.name : undefined, active: typeof body.active === "boolean" ? body.active : undefined });
-    return NextResponse.json({ webhook: { id: w.id, name: w.name, active: w.active } });
+    const w = updateWebhook(id, { name: typeof body.name === "string" ? body.name : undefined, active: typeof body.active === "boolean" ? body.active : undefined, requireDirectionText: typeof body.requireDirectionText === "boolean" ? body.requireDirectionText : undefined });
+    return NextResponse.json({ webhook: { id: w.id, name: w.name, active: w.active, requireDirectionText: w.requireDirectionText ?? false } });
   });
 }
 

@@ -50,6 +50,7 @@ export function createWebhook(input: NewWebhook, now: number = Date.now()): Webh
     createdAt: now,
     lastTriggeredAt: null,
     triggerCount: 0,
+    requireDirectionText: true,
   };
   webhooksStore.insert(hook);
   return attach ? attachWebhook(hook.id, input.botId!, input.direction!, now).webhook : hook;
@@ -150,7 +151,7 @@ export function findWebhookByToken(token: string): Webhook | undefined {
   return found;
 }
 
-export function updateWebhook(id: string, patch: { name?: string; active?: boolean }): Webhook {
+export function updateWebhook(id: string, patch: { name?: string; active?: boolean; requireDirectionText?: boolean }): Webhook {
   const existing = webhooksStore.get(id);
   if (!existing) throw new Error("Webhook not found.");
   const next: Partial<Webhook> = {};
@@ -161,6 +162,7 @@ export function updateWebhook(id: string, patch: { name?: string; active?: boole
     next.name = name;
   }
   if (patch.active !== undefined) next.active = !!patch.active;
+  if (patch.requireDirectionText !== undefined) next.requireDirectionText = !!patch.requireDirectionText;
   return webhooksStore.update(id, next)!;
 }
 
@@ -192,3 +194,38 @@ export const webhookView = (w: Webhook) => {
     path: maskedWebhookPath(w),
   };
 };
+
+/** Which direction an alert's text talks about: the words "bullish" and "bearish" (whole words, any case). "both" when it has both. */
+export function alertSays(text: string): SignalDirection | "both" | null {
+  const bull = /\bbullish\b/i.test(text);
+  const bear = /\bbearish\b/i.test(text);
+  return bull && bear ? "both" : bull ? "bullish" : bear ? "bearish" : null;
+}
+
+export type AlertTextCheck = { ok: true } | { ok: false; code: "alert_text_mismatch" | "alert_text_missing"; reason: string };
+
+/**
+ * The cross-check on a call: the text TradingView sent with the alert against the direction of the URL it was sent to. The text never
+ * decides what trades - the URL does - it can only stop a call that disagrees:
+ *  - it says the other direction: refused, always;
+ *  - it says both, or neither, and this webhook requires its direction in the text: refused;
+ *  - otherwise the call goes ahead.
+ */
+export function checkAlertText(hook: Pick<Webhook, "name" | "direction" | "requireDirectionText">, text: string): AlertTextCheck {
+  if (hook.direction !== "bullish" && hook.direction !== "bearish") return { ok: true };
+  const says = alertSays(text);
+  const own = hook.direction;
+  const word = (d: string) => `${d[0].toUpperCase()}${d.slice(1)}`;
+  if (says === own) return { ok: true };
+  if (says && says !== "both") {
+    return { ok: false, code: "alert_text_mismatch", reason: `The alert says "${says}", but its URL is the ${word(own)} webhook "${hook.name}". Nothing was done. Check which webhook URL is on that TradingView alert.` };
+  }
+  if (hook.requireDirectionText) {
+    return {
+      ok: false,
+      code: says === "both" ? "alert_text_mismatch" : "alert_text_missing",
+      reason: says === "both" ? `The alert text mentions both bullish and bearish, so it can't confirm the ${word(own)} webhook "${hook.name}". Nothing was done.` : `The alert text doesn't say "${own}", which the ${word(own)} webhook "${hook.name}" requires. Nothing was done. Put the word "${own}" in the TradingView alert's message.`,
+    };
+  }
+  return { ok: true };
+}

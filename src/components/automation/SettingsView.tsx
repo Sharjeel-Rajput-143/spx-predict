@@ -109,6 +109,7 @@ export function SettingsView() {
               hooks={hooks}
               onCreate={createHook}
               onToggle={(id, active) => fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active }) }).then(load)}
+              onRequireText={(id, requireDirectionText) => fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ requireDirectionText }) }).then(load)}
               onDelete={(id) => fetch(`/api/automation/webhooks/${id}`, { method: "DELETE" }).then(load)}
               onRename={async (id, name) => {
                 const res = await fetch(`/api/automation/webhooks/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });

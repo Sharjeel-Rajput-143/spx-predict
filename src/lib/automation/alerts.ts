@@ -19,6 +19,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   executor_error: "error",
   config_error: "error",
   invalid_strikes: "error",
+  webhook_text_mismatch: "error",
   open_rejected: "error",
   open_timeout_no_fill: "error",
   close_rejected: "error",
