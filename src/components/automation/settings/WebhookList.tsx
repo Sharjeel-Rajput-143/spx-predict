@@ -125,10 +125,10 @@ export function EditWebhookDrawer({
           {hook.direction && (
             <div className="flex items-center justify-between gap-3 border-t border-line pt-3">
               <span className="text-muted">
-                {hook.requireDirectionText ? `Alert text must say "${hook.direction}": a call without it is refused.` : `Alert text isn't required to say "${hook.direction}". A text that says the other direction is still refused.`}
+                {hook.requireDirectionText !== false ? `Alert text must say "${hook.direction}": a call without it is refused.` : `Alert text isn't required to say "${hook.direction}". A text that says the other direction is still refused.`}
               </span>
-              <button className={buttonClass.secondary} onClick={() => { onRequireText(hook.id, !hook.requireDirectionText); onClose(); }}>
-                {hook.requireDirectionText ? "Don't require" : "Require"}
+              <button className={buttonClass.secondary} onClick={() => { onRequireText(hook.id, hook.requireDirectionText === false); onClose(); }}>
+                {hook.requireDirectionText !== false ? "Don't require" : "Require"}
               </button>
             </div>
           )}

@@ -503,8 +503,9 @@ export interface Webhook {
   /** Calls accepted (not counting ones ignored by the once-a-minute limit). */
   triggerCount: number;
   /** The alert's text must say this webhook's own direction ("bullish" / "bearish"), and never the other one: a call whose text
-   * disagrees with its URL is refused and flagged, so an alert pointed at the wrong URL can't trade. Unset (older webhooks) = only
-   * a text that says the OTHER direction is refused. The text can only ever block a call, never start one. */
+   * disagrees with its URL is refused and flagged, so an alert pointed at the wrong URL can't trade. On unless set to false (a
+   * webhook made before this setting existed is on too). A text that says the OTHER direction is refused even when it is off. The text
+   * can only ever block a call, never start one. */
   requireDirectionText?: boolean;
 }
 

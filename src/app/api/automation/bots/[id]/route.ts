@@ -1,3 +1,4 @@
+import { settleExpiredFromClose } from "@/lib/automation/settleExpired";
 import { NextRequest, NextResponse } from "next/server";
 import { getGlobalWindow } from "@/lib/automation/appSettings";
 import { botDisplayName, deleteBot, ensureBotRecord, getBotLimits, getBotStaticConfig, isBuiltInBot, isKnownBot, listBotIds, missingSettingsOf, updateBot, type BotPatch } from "@/lib/automation/bots";
@@ -17,7 +18,7 @@ import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk 
 import { MOCK_PRICING_SIMULATED } from "@/lib/automation/sharedExecutor";
 import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
 import { DEFAULT_ALERTS, type BotStaticConfig } from "@/lib/automation/types";
-import { withStorage } from "@/lib/automation/withStorage";
+import { deferWork, withStorage } from "@/lib/automation/withStorage";
 
 const LOG_LIMIT = 300;
 
@@ -158,6 +159,12 @@ async function handleDELETE(req: NextRequest, { params }: { params: Promise<{ id
   });
 }
 
-export const GET = withStorage(handleGET);
+// After the answer: an expired position nobody worked out a result for (the sweep could not run) is settled from that day's closing
+// price. It shows on the next refresh, so a slow price lookup never holds the page up.
+export const GET = withStorage(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  const response = await handleGET(req, ctx);
+  const { id } = await ctx.params;
+  return deferWork(response, () => settleExpiredFromClose({ botId: id }).catch(() => 0));
+});
 export const PATCH = withStorage(handlePATCH);
 export const DELETE = withStorage(handleDELETE);

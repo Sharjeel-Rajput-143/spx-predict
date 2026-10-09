@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBotStaticConfig, listBotIds } from "@/lib/automation/bots";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { botsStore, ordersStore, positionsStore, signalsStore } from "@/lib/automation/store";
-import { withStorage } from "@/lib/automation/withStorage";
+import { settleExpiredFromClose } from "@/lib/automation/settleExpired";
+import { deferWork, withStorage } from "@/lib/automation/withStorage";
 
 /** Every position across every bot, newest first, plus what the drawer needs
  * (orders, the signals that opened/closed each one, each bot's name and the
@@ -34,4 +35,5 @@ async function handleGET(req: NextRequest) {
   });
 }
 
-export const GET = withStorage(handleGET);
+// After the answer: expired positions with no result are settled from that day's closing price (shows on the next refresh).
+export const GET = withStorage(async (req: NextRequest) => deferWork(await handleGET(req), () => settleExpiredFromClose().catch(() => 0)));

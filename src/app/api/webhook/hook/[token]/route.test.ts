@@ -295,12 +295,11 @@ describe("the alert's text against the URL's direction", () => {
     expect((await callRaw(bull.token, "bearish")).status).toBe(422);
   });
 
-  it("a webhook made before this existed only refuses the other direction", async () => {
+  it("a webhook made before this setting existed requires the direction too", async () => {
     const { bull } = hooks();
     webhooksStore.update(bull.id, { requireDirectionText: undefined });
-    expect((await callRaw(bull.token, "no direction here")).status).toBe(200);
-    await settle();
-    expect((await callRaw(bull.token, "bearish")).status).toBe(422);
+    expect((await callRaw(bull.token, "no direction here")).status).toBe(422);
+    expect((await callRaw(bull.token, "bullish")).status).toBe(200);
   });
 
   it("the text is a veto only: it can't start a trade on a URL that wasn't called, or change the direction", async () => {

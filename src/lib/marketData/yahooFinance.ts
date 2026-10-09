@@ -38,3 +38,32 @@ export async function fetchYahooFinancePrice(symbol: string): Promise<number | n
     return null;
   }
 }
+
+const easternDay = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+
+/**
+ * The official closing price of a symbol on one trading day ("YYYY-MM-DD", New York date), from Yahoo's daily bars, or null when it
+ * can't be had (the day isn't among the recent bars, the market was shut, the endpoint failed). Same unofficial source as the
+ * live quote, so it is only ever used to estimate how an expired position settled, never to place anything.
+ */
+export async function fetchYahooDailyClose(symbol: string, dateKey: string, fetcher: typeof fetch = fetch): Promise<number | null> {
+  const code = YAHOO_CODES[symbol];
+  if (!code) return null;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}?interval=1d&range=1mo`;
+  try {
+    const res = await fetcher(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store", signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { chart?: { result?: { timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[] } };
+    const result = data.chart?.result?.[0];
+    const times = result?.timestamp ?? [];
+    const closes = result?.indicators?.quote?.[0]?.close ?? [];
+    for (let i = 0; i < times.length; i++) {
+      if (easternDay(times[i] * 1000) !== dateKey) continue;
+      const close = closes[i];
+      return typeof close === "number" && Number.isFinite(close) && close > 0 ? close : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

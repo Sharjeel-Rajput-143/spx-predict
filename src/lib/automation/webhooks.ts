@@ -220,7 +220,8 @@ export function checkAlertText(hook: Pick<Webhook, "name" | "direction" | "requi
   if (says && says !== "both") {
     return { ok: false, code: "alert_text_mismatch", reason: `The alert says "${says}", but its URL is the ${word(own)} webhook "${hook.name}". Nothing was done. Check which webhook URL is on that TradingView alert.` };
   }
-  if (hook.requireDirectionText) {
+  // Unless it was switched off on purpose, the text must confirm the direction (a webhook made before this setting existed does too).
+  if (hook.requireDirectionText !== false) {
     return {
       ok: false,
       code: says === "both" ? "alert_text_mismatch" : "alert_text_missing",
