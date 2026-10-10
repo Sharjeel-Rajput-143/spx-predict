@@ -1,0 +1,34 @@
+import crypto from "node:crypto";
+import { NextRequest, NextResponse } from "next/server";
+import { runDueSweeps } from "@/lib/automation/eodSweep";
+import { settleExpiredFromClose } from "@/lib/automation/settleExpired";
+import { withStorage } from "@/lib/automation/withStorage";
+
+/**
+ * The end-of-day job for a host that doesn't stay running (Vercel): called once a day by the host's scheduler (vercel.json), it does what
+ * the always-on server's every-minute clock does after the close - expires whatever each bot still holds (the bot's own sweep mode and
+ * time apply) and works out the result of any expired position from that day's closing price.
+ *
+ * Open to the scheduler but not to anyone else: it must carry `Authorization: Bearer <CRON_SECRET>` (Vercel adds that itself when the
+ * CRON_SECRET environment variable is set). With no CRON_SECRET set it refuses everything, so it can't be called by accident.
+ */
+export const maxDuration = 60;
+
+const sameSecret = (given: string, secret: string) => {
+  const a = Buffer.from(given);
+  const b = Buffer.from(`Bearer ${secret}`);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+async function handleGET(req: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return NextResponse.json({ error: "CRON_SECRET isn't set, so the scheduled job is switched off." }, { status: 503 });
+  if (!sameSecret(req.headers.get("authorization") ?? "", secret)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
+  const now = Date.now();
+  const swept = await runDueSweeps(now);
+  const settled = await settleExpiredFromClose({ now });
+  return NextResponse.json({ ok: true, swept, settled });
+}
+
+export const GET = withStorage(handleGET);

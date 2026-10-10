@@ -3,7 +3,7 @@ import { fetchYahooDailyClose } from "@/lib/marketData/yahooFinance";
 import { payoffAt } from "./payoff";
 import { positionQuantity } from "./pnl";
 import { positionsStore } from "./store";
-import { easternDateKey } from "./tradingHours";
+import { easternDateKey, easternMinutesOfDay } from "./tradingHours";
 import type { Position } from "./types";
 
 /**
@@ -28,8 +28,10 @@ export async function settleExpiredFromClose(options: { botId?: string; now?: nu
   const now = options.now ?? Date.now();
   const lookup = options.lookup ?? ((symbol, dateKey) => fetchYahooDailyClose(symbol, dateKey));
   const today = easternDateKey(now);
+  // Today's close is final once the options have stopped trading (4:15pm for the index series) and the day's last bar is in.
+  const closeIsFinal = easternMinutesOfDay(now) >= 16 * 60 + 30;
   const waiting = positionsStore.query(
-    (p) => p.status === "expired" && !p.settlement && p.credit != null && p.expiry < today && (options.botId === undefined || p.botId === options.botId),
+    (p) => p.status === "expired" && !p.settlement && p.credit != null && (p.expiry < today || (p.expiry === today && closeIsFinal)) && (options.botId === undefined || p.botId === options.botId),
   );
   if (waiting.length === 0) return 0;
 

@@ -78,7 +78,7 @@ export function SettingsView() {
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Settings</h1>
       <div className="grid gap-6 md:grid-cols-[180px_1fr]">
-        <nav className="flex gap-1 md:flex-col" aria-label="Settings sections">
+        <nav className="flex gap-1 overflow-x-auto [scrollbar-width:none] md:flex-col md:overflow-visible" aria-label="Settings sections">
           {SECTIONS.map((s) => (
             <button
               key={s.key}

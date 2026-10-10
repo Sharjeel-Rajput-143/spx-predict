@@ -87,6 +87,8 @@ export function AutomationBuilder({
 
   const [rail, setRail] = useState<RailTab>("inputs");
   const [zoom, setZoom] = useState(1);
+  /** On a phone the left rail (Inputs, Opportunities, Warnings) opens over the canvas instead of beside it. */
+  const [railOpen, setRailOpen] = useState(false);
   const [addTarget, setAddTarget] = useState<Target | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [captionId, setCaptionId] = useState<string | null>(null);
@@ -97,6 +99,10 @@ export function AutomationBuilder({
   const [confirmClose, setConfirmClose] = useState(false);
   const [helpHidden, setHelpHidden] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (window.innerWidth < 640) setZoom(0.7); // a phone starts zoomed out so more of the flow fits
+  }, []);
 
   useEffect(() => {
     setFolders([...new Set([initial.folder, ...loadFolders()])]);
@@ -172,7 +178,7 @@ export function AutomationBuilder({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-bg" role="dialog" aria-modal aria-label="Automation builder">
-      <header className="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-5 py-3">
+      <header className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-line text-muted" aria-hidden>
           <FlowGlyph />
         </span>
@@ -185,11 +191,14 @@ export function AutomationBuilder({
           }}
           readOnly={readOnly}
           aria-label="Automation name"
-          className="min-w-0 max-w-xs flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-base font-semibold outline-none hover:border-line focus:border-accent read-only:hover:border-transparent"
+          className="min-w-0 max-w-xs flex-1 basis-32 rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-base font-semibold outline-none hover:border-line focus:border-accent read-only:hover:border-transparent"
         />
         {saved && <span className="text-xs text-up">Saved</span>}
         {flash && <span className="text-xs text-muted">{flash}</span>}
-        <div className="ml-auto flex items-center gap-2.5">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
+          <button className={cn(buttonClass.secondary, "inline-flex items-center gap-2 font-semibold md:hidden")} onClick={() => setRailOpen((o) => !o)} aria-expanded={railOpen}>
+            Details
+          </button>
           {!readOnly && (
             <label className="relative inline-flex items-center rounded-lg border border-line bg-surface text-muted hover:bg-surface-2" title="Folder">
               <span className="pointer-events-none absolute left-3">
@@ -217,25 +226,25 @@ export function AutomationBuilder({
               <IconChevronDown width={14} height={14} className="pointer-events-none absolute right-2.5" />
             </label>
           )}
-          <button className={cn(buttonClass.secondary, "inline-flex items-center gap-2 font-semibold")} onClick={() => setTesting(true)}>
+          <button aria-label="Run Test" className={cn(buttonClass.secondary, "inline-flex items-center gap-2 font-semibold")} onClick={() => setTesting(true)}>
             <BugGlyph />
-            Run Test
+            <span className="hidden sm:inline">Run Test</span>
           </button>
           {!readOnly && (
-            <button className={cn(buttonClass.primary, "inline-flex min-w-28 items-center justify-center gap-2 font-semibold")} onClick={save}>
+            <button className={cn(buttonClass.primary, "inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28")} onClick={save}>
               <SaveGlyph />
-              Save
+              <span>Save</span>
             </button>
           )}
-          <button className={cn(buttonClass.secondary, "inline-flex min-w-28 items-center justify-center gap-2 font-semibold")} onClick={() => (dirty && !readOnly ? setConfirmClose(true) : onClose())}>
+          <button className={cn(buttonClass.secondary, "inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28")} onClick={() => (dirty && !readOnly ? setConfirmClose(true) : onClose())}>
             <span aria-hidden className="text-base leading-none">×</span>
             Close
           </button>
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-[24rem] shrink-0 flex-col border-r border-line bg-surface md:flex">
+      <div className="relative flex min-h-0 flex-1">
+        <aside className={cn("w-full shrink-0 flex-col border-r border-line bg-surface md:static md:flex md:w-[24rem]", railOpen ? "absolute inset-0 z-20 flex" : "hidden")}>
           {(
             [
               ["inputs", "Inputs", inputs.length],
@@ -310,7 +319,7 @@ export function AutomationBuilder({
         </aside>
 
         <main className="relative flex-1 overflow-auto bg-bg">
-          <div className="min-h-full px-10 py-8" style={{ zoom }}>
+          <div className="min-h-full w-max min-w-full px-4 py-6 sm:px-10 sm:py-8" style={{ zoom }}>
             {(note || !readOnly) && (
               <p className={cn("mb-4 max-w-3xl rounded-lg px-3 py-2 text-xs", readOnly ? "bg-accent/10 text-accent" : "bg-amber-500/10 text-amber-500")}>
                 {note ??

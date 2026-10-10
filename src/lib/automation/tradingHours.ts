@@ -99,3 +99,15 @@ export function describeTradingTime(ms: number, config: TradingHoursConfig = hou
   }
   return `Current time is ${now}`;
 }
+
+/** Minutes since midnight, New York time, at `ms`. */
+export function easternMinutesOfDay(ms: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(ms);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  return (get("hour") % 24) * 60 + get("minute");
+}

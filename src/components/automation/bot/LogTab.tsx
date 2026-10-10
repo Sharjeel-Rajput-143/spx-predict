@@ -190,7 +190,7 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
       </div>
 
       <Card className="overflow-hidden">
-        <div className="grid grid-cols-[110px_270px_1fr] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-faint">
+        <div className="hidden grid-cols-[110px_270px_minmax(0,1fr)] gap-x-4 border-b border-line px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-faint lg:grid">
           <span>Time</span>
           <span>Automation</span>
           <span>Info</span>
@@ -263,9 +263,9 @@ function LogRow({ entry, now, onOpen, onAutomation, onDelete }: { entry: Entry; 
   const processing = signal?.status === "accepted" && decisions.length === 0 && now - entry.at < PROCESSING_WINDOW_MS;
 
   return (
-    <div className="grid cursor-pointer grid-cols-[110px_270px_1fr] items-center gap-x-4 gap-y-1.5 border-b border-line px-4 py-3 last:border-b-0 hover:bg-surface-2/60" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+    <div className="grid cursor-pointer grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 lg:grid-cols-[110px_270px_minmax(0,1fr)] lg:gap-x-4 border-b border-line px-4 py-3 last:border-b-0 hover:bg-surface-2/60" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
       <span className="tabular text-sm text-muted">{etTime(entry.at)}</span>
-      <span className="flex items-center gap-2 text-sm">
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -284,7 +284,7 @@ function LogRow({ entry, now, onOpen, onAutomation, onDelete }: { entry: Entry; 
           </Pill>
         )}
       </span>
-      <span className="flex flex-wrap items-center gap-1.5">
+      <span className="col-span-2 flex min-w-0 flex-wrap items-center gap-1.5 lg:col-span-1">
         {signal?.status === "rejected" && <ErrorPill text={`Rejected: ${rejectWords(signal.rejectReason)}`} />}
         {processing && <Pill tone="info">Processing…</Pill>}
         {signal?.status === "accepted" && decisions.length === 0 && !processing && <Pill>No decision recorded</Pill>}

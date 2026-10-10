@@ -16,7 +16,7 @@ import { recoverInFlightPositions } from "./recovery";
 import { flagMismatches, reconcile } from "./reconcile";
 import { executorStatus, sharedExecutor } from "./sharedExecutor";
 import { botsStore, positionsStore } from "./store";
-import { easternDateKey } from "./tradingHours";
+import { easternDateKey, easternMinutesOfDay } from "./tradingHours";
 import { ACTIVE_POSITION_STATUSES, type BrokerExecutor, type EodSweepMode, type Position } from "./types";
 import { getLastTick } from "@/lib/marketData/tickStore";
 
@@ -29,17 +29,6 @@ const shared = globalThis as typeof globalThis & { __eodSweepState?: { started: 
 const state = (shared.__eodSweepState ??= { started: false, ticking: false, lastReconcileAt: 0, swept: new Map() });
 /** Per bot: each bot has its own sweep time, so each has its own "done today". */
 const lastSweptTradingDate = state.swept;
-
-function easternMinutesOfDay(ms: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(ms);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  return (get("hour") % 24) * 60 + get("minute");
-}
 
 /** When this bot's positions are swept (minutes after midnight ET): its own
  * setting, or 4:05pm. A bot whose inputs aren't complete holds no positions,

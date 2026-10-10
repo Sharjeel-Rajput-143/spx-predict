@@ -172,7 +172,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           {data.limits.dryRun && <Pill tone="warn">Dry run</Pill>}
         </div>
 
-        <div className="flex items-stretch divide-x divide-line">
+        <div className="grid w-full grid-cols-2 gap-x-2 gap-y-4 sm:flex sm:w-auto sm:items-stretch sm:gap-0 sm:divide-x sm:divide-line">
           <HeaderBox label="Account">
             <Dropdown
               width="min-w-48"
@@ -233,7 +233,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           <HeaderBox label="Kill switch">
             <OnOffSwitch on={!!bot.killSwitch} onChange={kill} disabled={pending} label="Kill switch (blocks every webhook run, closes included)" />
           </HeaderBox>
-          <div className="flex items-center pl-4">
+          <div className="flex items-center sm:pl-4">
             <Dropdown
               align="right"
               width="min-w-60"
@@ -296,7 +296,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
         </div>
       )}
 
-      <div className="flex gap-2 border-b border-line" role="tablist">
+      <div className="flex gap-1 overflow-x-auto border-b border-line [scrollbar-width:none] sm:gap-2" role="tablist">
         {TABS.map((t) => (
           <button
             key={t}
@@ -304,7 +304,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
             aria-selected={tab === t}
             onClick={() => navigate(t)}
             className={cn(
-              "-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+              "-mb-px shrink-0 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors sm:px-4",
               tab === t ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg",
             )}
           >
@@ -388,7 +388,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
 
 function HeaderBox({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col justify-center gap-1 px-4">
+    <div className="flex min-w-0 flex-col justify-center gap-1 sm:px-4">
       <div className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</div>
       {children}
     </div>

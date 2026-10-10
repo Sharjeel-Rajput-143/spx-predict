@@ -123,7 +123,7 @@ describe("the gate in front of the app", () => {
   });
 
   it("leaves the login page, the webhook URLs TradingView calls, and the session check open", () => {
-    for (const path of ["/login", "/api/login", "/hook/abc123", "/api/webhook/hook/abc123", "/api/webhook/tradingview", "/api/automation/session"]) {
+    for (const path of ["/login", "/api/login", "/hook/abc123", "/api/webhook/hook/abc123", "/api/webhook/tradingview", "/api/cron/sweep", "/api/automation/session"]) {
       expect(get(path).headers.get("x-middleware-next"), path).toBe("1");
     }
   });

@@ -8,10 +8,10 @@ import { verifySession } from "@/lib/auth/sessionToken";
  * with your browser (see sameSite below), and fails closed when the server has no AUTH_SECRET.
  *
  * Open on purpose: the login page and its API, and the webhook URLs TradingView calls (/hook/<token> and
- * /api/webhook/...). Those have no cookie to send; each is protected by its own secret in the URL instead, and a
+ * /api/webhook/...), and the scheduler's job (/api/cron/..., which needs the CRON_SECRET). Those have no cookie to send; each is protected by its own secret in the URL instead, and a
  * wrong one gets "not found".
  */
-const OPEN = ["/login", "/api/login", "/api/automation/session", "/api/automation/status/login", "/api/automation/logout", "/hook/", "/api/webhook/"];
+const OPEN = ["/login", "/api/login", "/api/automation/session", "/api/automation/status/login", "/api/automation/logout", "/hook/", "/api/webhook/", "/api/cron/"];
 const WEBHOOKS = ["/hook/", "/api/webhook/"];
 const startsWith = (pathname: string, list: string[]) => list.some((p) => pathname === p || pathname.startsWith(p.endsWith("/") ? p : `${p}/`));
 

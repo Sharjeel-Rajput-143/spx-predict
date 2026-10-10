@@ -20,8 +20,8 @@ export function DashboardTab({ ctx }: { ctx: BotContext }) {
   const [metric, setMetric] = useState<Metric>(stats.priced > 0 ? "pl" : "opened");
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-      <div className="space-y-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="min-w-0 space-y-4">
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Tile label="Closed P/L" tip={NO_PRICE_TIP} value={<span className={plClass(stats.closedPL)}>{plText(stats.closedPL)}</span>} />
           <Tile label="Return" tip="Closed P/L as a share of the bot's allocation." value={<span className={plClass(returnPct)}>{pctText(returnPct, 2)}</span>} />
