@@ -6,6 +6,7 @@ import { AccountIcon, accountLabel } from "@/components/automation/accounts";
 import { IconAutomation, IconCopy, IconEdit } from "@/components/icons";
 import { cn } from "@/lib/format";
 import { breakeven, maxLoss, maxProfit, otmFraction, rewardRisk, type Spread } from "@/lib/automation/payoff";
+import { EXIT_OPTIONS_NOTE, exitOptionRows, hasExitOptions } from "@/lib/automation/exitOptionsText";
 import { positionPL, positionPLKind, positionPremium, positionQuantity, positionRisk } from "@/lib/automation/pnl";
 import type { Order, Position, Signal } from "@/lib/automation/types";
 import { POSITION_TYPES } from "../builder/model";
@@ -96,11 +97,11 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         <IconCopy width={15} height={15} />
       </button>
       {closable && (
-        <button onClick={() => setConfirmingClose(true)} className={cn(buttonClass.secondary, "!border-down/40 !py-1.5 text-down")}>
+        <button onClick={() => setConfirmingClose(true)} className={cn(buttonClass.secondary, "whitespace-nowrap !border-down/40 !py-1.5 text-down")}>
           Close position
         </button>
       )}
-      <button disabled title="Overriding a position's status isn't available in Phase 1" className={cn(buttonClass.secondary, "!py-1.5")}>
+      <button disabled title="Overriding a position's status isn't available in Phase 1" className={cn(buttonClass.secondary, "whitespace-nowrap !py-1.5")}>
         Override
       </button>
     </>
@@ -204,26 +205,21 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
           <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
             <div className="flex items-center gap-3 text-sm font-semibold">
               Exit options
-              <button disabled title="Exit options need live option prices, which Phase 1 doesn't have." className="text-xs font-medium text-faint">
+              <button disabled title="Exit options are set on the trigger's Open Position step. A position keeps the ones it was opened with." className="text-xs font-medium text-faint">
                 Edit
               </button>
               <button disabled title="There are no exit-option statistics to reset." className="text-xs font-medium text-faint">
                 Reset stats
               </button>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-md bg-down-soft px-2 py-0.5 text-[11px] font-medium text-down">⚠ Bot exit options are off</span>
+            {hasExitOptions(p.exitOptions) ? (
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-up-soft px-2 py-0.5 text-[11px] font-medium text-up">● On for this position</span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-muted">None set on this position</span>
+            )}
           </div>
-          <Rows
-            flush
-            rows={[
-              ["Profit %", "None"],
-              ["Profit $", "None"],
-              ["Stop loss %", "None"],
-              ["Stop loss $", "None"],
-              ["Expiration", `${dte} day${dte === 1 ? "" : "s"} to expiration`],
-            ]}
-          />
-          <p className="border-t border-line px-4 py-2 text-[11px] text-faint">Profit targets and stop losses need live option prices, so they aren&apos;t built in Phase 1.</p>
+          <Rows flush rows={[...exitOptionRows(p.exitOptions), ["Expiration", `${dte} day${dte === 1 ? "" : "s"} to expiration`]]} />
+          <p className="border-t border-line px-4 py-2 text-[11px] text-faint">{EXIT_OPTIONS_NOTE}</p>
         </section>
 
         {/* Bot */}

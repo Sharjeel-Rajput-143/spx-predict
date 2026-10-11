@@ -166,8 +166,7 @@ export class TursoBackend implements StorageBackend {
     try {
       // What this instance has changed but not yet saved goes first, so loading can't throw it away.
       if (s.pending.length > 0) await this.flush();
-      await this.ensureTable();
-      const result = await this.client.execute("SELECT collection, json FROM records ORDER BY rowid");
+      const result = await this.withTable(() => this.client.execute("SELECT collection, json FROM records ORDER BY rowid"));
       const data = new Map<CollectionName, unknown[]>();
       for (const name of COLLECTIONS) data.set(name, []);
       for (const row of result.rows) {

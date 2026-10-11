@@ -119,8 +119,11 @@ export class MockExecutor implements BrokerExecutor {
     return DEFAULT_SCENARIO;
   }
 
+  /** Runs `fn` after `ms`; with no delay it runs now, so an order that fills at once is already filled when it is first looked at
+   * (a timer would make the engine's first check see "working" and sleep a whole poll interval for nothing). */
   private schedule(tracked: TrackedOrder, ms: number, fn: () => void) {
-    tracked.timers.push(setTimeout(fn, ms));
+    if (ms <= 0) fn();
+    else tracked.timers.push(setTimeout(fn, ms));
   }
 
   /** `fillPrice` is what the order reports as its average fill; undefined means "no price reported". */

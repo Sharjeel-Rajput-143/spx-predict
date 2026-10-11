@@ -195,10 +195,11 @@ export const webhookView = (w: Webhook) => {
   };
 };
 
-/** Which direction an alert's text talks about: the words "bullish" and "bearish" (whole words, any case). "both" when it has both. */
+/** Which direction an alert's text talks about: the words "bullish" and "bearish" (any case; not part of a longer word, but "NDX_bullish",
+ * "bullish_signal" and "bullish5m" count, since a TradingView message is often written that way). "both" when it has both. */
 export function alertSays(text: string): SignalDirection | "both" | null {
-  const bull = /\bbullish\b/i.test(text);
-  const bear = /\bbearish\b/i.test(text);
+  const bull = /(?<![a-z])bullish(?![a-z])/i.test(text);
+  const bear = /(?<![a-z])bearish(?![a-z])/i.test(text);
   return bull && bear ? "both" : bull ? "bullish" : bear ? "bearish" : null;
 }
 

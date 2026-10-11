@@ -38,12 +38,26 @@ describe("Position details panel", () => {
       "Delta", "Theta", "Gamma", "Vega",
       "Reward/risk", "78.6%", "OTM %", "Breakeven", "7,727.8", "Max profit", "Max loss",
       "Alpha", "EV", "Prob of profit", "Prob of max profit", "Prob of max loss",
-      "Profit and loss at expiry", "Exit options", "Bot exit options are off", "Profit %", "Profit $", "Stop loss %", "Stop loss $", "0 days to expiration",
+      "Profit and loss at expiry", "Exit options", "None set on this position", "Profit %", "Profit $", "Stop loss %", "Stop loss $", "0 days to expiration",
       "SPX Bullish", "Paper Trading", "Move", "Trades", "No orders sent.", "Tags", "Add tag", "Notes", "Edit notes",
     ]) {
       expect(out, t).toContain(t);
     }
     expect(out).toContain('role="dialog"');
+  });
+
+  it("shows the exit options a position was opened with, and says they are on", () => {
+    const out = render({ ...open, exitOptions: { profitPercent: 50, stopDollars: 400, touchPoints: 25 } });
+    for (const t of ["On for this position", "50% of the credit", "$400", "within 25 points of the short strike", "checked every minute"]) expect(out, t).toContain(t);
+    expect(out).not.toContain("None set on this position");
+    expect(out).not.toContain("aren&#x27;t built");
+  });
+
+  it("a position with no exit options says so, and does not claim they are unavailable", () => {
+    const out = render(open);
+    expect(out).toContain("None set on this position");
+    expect(out).not.toContain("aren&#x27;t built in Phase 1");
+    expect(out).not.toContain("Bot exit options are off");
   });
 
   it("header buttons: copy, Close position (an open position), and a disabled Override", () => {

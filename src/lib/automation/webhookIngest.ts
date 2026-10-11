@@ -23,21 +23,40 @@ function secretMatches(provided: unknown): boolean {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+/** A call that failed the secret can come from anyone on the internet. It is still refused and still shows in the Log, but it can't
+ * be used to fill the database: at most this many such rows an hour (every request on a host with a database loads them all). */
+export const MAX_BAD_SECRET_ROWS_PER_HOUR = 20;
+
+/** What is kept of a stranger's message: a few short plain values, never the whole body. */
+function boundedRaw(body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body).slice(0, 10)) {
+    out[key.slice(0, 40)] = typeof value === "string" ? value.slice(0, 200) : typeof value === "number" || typeof value === "boolean" || value === null ? value : "[not kept]";
+  }
+  return out;
+}
+
 /** Spec: "store nothing except a rejected log row" on a bad secret - and
  * never the secret itself, here or anywhere else. */
 function logRejectedSignal(body: Record<string, unknown>, reason: string) {
+  const now = Date.now();
+  if (reason === "bad_secret") {
+    const recent = signalsStore.query((s) => s.rejectReason === "bad_secret" && now - s.receivedAt < 60 * 60_000).length;
+    if (recent >= MAX_BAD_SECRET_ROWS_PER_HOUR) return; // refused all the same; just not written down again
+  }
   const { secret: _secret, ...redacted } = body;
+  const text = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
   signalsStore.insert({
-    id: `sig-rejected-${Date.now()}-${crypto.randomUUID()}`,
-    botId: typeof body.bot === "string" ? body.bot : "unknown",
-    signal: typeof body.signal === "string" ? body.signal : "",
-    barTime: typeof body.bar_time === "string" ? body.bar_time : "",
+    id: `sig-rejected-${now}-${crypto.randomUUID()}`,
+    botId: typeof body.bot === "string" ? text(body.bot, 60) : "unknown",
+    signal: text(body.signal, 20),
+    barTime: text(body.bar_time, 60),
     price: typeof body.price === "number" ? body.price : 0,
-    interval: typeof body.interval === "string" ? body.interval : "",
-    receivedAt: Date.now(),
+    interval: text(body.interval, 10),
+    receivedAt: now,
     status: "rejected",
     rejectReason: reason,
-    raw: redacted,
+    raw: boundedRaw(redacted),
   });
 }
 

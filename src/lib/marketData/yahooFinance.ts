@@ -51,7 +51,7 @@ export async function fetchYahooDailyClose(symbol: string, dateKey: string, fetc
   if (!code) return null;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}?interval=1d&range=1mo`;
   try {
-    const res = await fetcher(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store", signal: AbortSignal.timeout(8000) });
+    const res = await fetcher(url, { headers: { "User-Agent": "Mozilla/5.0" }, cache: "no-store", signal: AbortSignal.timeout(4000) });
     if (!res.ok) return null;
     const data = (await res.json()) as { chart?: { result?: { timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[] } };
     const result = data.chart?.result?.[0];

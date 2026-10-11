@@ -41,18 +41,27 @@ export async function settleExpiredFromClose(options: { botId?: string; now?: nu
     groups.set(key, [...(groups.get(key) ?? []), p]);
   }
 
-  let settled = 0;
-  let lookups = 0;
+  // Which days to look up now: not one that failed in the last few minutes, and only a few at a time.
+  const due: [string, Position[]][] = [];
   for (const [key, positions] of groups) {
     const last = attempts.get(key);
     if (last !== undefined && now - last < RETRY_AFTER_MS) continue;
-    if (lookups >= MAX_LOOKUPS) break;
-    lookups++;
+    if (due.length >= MAX_LOOKUPS) break;
+    due.push([key, positions]);
+  }
+  // Looked up together, not one after another: this runs while other requests (an alert among them) wait their turn, so the
+  // whole thing is as slow as the slowest single lookup, not the sum of them.
+  const closes = await Promise.all(due.map(([key]) => {
     const [symbol, dateKey] = key.split("|");
-    const close = await lookup(symbol, dateKey).catch(() => null);
+    return lookup(symbol, dateKey).catch(() => null);
+  }));
+
+  let settled = 0;
+  due.forEach(([key, positions], i) => {
+    const close = closes[i];
     if (close === null || !Number.isFinite(close) || close <= 0) {
       attempts.set(key, now);
-      continue;
+      return;
     }
     attempts.delete(key);
     for (const p of positions) {
@@ -63,7 +72,7 @@ export async function settleExpiredFromClose(options: { botId?: string; now?: nu
       positionsStore.update(p.id, { underlyingAtClose: p.underlyingAtClose ?? close, settlement: { kind: "estimated", pl, underlyingPrice: close, settleValue, at: now } });
       settled++;
     }
-  }
+  });
   return settled;
 }
 

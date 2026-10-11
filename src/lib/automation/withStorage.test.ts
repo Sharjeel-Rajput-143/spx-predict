@@ -72,8 +72,41 @@ describe("answering within a time", () => {
     const first = await run(req as never); // slow: answered with the fallback
     expect(first.status).toBe(200);
     fake.delayMs = 0;
-    await run(req as never);
+    // The second call has to wait for the first to finish loading; the wait counts toward its own deadline, so it is answered
+    // in time too (with the fallback) and its handler runs when its turn comes - never at the same time as the first.
+    const t0 = Date.now();
+    const second = await run(req as never);
+    expect(Date.now() - t0).toBeLessThan(80);
+    expect(await second.json()).toEqual({ received: true, queued: "Being processed." });
+    await sleep(400);
     expect(order).toEqual(["start1", "end1", "start2", "end2"]);
+  });
+
+  it("a call stuck behind slow work is answered at its deadline, and still runs once, in order, when the work ahead is done", async () => {
+    const order: string[] = [];
+    let id = 0;
+    const run = withStorage(
+      async (_r: unknown) => {
+        order.push(`handler${++id}`);
+        return Response.json({ ok: true });
+      },
+      { load: ["webhooks"], answerWithin: { ms: 30, response: fallback } },
+    );
+    fake.delayMs = 150; // the first call's load is slow and holds the line
+    const first = await run(req as never);
+    expect(await first.json()).toEqual({ received: true, queued: "Being processed." });
+    fake.delayMs = 0;
+    const second = await run(req as never);
+    expect(await second.json()).toEqual({ received: true, queued: "Being processed." });
+    await sleep(500);
+    expect(order).toEqual(["handler1", "handler2"]); // each ran exactly once
+  });
+
+  it("answers carry a Server-Timing header saying where the time went", async () => {
+    const run = withStorage(async (_r: unknown) => Response.json({ ok: true }), { load: ["webhooks"] });
+    fake.delayMs = 20;
+    const res = await run(req as never);
+    expect(res.headers.get("Server-Timing")).toMatch(/^queue;dur=\d+, load;dur=\d+, run;dur=\d+, save;dur=\d+$/);
   });
 
   it("a handler that fails behind a slow answer is not an unhandled error", async () => {

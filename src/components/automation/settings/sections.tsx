@@ -140,7 +140,7 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
         <p className="text-xs text-muted">
           This is the default for every bot. A bot can have its own window on its Bullish/Bearish canvas, which wins over this. Currently {data.window.source === "settings" ? "saved here" : "the environment's"}: {clock12(data.window.start)} - {clock12(data.window.end)}.
         </p>
-        <KeyValue rows={[["Exit options", "Not used - positions are held to expiry"]]} />
+        <KeyValue rows={[["Exit options", "Set per bot, on the Open Position step of a trigger; positions without them are held until the opposite signal or the end of the day"]]} />
       </Section>
 
       <Section title="Positions at expiry" hint="What happens to a position that is still open when the day ends.">

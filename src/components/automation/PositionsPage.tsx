@@ -7,6 +7,7 @@ import { Toasts, type ToastItem } from "@/components/automation/bot/primitives";
 import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import { ACTIVE_POSITION_STATUSES, type Order, type Position, type Signal } from "@/lib/automation/types";
+import { usePolling } from "./usePolling";
 
 interface PositionsData {
   now: number;
@@ -42,7 +43,7 @@ export function PositionsPage() {
   }, []);
 
   const load = useCallback(() => {
-    fetch("/api/automation/positions")
+    return fetch("/api/automation/positions")
       .then((r) => {
         if (r.status === 401) {
           setSignedOut(true);
@@ -60,11 +61,7 @@ export function PositionsPage() {
       .catch((err) => setError(err.message));
   }, []);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  usePolling(load, POLL_MS);
 
   const visible = useMemo(
     () =>

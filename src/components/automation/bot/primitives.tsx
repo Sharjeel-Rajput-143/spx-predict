@@ -124,16 +124,16 @@ export function Drawer({
     <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal aria-label={title}>
       <button aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
       <aside className={cn("relative flex h-full w-full flex-col border-l border-line bg-surface shadow-2xl", extraWide ? "max-w-2xl" : wide ? "max-w-lg" : "max-w-md")}>
-        <header className="flex items-center justify-between border-b border-line px-4 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-4 py-3">
           <div className="flex items-center gap-2">
             {onBack && (
               <button onClick={onBack} aria-label="Back" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
                 ←
               </button>
             )}
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <h2 className="whitespace-nowrap text-sm font-semibold">{title}</h2>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {headerActions}
             <button
               onClick={onClose}

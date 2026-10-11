@@ -24,6 +24,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** How long to wait before each of the first looks at an order, capped by the usual poll interval. */
+const EARLY_LOOKS_MS = [200, 400, 800];
+
 /** Polls getOrder() until a terminal state or timeout. Per spec: "on a
  * partial fill the timeout resets" - so the deadline moves forward every
  * time filledQuantity changes, not just once at the start. */
@@ -31,6 +34,7 @@ export async function watchOrder(executor: BrokerExecutor, ref: string, options:
   const { timeoutMs, pollIntervalMs, partialTimeoutMs = timeoutMs } = options;
   let deadline = Date.now() + timeoutMs;
   let lastFilledQuantity = -1;
+  let looks = 0;
 
   for (;;) {
     const state = await executor.getOrder(ref);
@@ -47,6 +51,7 @@ export async function watchOrder(executor: BrokerExecutor, ref: string, options:
       return { state: finalState, timedOut: true };
     }
 
-    await sleep(pollIntervalMs);
+    // Orders that are going to fill usually do so within a second or two: look again sooner at first, then settle to the usual pace.
+    await sleep(Math.min(pollIntervalMs, EARLY_LOOKS_MS[looks++] ?? pollIntervalMs));
   }
 }

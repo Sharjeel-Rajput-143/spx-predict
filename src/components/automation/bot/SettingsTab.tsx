@@ -1,5 +1,6 @@
 "use client";
 
+import { EXIT_OPTIONS_NOTE, botExitTriggers } from "@/lib/automation/exitOptionsText";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { InputFields, pricingFields, toInputs, type BotFormValues } from "@/components/automation/BotForm";
@@ -78,7 +79,7 @@ export function SettingsTab({ ctx }: { ctx: BotContext }) {
 
       <div className="space-y-4">
         <SafeguardsCard ctx={ctx} />
-        <ScanSpeedsCard />
+        <ScanSpeedsCard exitTriggers={botExitTriggers(data.bot.openSettings)} />
         <SymbolsCard botId={data.bot.id} underlying={data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX"} />
         <AlertsCard ctx={ctx} />
       </div>
@@ -677,7 +678,8 @@ export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: (
 
 /** Replaces the "scan speeds" idea: these bots don't poll, signals arrive by webhook. */
 /** Option Alpha's "Scan Speeds": these bots don't scan, they run the instant a webhook is called. */
-function ScanSpeedsCard() {
+function ScanSpeedsCard({ exitTriggers }: { exitTriggers: ("bullish" | "bearish")[] }) {
+  const on = exitTriggers.length > 0;
   return (
     <Card className="p-5">
       <CardHeader title="Scan Speeds" tip="These bots don't scan or poll: each automation runs the moment its webhook is called." />
@@ -687,13 +689,13 @@ function ScanSpeedsCard() {
         <Stat
           label={
             <>
-              Exit options <Pill>off</Pill>
+              Exit options <Pill>{on ? "on" : "off"}</Pill>
             </>
           }
-          muted
-          tip="Profit targets and stop losses aren't built: a position is held until the opposite signal or the end-of-day sweep."
+          muted={!on}
+          tip={on ? `On for the ${exitTriggers.join(" and ")} trigger. ${EXIT_OPTIONS_NOTE}` : `No trigger has exit options. ${EXIT_OPTIONS_NOTE}`}
         >
-          Not built
+          {on ? "Every 1m" : "Not set"}
         </Stat>
       </div>
     </Card>

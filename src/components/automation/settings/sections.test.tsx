@@ -22,7 +22,7 @@ const save = async () => null;
 describe("General", () => {
   it("has the schedule, expiry behaviour, email, session timeout, text size and sign-in rows", () => {
     const out = html(<GeneralSection data={data()} save={save} />);
-    for (const t of ["Bot schedule", "Automations run from", "9:35am", "3:55pm", "Exit options", "held to expiry", "Positions at expiry", "Email notifications", "When a position is opened or closed", "Warnings and errors", "Include test trades", "Session timeout", "1 hour", "Text size", "Two-step authentication", "Not available yet"]) {
+    for (const t of ["Bot schedule", "Automations run from", "9:35am", "3:55pm", "Exit options", "Open Position step", "Positions at expiry", "Email notifications", "When a position is opened or closed", "Warnings and errors", "Include test trades", "Session timeout", "1 hour", "Text size", "Two-step authentication", "Not available yet"]) {
       expect(out, t).toContain(t);
     }
   });

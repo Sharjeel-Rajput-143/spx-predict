@@ -14,6 +14,8 @@ import { RunModal } from "./RunModal";
 import { SettingsTab } from "./SettingsTab";
 import { Dropdown, MenuDivider, MenuItem, Modal, OnOffSwitch, Pill, TextPromptModal, Toasts, buttonClass, type ToastItem } from "./primitives";
 import { outcomeInfo, TYPE_LABEL, type BotDetailData } from "./model";
+import { usePolling } from "../usePolling";
+import { EXIT_OPTIONS_NOTE, botExitTriggers } from "@/lib/automation/exitOptionsText";
 
 const TABS = ["dashboard", "positions", "log", "settings"] as const;
 export type Tab = (typeof TABS)[number];
@@ -54,7 +56,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
   }, []);
 
   const load = useCallback(() => {
-    fetch(`/api/automation/bots/${botId}`)
+    return fetch(`/api/automation/bots/${botId}`)
       .then((r) => {
         if (!r.ok) throw new Error(r.status === 401 ? "Session expired - refresh the page to sign in again." : r.status === 404 ? "This bot no longer exists." : "Failed to load.");
         return r.json();
@@ -66,11 +68,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
       .catch((err) => setError(err.message));
   }, [botId]);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  usePolling(load, POLL_MS);
 
   // In-app alerts: when a decision lands that this bot's Activity Alerts cover, toast it.
   useEffect(() => {
@@ -137,6 +135,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
   if (!data) return <Card className="p-4 text-sm text-muted">Loading...</Card>;
 
   const { bot } = data;
+  const exitTriggers = botExitTriggers(bot.openSettings);
   const ctx: BotContext = {
     data,
     reload: load,
@@ -226,8 +225,8 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
             <OnOffSwitch on={bot.enabled} onChange={toggle} disabled={pending} label="Bot on/off" />
           </HeaderBox>
           <HeaderBox label="Exit options">
-            <span title="Profit targets and stop losses aren't built: a position is held until the opposite signal or the end-of-day sweep.">
-              <OnOffSwitch on={false} onChange={() => undefined} disabled label="Exit options (not built)" />
+            <span title={exitTriggers.length > 0 ? `On for the ${exitTriggers.join(" and ")} trigger. ${EXIT_OPTIONS_NOTE}` : `Off: no trigger has exit options. ${EXIT_OPTIONS_NOTE}`}>
+              <OnOffSwitch on={exitTriggers.length > 0} onChange={() => undefined} disabled label={exitTriggers.length > 0 ? `Exit options on (${exitTriggers.join(", ")})` : "Exit options off"} />
             </span>
           </HeaderBox>
           <HeaderBox label="Kill switch">

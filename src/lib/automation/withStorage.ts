@@ -72,13 +72,16 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
   const problem = (err: unknown) => Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 503 });
 
   /** Loads, runs the handler, and saves, in that order: the answer and the work still to do behind it. */
-  const job = async (args: A, method: string): Promise<{ response: Response; work: Deferred | null }> => {
+  const job = async (args: A, method: string, enteredAt: number): Promise<{ response: Response; work: Deferred | null }> => {
+    const t0 = performance.now();
+    const queued = t0 - enteredAt;
     try {
       if (options.load && storage.hydrateCollections) await storage.hydrateCollections(options.load);
       else await storage.hydrate?.(method === "GET" ? READ_FRESH_MS : 0);
     } catch (err) {
       return { response: problem(err), work: null };
     }
+    const t1 = performance.now();
     let response: Response | undefined;
     let failure: unknown = null;
     try {
@@ -86,6 +89,7 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
     } catch (err) {
       failure = err;
     }
+    const t2 = performance.now();
     // Saved before the answer leaves, whatever the handler did (a thrown error included).
     let saveError: unknown = null;
     try {
@@ -95,6 +99,13 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
     }
     if (failure) throw failure;
     if (saveError) return { response: problem(saveError), work: null };
+    const t3 = performance.now();
+    // Where the time went, visible in the browser's network panel: waiting for the request ahead, loading records, the handler, saving.
+    try {
+      response!.headers.set("Server-Timing", `queue;dur=${queued.toFixed(0)}, load;dur=${(t1 - t0).toFixed(0)}, run;dur=${(t2 - t1).toFixed(0)}, save;dur=${(t3 - t2).toFixed(0)}`);
+    } catch {
+      /* a response whose headers can't be changed simply goes without */
+    }
     return { response: response!, work: deferredOf(response) };
   };
 
@@ -118,11 +129,12 @@ export function withStorage<A extends unknown[]>(handler: (...args: A) => Respon
     const previous = g.__storageQueue ?? Promise.resolve();
     let release!: () => void;
     g.__storageQueue = new Promise<void>((r) => (release = r));
-    await previous.catch(() => undefined);
     let held = false; // the work after the answer keeps the queue until it is done
     try {
       const method = (args[0] as { method?: string } | undefined)?.method ?? "GET";
-      const running = job(args, method);
+      // Waiting for the request ahead counts toward the deadline: a call that is stuck behind slow work is answered in time too.
+      const enteredAt = performance.now();
+      const running = previous.catch(() => undefined).then(() => job(args, method, enteredAt));
       if (options.answerWithin) {
         // Too slow to answer in time (a cold start, a slow database): answer now, finish behind the answer.
         let timer: ReturnType<typeof setTimeout> | undefined;

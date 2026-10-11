@@ -20,6 +20,19 @@ beforeEach(() => {
 });
 
 describe("settling an expired position from the day's close", () => {
+  it("several days are looked up together, so the wait is one lookup long, not all of them added up (other requests queue behind this)", async () => {
+    expired({ expiry: "2026-10-06" });
+    expired({ expiry: "2026-10-07" });
+    expired({ expiry: "2026-10-08" });
+    const slow = async () => {
+      await new Promise((r) => setTimeout(r, 200));
+      return 30_969;
+    };
+    const t0 = Date.now();
+    expect(await settleExpiredFromClose({ now: BASE_NOW + 5 * DAY, lookup: slow })).toBe(3);
+    expect(Date.now() - t0).toBeLessThan(450); // three one-after-another lookups would take 600ms
+  });
+
   it("works the result out from the closing price: a call spread that finished out of the money keeps its whole credit", async () => {
     const p = expired();
     const lookup = vi.fn(async () => 30_969);

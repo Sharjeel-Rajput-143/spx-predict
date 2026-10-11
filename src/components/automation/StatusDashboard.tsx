@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { cn, formatTime } from "@/lib/format";
 import { Card, SectionTitle, Stat } from "@/components/ui";
 import { Pill } from "./bot/primitives";
+import { usePolling } from "./usePolling";
 
 export interface StatusBot {
   id: string;
@@ -660,7 +661,7 @@ export function StatusDashboard() {
   const [reconcileError, setReconcileError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    fetch("/api/automation/status")
+    return fetch("/api/automation/status")
       .then((r) => {
         if (!r.ok) throw new Error(r.status === 401 ? "Session expired - refresh the page to sign in again." : "Failed to load.");
         return r.json();
@@ -672,11 +673,7 @@ export function StatusDashboard() {
       .catch((err) => setError(err.message));
   }, []);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  usePolling(load, POLL_MS);
 
   const toggleBot = (botId: string) => {
     setBusyBot(botId);

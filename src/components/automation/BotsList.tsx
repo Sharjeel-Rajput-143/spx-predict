@@ -13,6 +13,7 @@ import { Card } from "@/components/ui";
 import type { BotSummary } from "@/lib/automation/summary";
 import type { BotTemplate } from "@/lib/automation/types";
 import { cn } from "@/lib/format";
+import { usePolling } from "./usePolling";
 
 const POLL_MS = 5000;
 const usd = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -51,7 +52,7 @@ export function BotsList() {
   const [newBot, setNewBot] = useState<{ start?: NewBotView | NewBotView[] } | null>(null);
 
   const load = useCallback(() => {
-    fetch("/api/automation/bots")
+    return fetch("/api/automation/bots")
       .then((r) => {
         if (r.status === 401) {
           setSignedOut(true);
@@ -71,11 +72,7 @@ export function BotsList() {
       .catch((err) => setError(err.message));
   }, []);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, POLL_MS);
-    return () => clearInterval(id);
-  }, [load]);
+  usePolling(load, POLL_MS);
 
   // /automations?newFromTemplate=<id> (from the Templates page) opens New Bot at that template's form.
   const [deepLinked, setDeepLinked] = useState(false);
