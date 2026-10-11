@@ -75,6 +75,7 @@ const exitLabel = (e: ExitOptions) => {
   if (e.stopPercent !== undefined) parts.push(`stop loss ${e.stopPercent}%`);
   if (e.stopDollars !== undefined) parts.push(`stop loss ${dollars(e.stopDollars)}`);
   if (e.touchPoints !== undefined) parts.push(`touch ${e.touchPoints} pts`);
+  if (e.expirationMinutes !== undefined) parts.push(`${e.expirationMinutes} min before close`);
   return parts.length > 0 ? parts.join(", ") : "None";
 };
 
@@ -90,8 +91,10 @@ function ExitModal({ exit, onApply, onClose }: { exit: ExitOptions; onApply: (e:
   const [sd, setSd] = useState(String(exit.stopDollars ?? ""));
   const [tOn, setTOn] = useState(exit.touchPoints !== undefined);
   const [t, setT] = useState(String(exit.touchPoints ?? 10));
+  const [eOn, setEOn] = useState(exit.expirationMinutes !== undefined);
+  const [e, setE] = useState(String(exit.expirationMinutes ?? 30));
 
-  const draft: ExitOptions = { ...(pOn ? { profitPercent: num(p) } : {}), ...(pdOn ? { profitDollars: num(pd) } : {}), ...(sOn ? { stopPercent: num(s) } : {}), ...(sdOn ? { stopDollars: num(sd) } : {}), ...(tOn ? { touchPoints: num(t) } : {}) };
+  const draft: ExitOptions = { ...(pOn ? { profitPercent: num(p) } : {}), ...(pdOn ? { profitDollars: num(pd) } : {}), ...(sOn ? { stopPercent: num(s) } : {}), ...(sdOn ? { stopDollars: num(sd) } : {}), ...(tOn ? { touchPoints: num(t) } : {}), ...(eOn ? { expirationMinutes: num(e) } : {}) };
   const checked = validateOpenSettings({ exit: draft });
   return (
     <Modal title="Exit Options" onClose={onClose} footer={<button className={`${buttonClass.primary} px-8`} disabled={!checked.ok} onClick={() => checked.ok && onApply(checked.value.exit ?? {})}>Save</button>}>
@@ -123,6 +126,13 @@ function ExitModal({ exit, onApply, onClose }: { exit: ExitOptions; onApply: (e:
           <input className={small} inputMode="decimal" value={t} onChange={(e) => setT(e.target.value)} aria-label="Touch distance" />
           <span>points from the short strike or less</span>
         </Toggle>
+        <div className="text-sm font-semibold">Expiration</div>
+        <Toggle on={eOn} onChange={setEOn} label="Expiration exit">
+          <span>Close at market</span>
+          <input className={small} inputMode="numeric" value={e} onChange={(ev) => setE(ev.target.value)} aria-label="Minutes before the close" />
+          <span>minutes before the market closes (the day the position expires)</span>
+        </Toggle>
+        {eOn && <p className="text-xs text-muted">Needs only the clock, no option prices. A position opened inside that last stretch is closed on the next check. Checked once a minute by a server that stays up; Vercel only runs the end-of-day job, so there it does not act.</p>}
         {!checked.ok && <p className="text-xs text-down">{checked.reason}</p>}
       </div>
     </Modal>

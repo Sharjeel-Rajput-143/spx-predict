@@ -25,6 +25,8 @@ export type OrderStatus = "working" | "partially_filled" | "filled" | "canceled"
 export type DecisionOutcome =
   /** A signal was accepted but its run never finished (the server stopped or restarted partway): a person should check the positions. */
   | "run_interrupted"
+  /** The bot is trying again an open that an alert asked for and that was dropped (outside the window, rejected, timed out, no price). */
+  | "entry_retry"
   | "automations_off"
   /** The kill switch is on: nothing runs for this bot. */
   | "kill_switch"

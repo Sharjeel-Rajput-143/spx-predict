@@ -68,6 +68,7 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   opened: { label: "Opened position", tone: "ok" },
   closed: { label: "Closed position", tone: "ok" },
   dry_run: { label: "Dry run", tone: "skip" },
+  entry_retry: { label: "Retrying a missed open", tone: "skip" },
   automations_off: { label: "Bot off", tone: "skip" },
   kill_switch: { label: "Kill switch", tone: "warn" },
   monitor_closed: { label: "Monitor closed position", tone: "ok" },

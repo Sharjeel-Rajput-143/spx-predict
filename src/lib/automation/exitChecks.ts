@@ -9,10 +9,12 @@ import { recordError } from "./errors";
 import { applyClosePricing, closePosition, closeTitle, pricingFor, spreadOf } from "./engine";
 import type { ExitOptions } from "./openSettings";
 import { RunRecorder, describeLegs } from "./runTrace";
+import type { ClosePricing } from "./closePricing";
+import { nyseCalendarDay } from "@/lib/nyseCalendar";
 import { activePositionsForBot } from "./safeguards";
 import { sharedExecutor } from "./sharedExecutor";
 import { spreadMarket } from "./smartPricing";
-import { hoursConfigFor, isWithinTradingHours } from "./tradingHours";
+import { easternDateKey, easternMinutesOfDay, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
 import type { BrokerExecutor, Position } from "./types";
 
 /**
@@ -30,13 +32,21 @@ import type { BrokerExecutor, Position } from "./types";
 const WINDOW = { start: "09:31", end: "15:59" };
 const PRICE_MAX_AGE_MS = 5 * 60_000;
 
-export type ExitReason = { kind: "profit_percent" | "profit_dollars" | "stop_percent" | "stop_loss_dollars" | "touch"; text: string };
+export type ExitReason = { kind: "profit_percent" | "profit_dollars" | "stop_percent" | "stop_loss_dollars" | "touch" | "expiration"; text: string };
 
 export interface ExitReading {
   /** The spread's mid price to buy it back at, when there is a quote. */
   debit: number | null;
   /** The underlying's price, when there is a fresh one. */
   underlying: number | null;
+  /** Minutes until the market closes, when the position expires today; null otherwise (it doesn't expire today, or the clock isn't known). */
+  minutesToClose?: number | null;
+}
+
+/** Minutes from `now` to the close of the market that day (1:00pm on an early-close day, else 4:00pm), New York time. */
+export function minutesToMarketClose(now: number): number {
+  const close = nyseCalendarDay(now).status === "early-close" ? 13 * 60 : 16 * 60;
+  return close - easternMinutesOfDay(now);
 }
 
 /** Which exit option (if any) is met by this reading. Pure: the same inputs always give the same answer. */
@@ -55,6 +65,9 @@ export function exitMet(position: Pick<Position, "type" | "shortStrike" | "credi
   if (options.touchPoints !== undefined && reading.underlying != null && Number.isFinite(reading.underlying)) {
     const distance = position.type === "short_put_spread" ? reading.underlying - position.shortStrike : position.shortStrike - reading.underlying;
     if (distance <= options.touchPoints) return { kind: "touch", text: `The underlying (${reading.underlying}) is ${round(distance)} points from the short strike ${position.shortStrike}, within the ${options.touchPoints} touch distance` };
+  }
+  if (options.expirationMinutes !== undefined && reading.minutesToClose != null && Number.isFinite(reading.minutesToClose) && reading.minutesToClose <= options.expirationMinutes) {
+    return { kind: "expiration", text: `The market closes in ${Math.max(0, Math.round(reading.minutesToClose))} minute${Math.round(reading.minutesToClose) === 1 ? "" : "s"}, within the ${options.expirationMinutes}-minute expiration exit` };
   }
   return null;
 }
@@ -103,7 +116,7 @@ export function runExitChecks(botId: string, now: number = Date.now(), options: 
 
     for (const position of candidates) {
       const exit = position.exitOptions!;
-      const reading: ExitReading = { debit: null, underlying: null };
+      const reading: ExitReading = { debit: null, underlying: null, minutesToClose: position.expiry === easternDateKey(now) ? minutesToMarketClose(now) : null };
       const needsQuote = exit.profitPercent !== undefined || exit.profitDollars !== undefined || exit.stopPercent !== undefined || exit.stopDollars !== undefined;
       if (needsQuote && executor.getSpreadQuote) {
         try {
@@ -132,7 +145,9 @@ export function runExitChecks(botId: string, now: number = Date.now(), options: 
           log("dry_run", `Dry run: exit options would close ${describeLegs(position)}: ${met.text}.`);
           continue;
         }
-        const pricing = applyClosePricing(pricingFor(config, "close", options.ladderStepMs), bot.closeSettings?.[position.type === "short_put_spread" ? "bearish" : "bullish"]?.pricing);
+        // The expiration exit is the last chance before the close: it goes at market, whatever the bot's usual close pricing is.
+        const ownPricing: ClosePricing | undefined = met.kind === "expiration" ? { speed: "market" } : bot.closeSettings?.[position.type === "short_put_spread" ? "bearish" : "bullish"]?.pricing;
+        const pricing = applyClosePricing(pricingFor(config, "close", options.ladderStepMs), ownPricing);
         const closed = await closePosition(position, { id: null, price: reading.underlying }, executor, closeTimeoutMs, options.pollIntervalMs ?? 1000, now, pricing);
         rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [{ label: "Why", value: met.text }], steps: closed.steps, outcome: closed.outcome, reason: closed.reason });
         if (closed.ok) {

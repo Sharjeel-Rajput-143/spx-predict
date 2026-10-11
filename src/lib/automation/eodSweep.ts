@@ -9,6 +9,7 @@ import { payoffAt } from "./payoff";
 import { positionQuantity } from "./pnl";
 import { checkInterruptedRuns } from "./interrupted";
 import { pruneOncePerDay } from "./retention";
+import { runDueEntryRetries } from "./entryRetry";
 import { runDueExitChecks } from "./exitChecks";
 import { settleExpiredFromClose } from "./settleExpired";
 import { runDueMonitors } from "./monitors";
@@ -226,6 +227,7 @@ async function tick(): Promise<void> {
     pruneOncePerDay(Date.now()); // old log entries, once a day
     await checkInterruptedRuns(Date.now()); // a run the server stopped partway through, said once in the Log
     await settleExpiredFromClose().catch(() => 0); // a result for any expired position the sweep missed, from that day's close
+    await runDueEntryRetries(Date.now()).catch(() => []); // an open that an alert asked for and that was dropped, tried again (quiet when there is none)
     await runDueExitChecks(Date.now()); // each open position's own exit options (profit taking, stop loss, touch); quiet when nothing is met
     await runDueMonitors(Date.now()); // Close Monitors (off unless a person switched one on); quiet when there is nothing to do
 

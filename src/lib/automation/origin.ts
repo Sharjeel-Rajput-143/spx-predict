@@ -3,16 +3,18 @@ import type { Signal } from "./types";
 /** Where a signal came from, read off the signal itself (so it works for every entry already in the log):
  *  - "tradingview": a real call to a webhook URL
  *  - "test_hook": the Test Hook button on a webhook, or the status page's test alert
- *  - "manual": the Run button on a bot */
-export type SignalOrigin = "tradingview" | "test_hook" | "manual";
+ *  - "manual": the Run button on a bot
+ *  - "retry": the bot trying again an open an alert had asked for and that was dropped */
+export type SignalOrigin = "tradingview" | "test_hook" | "manual" | "retry";
 
-export const ORIGIN_LABEL: Record<SignalOrigin, string> = { tradingview: "TradingView", test_hook: "Test Hook", manual: "Manual run" };
+export const ORIGIN_LABEL: Record<SignalOrigin, string> = { tradingview: "TradingView", test_hook: "Test Hook", manual: "Manual run", retry: "Retry" };
 
 type Raw = { source?: string; test?: boolean; webhook?: string; origin?: string } | null;
 
 export function signalOrigin(signal: Pick<Signal, "raw">): SignalOrigin {
   const raw = signal.raw as Raw;
   if (raw?.source === "manual") return "manual";
+  if (raw?.origin === "retry") return "retry";
   if (raw?.test === true || raw?.origin === "test_hook") return "test_hook";
   return "tradingview";
 }

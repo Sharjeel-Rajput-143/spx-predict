@@ -54,6 +54,8 @@ export interface ExitOptions {
   stopDollars?: number;
   /** Close when the underlying is within this many points of the short strike (or beyond it). */
   touchPoints?: number;
+  /** Close at market this many minutes before the market closes, on the day the position expires. Needs no option prices: only the clock. */
+  expirationMinutes?: number;
 }
 
 export interface OpenSettings {
@@ -165,12 +167,13 @@ export function validatePositionCriteria(v: unknown): Checked<PositionCriteria> 
 }
 
 export const validateExit = (v: unknown) =>
-  pick<ExitOptions>(v, ["profitPercent", "profitDollars", "stopPercent", "stopDollars", "touchPoints"], {
+  pick<ExitOptions>(v, ["profitPercent", "profitDollars", "stopPercent", "stopDollars", "touchPoints", "expirationMinutes"], {
     profitPercent: needPercent("The profit taking %"),
     profitDollars: needPositive("The profit taking amount"),
     stopPercent: needPositive("The stop loss %"),
     stopDollars: needPositive("The stop loss amount"),
     touchPoints: needPositive("The touch distance"),
+    expirationMinutes: (x) => (whole(x) && x <= 390 ? null : "The expiration exit must be a whole number of minutes before the close, from 1 to 390."),
   });
 
 /** A whole OpenSettings from the outside: every part is checked, an unknown part is dropped, `pricing` may not use the position trade price. */

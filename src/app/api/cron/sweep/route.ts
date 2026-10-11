@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { cronRefusal } from "@/lib/automation/cronAuth";
 import { runDueSweeps } from "@/lib/automation/eodSweep";
 import { settleExpiredFromClose } from "@/lib/automation/settleExpired";
 import { withStorage } from "@/lib/automation/withStorage";
@@ -14,16 +14,9 @@ import { withStorage } from "@/lib/automation/withStorage";
  */
 export const maxDuration = 60;
 
-const sameSecret = (given: string, secret: string) => {
-  const a = Buffer.from(given);
-  const b = Buffer.from(`Bearer ${secret}`);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-};
-
 async function handleGET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return NextResponse.json({ error: "CRON_SECRET isn't set, so the scheduled job is switched off." }, { status: 503 });
-  if (!sameSecret(req.headers.get("authorization") ?? "", secret)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  const refused = cronRefusal(req);
+  if (refused) return refused;
 
   const now = Date.now();
   const swept = await runDueSweeps(now);

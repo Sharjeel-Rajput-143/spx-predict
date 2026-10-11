@@ -107,3 +107,11 @@ TradingView gives up after about 3 seconds. Three things keep the answer inside 
 - **A call that never reached the bot is noticed.** If the server stops between the answer and the signal being saved, the webhook's minute was taken and no signal followed: after 10 minutes the Log says "Run interrupted", with an error alert, so a call can't vanish without a trace.
 
 The first call after a long idle still pays for a cold start of the function (a second or two). Calling `/login` every few minutes from an uptime checker keeps an instance warm if that matters.
+
+
+## Retrying a missed open (every minute)
+
+Option Alpha's scanner looks for a trade to open every minute. This bot decides once, when an alert arrives, so an alert whose open was dropped (it came before the trading window opened, the broker refused the order, the order timed out, or there was no price yet) would wait for the next alert. Once a minute the platform finishes what the bot's **latest alert** asked for, and nothing else: see `src/lib/automation/entryRetry.ts` for the exact rules. It never retries an order whose outcome is unknown, stops after three refused orders, never re-opens something that was opened and then closed, and runs every normal guard. Each try is logged as "Retrying a missed open".
+
+- **A server that stays up** does this by itself, every minute.
+- **Vercel** cannot run its own scheduler that often on the free plan. Point any outside scheduler (a free cron service) at `GET https://<your-address>/api/cron/scan` every minute, sending the header `Authorization: Bearer <CRON_SECRET>` (the same `CRON_SECRET` as the end-of-day job). Without `CRON_SECRET` the address refuses every call.

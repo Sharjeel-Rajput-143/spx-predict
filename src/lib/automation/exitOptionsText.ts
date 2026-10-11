@@ -15,6 +15,7 @@ export function exitOptionRows(exit: ExitOptions | null | undefined): [string, s
     ["Stop loss %", exit?.stopPercent !== undefined ? `${exit.stopPercent}% of the credit` : "None"],
     ["Stop loss $", exit?.stopDollars !== undefined ? dollars(exit.stopDollars) : "None"],
     ["Touch", exit?.touchPoints !== undefined ? `within ${exit.touchPoints} points of the short strike` : "None"],
+    ["Close before expiry", exit?.expirationMinutes !== undefined ? `${exit.expirationMinutes} minute${exit.expirationMinutes === 1 ? "" : "s"} before the market closes, at market` : "None"],
   ];
 }
 
@@ -25,4 +26,4 @@ export function botExitTriggers(openSettings: Partial<Record<"bullish" | "bearis
 
 /** Said wherever exit options are shown: what they depend on. */
 export const EXIT_OPTIONS_NOTE =
-  "Set on a trigger's Open Position step; a position keeps the ones it was opened with. They are checked every minute while the market is open, on a server that stays up. Profit and stop need live option prices (a broker connection); touch needs the live underlying price.";
+  "Set on a trigger's Open Position step; a position keeps the ones it was opened with. They are checked every minute while the market is open, on a server that stays up. Profit and stop need live option prices (a broker connection); touch needs the live underlying price; the expiration exit needs only the clock.";

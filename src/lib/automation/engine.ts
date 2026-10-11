@@ -107,11 +107,15 @@ interface DuplicateMatch {
  * of a double-delivered alert are persisted before either is processed, so
  * without that ordering each would see the other and both would be dropped -
  * the engine must act on exactly one. */
+/** A signal the bot made for itself to retry a missed open: it is spaced by the retry rules, so the duplicate check neither applies to it nor counts it. */
+const isRetrySignal = (s: Pick<Signal, "raw">) => (s.raw as { origin?: unknown } | null)?.origin === "retry";
+
 function findDuplicateSignal(signal: Signal): DuplicateMatch | null {
+  if (isRetrySignal(signal)) return null;
   const all = signalsStore.all();
   const index = all.findIndex((s) => s.id === signal.id);
   const earlier = (index === -1 ? all : all.slice(0, index)).filter(
-    (s) => s.botId === signal.botId && s.status === "accepted" && s.signal === signal.signal,
+    (s) => s.botId === signal.botId && s.status === "accepted" && s.signal === signal.signal && !isRetrySignal(s),
   );
 
   const sameBarTime = earlier.find((s) => s.barTime === signal.barTime);
