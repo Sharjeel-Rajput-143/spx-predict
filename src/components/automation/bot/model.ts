@@ -176,3 +176,10 @@ export function plClass(n: number | null | undefined): string {
 
 export const NO_PRICE_TIP =
   "Profit and loss comes from the prices the executor reports when an order fills. The Phase 1 mock executor reports none, so this stays blank until a real broker (Phase 2) - or simulated pricing, for demos - supplies them.";
+
+/** What follows "Needs attention" in the banner: the reason (without its own full stop, so the sentence doesn't end ".."), then how to clear the flag. */
+export function attentionDetail(reason: string | null | undefined): string {
+  const why = (reason ?? "").trim().replace(/[.\s]+$/, "");
+  return `${why ? ` — ${why}` : ""}. Switch the bot off and on again to clear this flag.`;
+}
+

@@ -13,7 +13,7 @@ import { PositionsTab } from "./PositionsTab";
 import { RunModal } from "./RunModal";
 import { SettingsTab } from "./SettingsTab";
 import { Btn, Dropdown, MenuDivider, MenuItem, Modal, OnOffSwitch, Pill, TextPromptModal, Toasts, type ToastItem } from "./primitives";
-import { outcomeInfo, TYPE_LABEL, type BotDetailData } from "./model";
+import { attentionDetail, outcomeInfo, TYPE_LABEL, type BotDetailData } from "./model";
 import { usePolling } from "../usePolling";
 import { EXIT_OPTIONS_NOTE, botExitTriggers } from "@/lib/automation/exitOptionsText";
 
@@ -285,7 +285,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
       {bot.needsAttention && (
         <div className="rounded-xl bg-down-soft px-4 py-3 text-sm text-down">
           <span className="font-semibold">Needs attention</span>
-          {bot.needsAttentionReason ? ` — ${bot.needsAttentionReason}` : ""}. Turning the bot back on clears this flag.
+          {attentionDetail(bot.needsAttentionReason)}
         </div>
       )}
       {bot.configError && !bot.needsAttention && <SetupBanner error={bot.configError} missing={bot.missingSettings} />}
