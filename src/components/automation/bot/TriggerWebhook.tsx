@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { TriggerOption } from "@/lib/automation/types";
 import { SecretUrl } from "../SecretUrl";
 import { WebhookAttachPanel, type AttachedWebhook } from "./WebhookAttachPanel";
-import { buttonClass } from "./primitives";
+import { Btn } from "./primitives";
 
 interface TriggerState {
   current: (AttachedWebhook & { path: string }) | null;
@@ -184,9 +184,9 @@ function TestHook({ webhookId }: { webhookId: string }) {
 
   return (
     <div className="space-y-1.5 border-t border-line pt-3">
-      <button className={buttonClass.secondary} disabled={busy} onClick={run}>
+      <Btn kind="secondary"  disabled={busy} onClick={run}>
         {busy ? "Sending…" : "Test hook"}
-      </button>
+      </Btn>
       <p className="text-xs text-faint">Runs the real path on the mock executor or the Tradier sandbox (paper money), never against real money.</p>
       {result && <p className="text-xs text-muted">{result}</p>}
     </div>

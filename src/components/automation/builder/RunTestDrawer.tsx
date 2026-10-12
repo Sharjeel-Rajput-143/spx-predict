@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Checkbox, Drawer, Field, Pill, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Checkbox, Drawer, Field, inputClass, Pill } from "../bot/primitives";
 import { previewTrace, type BotInput, type Step } from "./model";
 
 /** "Test Automation": pick a bot, keep the safety box checked, start. In this
@@ -28,13 +28,13 @@ export function RunTestDrawer({ steps, inputs = [], currentBotId, currentBotName
       onClose={onClose}
       footer={
         result ? (
-          <button className={`${buttonClass.secondary} w-full`} onClick={() => setResult(null)}>
+          <Btn kind="secondary" className="w-full"  onClick={() => setResult(null)}>
             Back
-          </button>
+          </Btn>
         ) : (
-          <button className={`${buttonClass.primary} w-full`} onClick={() => setResult(previewTrace(steps, inputs))}>
+          <Btn kind="primary" className="w-full"  onClick={() => setResult(previewTrace(steps, inputs))}>
             Start test
-          </button>
+          </Btn>
         )
       }
     >

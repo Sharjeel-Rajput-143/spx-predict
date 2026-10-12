@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { IconChevronDown, IconChevronRight, IconLink } from "@/components/icons";
 import { cn } from "@/lib/format";
-import { Drawer, Field, InfoTip, TextPromptModal, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, Field, InfoTip, inputClass, TextPromptModal } from "../bot/primitives";
 import { ENTRY_CRITERIA, POSITION_CRITERIA, critKey, critValueKey, enabledCriteria, type Criterion } from "./criteria";
 import { POSITION_TYPES, val, type BotInput, type Step } from "./model";
 
@@ -159,13 +159,13 @@ export function OpenPositionDrawer({
       wide
       footer={
         readOnly ? (
-          <button className={`${buttonClass.secondary} w-full`} onClick={onClose}>
+          <Btn kind="secondary" className="w-full"  onClick={onClose}>
             Close
-          </button>
+          </Btn>
         ) : (
-          <button className={`${buttonClass.primary} w-full`} onClick={() => onSave(config)}>
+          <Btn kind="primary" className="w-full"  onClick={() => onSave(config)}>
             Save
-          </button>
+          </Btn>
         )
       }
     >

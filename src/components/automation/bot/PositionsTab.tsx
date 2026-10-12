@@ -10,22 +10,7 @@ import { ACTIVE_POSITION_STATUSES, type BotStaticConfig, type Order, type Positi
 import type { BotContext } from "./BotDetail";
 import { LegPills } from "./LegPills";
 import { PositionDetails, type PositionBot } from "./PositionDetails";
-import {
-  Checkbox,
-  Dropdown,
-  Drawer,
-  Field,
-  InfoTip,
-  KeyValue,
-  MenuItem,
-  Modal,
-  Pill,
-  Td,
-  Th,
-  buttonClass,
-  inputClass,
-  type ToastItem,
-} from "./primitives";
+import { Btn, Checkbox, Drawer, Dropdown, Field, InfoTip, inputClass, KeyValue, MenuItem, Modal, Pill, Td, Th, type ToastItem } from "./primitives";
 import { NO_PRICE_TIP, TYPE_LABEL, etDateTime, etDayKey, etShortTime, groupByDay, num, pctText, plClass, plText, usd, usd2 } from "./model";
 
 /** Phase 1 has no option chain, so an open position's mark, P/L and net
@@ -155,9 +140,9 @@ export function PositionsView(props: PositionsViewProps) {
           <div className="flex items-center gap-4">
             <Checkbox checked={showTags} onChange={setShowTags} label="Show tags" />
             {newPosition && (
-              <button className={cn(buttonClass.secondary, "flex items-center gap-1.5 !py-1.5")} onClick={() => setAdding(true)}>
+              <Btn kind="secondary" className="flex items-center gap-1.5 !py-1.5"  onClick={() => setAdding(true)}>
                 <IconPlus width={14} height={14} /> New position
-              </button>
+              </Btn>
             )}
           </div>
         </div>
@@ -443,12 +428,12 @@ function NewPositionModal({
       onClose={onClose}
       footer={
         <>
-          <button className={buttonClass.secondary} onClick={onClose}>
+          <Btn kind="secondary"  onClick={onClose}>
             Cancel
-          </button>
-          <button className={buttonClass.primary} onClick={submit} disabled={busy || !valid}>
+          </Btn>
+          <Btn kind="primary"  onClick={submit} disabled={busy || !valid}>
             {busy ? "Opening..." : "Open position"}
-          </button>
+          </Btn>
         </>
       }
     >

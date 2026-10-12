@@ -1,10 +1,18 @@
+"use client";
+
+import { Card as AntCard, Segmented as AntSegmented } from "antd";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/format";
 import type { Outcome } from "@/lib/types";
 import { IconArrowDown, IconArrowUp, IconCheck, IconX } from "./icons";
 
+/** A panel: Ant Design's Card with no padding of its own (a screen adds its own, as a class, exactly as before). */
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn("rounded-2xl border border-line bg-surface", className)}>{children}</div>;
+  return (
+    <AntCard variant="outlined" className={className} styles={{ body: { padding: 0 } }}>
+      {children}
+    </AntCard>
+  );
 }
 
 export function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
@@ -100,23 +108,5 @@ export function Segmented<T extends string>({
   value: T;
   onChange: (v: T) => void;
 }) {
-  return (
-    <div className="inline-flex rounded-xl bg-surface-2 p-1" role="tablist">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          role="tab"
-          aria-selected={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
-            value === o.value ? "bg-surface text-fg shadow-sm" : "text-muted hover:text-fg",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
+  return <AntSegmented<T> options={options} value={value} onChange={onChange} />;
 }
-

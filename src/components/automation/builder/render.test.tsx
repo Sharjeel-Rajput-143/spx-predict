@@ -26,7 +26,7 @@ describe("Add Automation slide-over", () => {
     expect(out).toContain(">New<");
     expect(out).toContain('aria-label="Schedule"');
     expect(out).toContain("Select a schedule");
-    expect(out).toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Save(?:<\/span>)?<\/button>/);
     expect(out).toContain("Preview");
   });
 });
@@ -73,7 +73,7 @@ describe("Decision slide-over", () => {
   });
 
   it("can't be saved empty, and a read-only view has no add or save", () => {
-    expect(html(<DecisionDrawer title="Decision" heading="h" initial={[]} onSave={noop} onClose={noop} />)).toMatch(/<button[^>]*disabled[^>]*>Save<\/button>/);
+    expect(html(<DecisionDrawer title="Decision" heading="h" initial={[]} onSave={noop} onClose={noop} />)).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Save(?:<\/span>)?<\/button>/);
     const ro = html(<DecisionDrawer title="Decision" heading="h" initial={[newCondition("bot_time")]} readOnly onSave={noop} onClose={noop} />);
     expect(ro).not.toContain('aria-label="Add condition"');
     expect(ro).not.toContain(">Save<");

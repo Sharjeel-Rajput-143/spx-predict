@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
+import { AntdProvider } from "@/components/antd/AntdProvider";
 import { GameProvider } from "@/components/GameProvider";
 import { APP_NAME } from "@/lib/config";
 
@@ -30,9 +31,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="font-sans antialiased">
-        <GameProvider>
-          <AppShell>{children}</AppShell>
-        </GameProvider>
+        <AntdProvider>
+          <GameProvider>
+            <AppShell>{children}</AppShell>
+          </GameProvider>
+        </AntdProvider>
       </body>
     </html>
   );

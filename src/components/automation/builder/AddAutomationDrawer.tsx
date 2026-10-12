@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconAutomation, IconChevronDown, IconFolder, IconSearch } from "@/components/icons";
 import { cn } from "@/lib/format";
-import { Drawer, EscapeLayer, Field, Pill, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, EscapeLayer, Field, inputClass, Pill } from "../bot/primitives";
 import type { AutomationDraft } from "./model";
 import { SCHEDULES, attach, loadAttached, loadLibrary, type Attachment } from "./store";
 
@@ -77,9 +77,9 @@ export function AddAutomationDrawer({
       title="Add automation"
       onClose={onClose}
       footer={
-        <button className={`${buttonClass.primary} w-full`} onClick={save} disabled={!selected || !schedule}>
+        <Btn kind="primary" className="w-full"  onClick={save} disabled={!selected || !schedule}>
           Save
-        </button>
+        </Btn>
       }
     >
       <div className="space-y-5">
@@ -136,9 +136,9 @@ export function AddAutomationDrawer({
                 </>
               )}
             </div>
-            <button className={cn(buttonClass.secondary, "shrink-0")} onClick={onNew}>
+            <Btn kind="secondary" className="shrink-0"  onClick={onNew}>
               New
-            </button>
+            </Btn>
           </div>
         </Field>
 

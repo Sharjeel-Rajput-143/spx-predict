@@ -425,12 +425,12 @@ describe("the trigger panel (laid out like Option Alpha's Edit Settings)", () =>
     expect(out).toContain("Choose a webhook...");
     expect(out).not.toContain("URL-SLOT");
     expect(out).not.toContain("TEST-SLOT");
-    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>Detach webhook<\/button>/);
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>(?:<span>)?Detach webhook(?:<\/span>)?<\/button>/);
   });
 
   it("Save is only enabled for a change", () => {
-    expect(panel({ saveDisabled: true })).toMatch(/<button[^>]*disabled=""[^>]*>Save<\/button>/);
-    expect(panel({ saveDisabled: false })).not.toMatch(/<button[^>]*disabled=""[^>]*>Save<\/button>/);
+    expect(panel({ saveDisabled: true })).toMatch(/<button[^>]*disabled=""[^>]*>(?:<span>)?Save(?:<\/span>)?<\/button>/);
+    expect(panel({ saveDisabled: false })).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:<span>)?Save(?:<\/span>)?<\/button>/);
   });
 
   it("with no webhooks at all the list points to +", () => {

@@ -64,7 +64,7 @@ describe("Position details panel", () => {
     const out = render(open);
     expect(out).toContain('aria-label="Copy position summary"');
     expect(out).toContain(">Close position<");
-    expect(out).toMatch(/<button[^>]*disabled[^>]*>Override<\/button>/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Override(?:<\/span>)?<\/button>/);
   });
 
   it("numbers it can't know are dashes with an explanation, never estimates", () => {
@@ -92,7 +92,7 @@ describe("Position details panel", () => {
     expect(out).toContain("+22.7%"); // 150 / 660
     expect(out).toContain("+17.9%"); // 150 / 840
     expect(out).not.toContain(">Close position<");
-    expect(out).toMatch(/<button[^>]*disabled[^>]*title="Only an open position can be moved"[^>]*>Move<\/button>|<button[^>]*title="Only an open position can be moved"[^>]*disabled/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*title="Only an open position can be moved"[^>]*>(?:<span>)?Move(?:<\/span>)?<\/button>|<button[^>]*title="Only an open position can be moved"[^>]*disabled/);
   });
 
   it("with no known credit there is nothing to draw, rather than a guess", () => {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconChevronDown, IconMore, IconPlus } from "@/components/icons";
 import { cn } from "@/lib/format";
-import { Dropdown, MenuDivider, MenuItem, Modal, Pill, TextPromptModal, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Dropdown, inputClass, MenuDivider, MenuItem, Modal, Pill, TextPromptModal } from "../bot/primitives";
 import { AddStepDrawer } from "./AddStepDrawer";
 import { ClosePositionDrawer } from "./ClosePositionDrawer";
 import { DecisionDrawer } from "./DecisionDrawer";
@@ -196,9 +196,9 @@ export function AutomationBuilder({
         {saved && <span className="text-xs text-up">Saved</span>}
         {flash && <span className="text-xs text-muted">{flash}</span>}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
-          <button className={cn(buttonClass.secondary, "inline-flex items-center gap-2 font-semibold md:hidden")} onClick={() => setRailOpen((o) => !o)} aria-expanded={railOpen}>
+          <Btn kind="secondary" className="inline-flex items-center gap-2 font-semibold md:hidden"  onClick={() => setRailOpen((o) => !o)} aria-expanded={railOpen}>
             Details
-          </button>
+          </Btn>
           {!readOnly && (
             <label className="relative inline-flex items-center rounded-lg border border-line bg-surface text-muted hover:bg-surface-2" title="Folder">
               <span className="pointer-events-none absolute left-3">
@@ -226,20 +226,20 @@ export function AutomationBuilder({
               <IconChevronDown width={14} height={14} className="pointer-events-none absolute right-2.5" />
             </label>
           )}
-          <button aria-label="Run Test" className={cn(buttonClass.secondary, "inline-flex items-center gap-2 font-semibold")} onClick={() => setTesting(true)}>
+          <Btn kind="secondary" className="inline-flex items-center gap-2 font-semibold" aria-label="Run Test"  onClick={() => setTesting(true)}>
             <BugGlyph />
             <span className="hidden sm:inline">Run Test</span>
-          </button>
+          </Btn>
           {!readOnly && (
-            <button className={cn(buttonClass.primary, "inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28")} onClick={save}>
+            <Btn kind="primary" className="inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28"  onClick={save}>
               <SaveGlyph />
               <span>Save</span>
-            </button>
+            </Btn>
           )}
-          <button className={cn(buttonClass.secondary, "inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28")} onClick={() => (dirty && !readOnly ? setConfirmClose(true) : onClose())}>
+          <Btn kind="secondary" className="inline-flex items-center justify-center gap-2 font-semibold sm:min-w-28"  onClick={() => (dirty && !readOnly ? setConfirmClose(true) : onClose())}>
             <span aria-hidden className="text-base leading-none">×</span>
             Close
-          </button>
+          </Btn>
         </div>
       </header>
 
@@ -431,21 +431,21 @@ export function AutomationBuilder({
           onClose={() => setConfirmClose(false)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setConfirmClose(false)}>
+              <Btn kind="secondary"  onClick={() => setConfirmClose(false)}>
                 Keep editing
-              </button>
-              <button className={buttonClass.secondary} onClick={onClose}>
+              </Btn>
+              <Btn kind="secondary"  onClick={onClose}>
                 Discard
-              </button>
-              <button
-                className={buttonClass.primary}
+              </Btn>
+              <Btn kind="primary"
+                
                 onClick={() => {
                   save();
                   onClose();
                 }}
               >
                 Save and close
-              </button>
+              </Btn>
             </>
           }
         >
@@ -524,17 +524,17 @@ function NotesModal({ step, readOnly, onSave, onClose }: { step: Step; readOnly:
       onClose={onClose}
       footer={
         readOnly ? (
-          <button className={buttonClass.secondary} onClick={onClose}>
+          <Btn kind="secondary"  onClick={onClose}>
             Close
-          </button>
+          </Btn>
         ) : (
           <>
-            <button className={buttonClass.secondary} onClick={onClose}>
+            <Btn kind="secondary"  onClick={onClose}>
               Cancel
-            </button>
-            <button className={buttonClass.primary} onClick={() => onSave(text)}>
+            </Btn>
+            <Btn kind="primary"  onClick={() => onSave(text)}>
               Save
-            </button>
+            </Btn>
           </>
         )
       }

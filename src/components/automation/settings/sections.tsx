@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
-import { Checkbox, Field, KeyValue, Pill, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Checkbox, Field, inputClass, KeyValue, Pill } from "../bot/primitives";
 import { clock12 } from "../builder/builtin";
 import { EditWebhookDrawer, NewWebhookDrawer, WebhookIntro, WebhookRow } from "./WebhookList";
 
@@ -54,8 +54,8 @@ function SaveBar({ onSave, disabled, label = "Save" }: { onSave: () => Promise<s
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <button
-        className={buttonClass.primary}
+      <Btn kind="primary"
+        
         disabled={busy || disabled}
         onClick={async () => {
           setBusy(true);
@@ -65,7 +65,7 @@ function SaveBar({ onSave, disabled, label = "Save" }: { onSave: () => Promise<s
         }}
       >
         {busy ? "Saving..." : label}
-      </button>
+      </Btn>
       {state && <span className={cn("text-sm", state.tone === "ok" ? "text-up" : "text-down")}>{state.text}</span>}
     </>
   );
@@ -109,9 +109,9 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
           <>
             <SaveBar onSave={() => save({ tradingWindow: { start: from, end: to } })} disabled={from >= to} />
             {data.window.source === "settings" && (
-              <button className={buttonClass.secondary} onClick={() => save({ tradingWindow: null })}>
+              <Btn kind="secondary"  onClick={() => save({ tradingWindow: null })}>
                 Use the environment default
-              </button>
+              </Btn>
             )}
           </>
         }
@@ -232,9 +232,9 @@ export function AccountsSection({ data, broker, onRefresh }: { data: SettingsDat
           title="Broker account"
           hint={x.sandbox ? "Tradier's sandbox: a paper account with a test balance. No real money." : "Tradier PRODUCTION: a real account."}
           footer={
-            <button className={buttonClass.secondary} onClick={onRefresh} disabled={!onRefresh}>
+            <Btn kind="secondary"  onClick={onRefresh} disabled={!onRefresh}>
               Refresh
-            </button>
+            </Btn>
           }
         >
           {!broker ? (
@@ -278,9 +278,9 @@ export function AccountsSection({ data, broker, onRefresh }: { data: SettingsDat
             </li>
           ))}
         </ul>
-        <button className={buttonClass.secondary} disabled title="Brokerage accounts can't be connected yet: the broker decision is still open.">
+        <Btn kind="secondary"  disabled title="Brokerage accounts can't be connected yet: the broker decision is still open.">
           Add account
-        </button>
+        </Btn>
         <p className="text-xs text-muted">Connecting a brokerage account waits on the broker decision. A bot&apos;s account is set in its own settings.</p>
       </Section>
     </div>
@@ -315,18 +315,18 @@ export function ArchiveSection({ bots, onRestore, onDelete }: { bots: ArchivedBo
                 </div>
               </div>
               <div className="flex gap-2">
-                <button className={buttonClass.secondary} onClick={() => onRestore(b.id)}>
+                <Btn kind="secondary"  onClick={() => onRestore(b.id)}>
                   Restore
-                </button>
+                </Btn>
                 {!b.builtIn && (
-                  <button
-                    className={buttonClass.secondary}
+                  <Btn kind="secondary"
+                    
                     onClick={() => {
                       if (window.confirm(`Delete "${b.name}" and its history? This can't be undone.`)) onDelete(b.id);
                     }}
                   >
                     Delete
-                  </button>
+                  </Btn>
                 )}
               </div>
             </li>
@@ -392,9 +392,9 @@ export function WebhooksSection({
       <Section title="Webhooks">
         <WebhookIntro />
         <div>
-          <button className={buttonClass.primary} onClick={() => setCreating(true)}>
+          <Btn kind="primary"  onClick={() => setCreating(true)}>
             New Webhook
-          </button>
+          </Btn>
         </div>
         {hooks.length > 0 && (
           <ul>
@@ -417,8 +417,8 @@ function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string) =>
   const [result, setResult] = useState<string | null>(null);
   return (
     <div className="space-y-1.5 border-t border-line pt-2">
-      <button
-        className={buttonClass.secondary}
+      <Btn kind="secondary"
+        
         disabled={busy}
         aria-label={`Send a test call for ${hook.name}`}
         onClick={async () => {
@@ -428,7 +428,7 @@ function TestCall({ hook, onTest }: { hook: WebhookView; onTest: (id: string) =>
         }}
       >
         {busy ? "Sending…" : "Send a test call"}
-      </button>
+      </Btn>
       {result && <p className="text-xs text-muted">{result}</p>}
     </div>
   );

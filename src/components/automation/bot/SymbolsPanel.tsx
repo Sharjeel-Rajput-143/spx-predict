@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { IconChevronDown } from "@/components/icons";
-import { Checkbox, Drawer, Dropdown, Field, InfoTip, MenuItem, Pill, buttonClass, inputClass } from "./primitives";
+import { Btn, Checkbox, Drawer, Dropdown, Field, InfoTip, inputClass, MenuItem, Pill } from "./primitives";
 import { DEFAULT_SYMBOL_SETTINGS, loadRecentSymbols, loadSymbolSettings, saveSymbolSettings, type SymbolSettings } from "../builder/store";
 
 const watchlists = (underlying: string) => [`${underlying} only`, "Index options (SPX, XSP, NDX)", "Mega-cap tech", "My watchlist"];
@@ -60,9 +60,9 @@ export function SymbolsPanel({ botId, underlying = "SPX", onSaved, onClose }: { 
       onClose={onClose}
       wide
       footer={
-        <button className={`${buttonClass.primary} w-full`} onClick={save}>
+        <Btn kind="primary" className="w-full"  onClick={save}>
           Save
-        </button>
+        </Btn>
       }
     >
       <div className="space-y-6">

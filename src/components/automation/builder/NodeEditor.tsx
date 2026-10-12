@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Drawer, Field, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, Field, inputClass } from "../bot/primitives";
 import { stepInfo, type Step } from "./model";
 
 /** Edits a step's settings (conditions use the picker instead). */
@@ -84,13 +84,13 @@ export function NodeEditor({ step, readOnly, onSave, onClose }: { step: Step; re
       onClose={onClose}
       footer={
         readOnly ? (
-          <button className={`${buttonClass.secondary} w-full`} onClick={onClose}>
+          <Btn kind="secondary" className="w-full"  onClick={onClose}>
             Close
-          </button>
+          </Btn>
         ) : (
-          <button className={`${buttonClass.primary} w-full`} onClick={() => onSave(c)}>
+          <Btn kind="primary" className="w-full"  onClick={() => onSave(c)}>
             Save
-          </button>
+          </Btn>
         )
       }
     >

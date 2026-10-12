@@ -1,3 +1,6 @@
+/* Layer order: Ant Design sits between Tailwind's base and its utilities, so Tailwind classes always win over it. */
+@layer theme, base, antd, components, utilities;
+
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -115,3 +118,14 @@ button:disabled,
 select:disabled {
   cursor: not-allowed;
 }
+
+/* Ant Design's drawer header on a narrow screen: the title keeps its own line and the buttons wrap under it, never over it. */
+.app-drawer .ant-drawer-header {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+.app-drawer .ant-drawer-header-title {
+  flex: 1 1 auto;
+  min-width: max-content;
+}
+

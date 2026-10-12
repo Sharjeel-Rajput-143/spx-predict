@@ -6,7 +6,7 @@ import { PageHeader, headerButtonClass } from "@/components/automation/PageHeade
 import { AutomationBuilder } from "@/components/automation/builder/AutomationBuilder";
 import type { AutomationDraft } from "@/components/automation/builder/model";
 import { blankDraft, deleteDraft, loadLibrary } from "@/components/automation/builder/store";
-import { Modal, Pill, buttonClass } from "@/components/automation/bot/primitives";
+import { Btn, Modal, Pill } from "@/components/automation/bot/primitives";
 import { IconFolder, IconPlus, IconSad } from "@/components/icons";
 import { Card } from "@/components/ui";
 
@@ -44,9 +44,9 @@ export function AutomationLibraryPage() {
             <Link href="/automations/templates" className={headerButtonClass}>
               Templates
             </Link>
-            <button className={`${buttonClass.primary} flex items-center gap-1.5`} onClick={() => setEditing(blankDraft())}>
+            <Btn kind="primary" className="flex items-center gap-1.5"  onClick={() => setEditing(blankDraft())}>
               <IconPlus width={14} height={14} /> New automation
-            </button>
+            </Btn>
           </>
         }
       />
@@ -109,11 +109,11 @@ export function AutomationLibraryPage() {
           onClose={() => setDeleting(null)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setDeleting(null)}>
+              <Btn kind="secondary"  onClick={() => setDeleting(null)}>
                 Cancel
-              </button>
-              <button
-                className={buttonClass.danger}
+              </Btn>
+              <Btn kind="danger"
+                
                 onClick={() => {
                   deleteDraft(deleting.id);
                   setDeleting(null);
@@ -121,7 +121,7 @@ export function AutomationLibraryPage() {
                 }}
               >
                 Delete
-              </button>
+              </Btn>
             </>
           }
         >

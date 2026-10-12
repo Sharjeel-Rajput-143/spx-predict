@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/format";
 import type { Decision } from "@/lib/automation/types";
-import { Field, Modal, Pill, buttonClass, inputClass } from "./primitives";
+import { Btn, Field, inputClass, Modal, Pill } from "./primitives";
 import { outcomeInfo } from "./model";
 
 /** "Run Automation": pushes one signal through the engine now, exactly as if
@@ -60,17 +60,17 @@ export function RunModal({
       onClose={onClose}
       footer={
         decisions ? (
-          <button className={buttonClass.primary} onClick={onClose}>
+          <Btn kind="primary"  onClick={onClose}>
             Done
-          </button>
+          </Btn>
         ) : (
           <>
-            <button className={buttonClass.secondary} onClick={onClose}>
+            <Btn kind="secondary"  onClick={onClose}>
               Cancel
-            </button>
-            <button className={buttonClass.primary} onClick={run} disabled={busy}>
+            </Btn>
+            <Btn kind="primary"  onClick={run} disabled={busy}>
               {busy ? "Running..." : "Run"}
-            </button>
+            </Btn>
           </>
         )
       }

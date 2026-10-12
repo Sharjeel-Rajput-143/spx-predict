@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AccountIcon, accountLabel } from "@/components/automation/accounts";
-import { Drawer, Dropdown, Field, InfoTip, MenuItem, buttonClass, inputClass } from "@/components/automation/bot/primitives";
+import { Btn, Drawer, Dropdown, Field, InfoTip, inputClass, MenuItem } from "@/components/automation/bot/primitives";
 import { IconAutomation, IconChevronDown, IconChevronRight, IconCopy, IconFolder, IconSad } from "@/components/icons";
 import type { BotSummary } from "@/lib/automation/summary";
 import type { BotTemplate } from "@/lib/automation/types";
@@ -174,9 +174,9 @@ function BotForm({
       onClose={onClose}
       onBack={onBack}
       footer={
-        <button className={`${buttonClass.primary} w-full`} onClick={submit} disabled={busy}>
+        <Btn kind="primary" className="w-full"  onClick={submit} disabled={busy}>
           {busy ? "Creating..." : "Create bot"}
-        </button>
+        </Btn>
       }
     >
       <div className="space-y-5">

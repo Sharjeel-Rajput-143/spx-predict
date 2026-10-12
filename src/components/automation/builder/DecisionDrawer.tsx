@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { IconPlus } from "@/components/icons";
-import { Drawer, buttonClass } from "../bot/primitives";
+import { Btn, Drawer } from "../bot/primitives";
 import { ConditionPicker } from "./ConditionPicker";
 import { describeCondition, type Condition } from "./model";
 
@@ -32,13 +32,13 @@ export function DecisionDrawer({
       onClose={onClose}
       footer={
         readOnly ? (
-          <button className={`${buttonClass.secondary} w-full`} onClick={onClose}>
+          <Btn kind="secondary" className="w-full"  onClick={onClose}>
             Close
-          </button>
+          </Btn>
         ) : (
-          <button className={`${buttonClass.primary} w-full`} onClick={() => onSave(conditions)} disabled={conditions.length === 0}>
+          <Btn kind="primary" className="w-full"  onClick={() => onSave(conditions)} disabled={conditions.length === 0}>
             Save
-          </button>
+          </Btn>
         )
       }
     >

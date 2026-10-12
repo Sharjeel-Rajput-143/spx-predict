@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Drawer, Modal, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, inputClass, Modal } from "../bot/primitives";
 import type { BotContext } from "../bot/BotDetail";
 import type { ClosePricing } from "@/lib/automation/closePricing";
 import { validateOpenSettings, type ExitOptions, type LongStrikeMethod, type OpenSettings, type ShortStrikeMethod, type Side, type SizeMethod } from "@/lib/automation/openSettings";
@@ -97,7 +97,7 @@ function ExitModal({ exit, onApply, onClose }: { exit: ExitOptions; onApply: (e:
   const draft: ExitOptions = { ...(pOn ? { profitPercent: num(p) } : {}), ...(pdOn ? { profitDollars: num(pd) } : {}), ...(sOn ? { stopPercent: num(s) } : {}), ...(sdOn ? { stopDollars: num(sd) } : {}), ...(tOn ? { touchPoints: num(t) } : {}), ...(eOn ? { expirationMinutes: num(e) } : {}) };
   const checked = validateOpenSettings({ exit: draft });
   return (
-    <Modal title="Exit Options" onClose={onClose} footer={<button className={`${buttonClass.primary} px-8`} disabled={!checked.ok} onClick={() => checked.ok && onApply(checked.value.exit ?? {})}>Save</button>}>
+    <Modal title="Exit Options" onClose={onClose} footer={<Btn kind="primary" className="px-8"  disabled={!checked.ok} onClick={() => checked.ok && onApply(checked.value.exit ?? {})}>Save</Btn>}>
       <div className="space-y-4">
         <p className="text-sm text-muted">Your bot checks your position every 1 minute from 9:31am to 1 minute before market close and automatically attempts to close it if any of these criteria are met.</p>
         <div className="text-sm font-semibold">Profit Taking</div>
@@ -278,7 +278,7 @@ export function OpenEditor({ direction, ctx, onClose }: { direction: Direction; 
     </>
   );
 
-  const subDone = <button className={`${buttonClass.primary} mx-auto block w-2/3`} onClick={() => setView(null)}>Save</button>;
+  const subDone = <Btn kind="primary" className="mx-auto block w-2/3"  onClick={() => setView(null)}>Save</Btn>;
 
   return (
     <>
@@ -288,13 +288,13 @@ export function OpenEditor({ direction, ctx, onClose }: { direction: Direction; 
         onClose={onClose}
         footer={
           <div className="space-y-2">
-            <button className={`${buttonClass.primary} mx-auto block w-2/3`} disabled={busy || !checked.ok} onClick={() => checked.ok && save(checked.value)}>
+            <Btn kind="primary" className="mx-auto block w-2/3"  disabled={busy || !checked.ok} onClick={() => checked.ok && save(checked.value)}>
               {busy ? "Saving..." : "Save"}
-            </button>
+            </Btn>
             {saved && (
-              <button className={`${buttonClass.secondary} mx-auto block w-2/3`} disabled={busy} onClick={() => save(null)}>
+              <Btn kind="secondary" className="mx-auto block w-2/3"  disabled={busy} onClick={() => save(null)}>
                 Back to the bot&apos;s own inputs
-              </button>
+              </Btn>
             )}
           </div>
         }

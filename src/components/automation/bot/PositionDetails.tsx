@@ -11,7 +11,7 @@ import { positionPL, positionPLKind, positionPremium, positionQuantity, position
 import type { Order, Position, Signal } from "@/lib/automation/types";
 import { POSITION_TYPES } from "../builder/model";
 import { PayoffChart } from "./PayoffChart";
-import { Drawer, InfoTip, Modal, Pill, buttonClass, inputClass, type ToastItem } from "./primitives";
+import { Btn, Drawer, InfoTip, inputClass, Modal, Pill, type ToastItem } from "./primitives";
 import { LegPills } from "./LegPills";
 import { NO_PRICE_TIP, TYPE_LABEL, etDateTime, etDayKey, num, pctText, plClass, plText, usd, usd2 } from "./model";
 
@@ -97,13 +97,13 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         <IconCopy width={15} height={15} />
       </button>
       {closable && (
-        <button onClick={() => setConfirmingClose(true)} className={cn(buttonClass.secondary, "whitespace-nowrap !border-down/40 !py-1.5 text-down")}>
+        <Btn kind="secondary" className="whitespace-nowrap !border-down/40 !py-1.5 text-down" onClick={() => setConfirmingClose(true)} >
           Close position
-        </button>
+        </Btn>
       )}
-      <button disabled title="Overriding a position's status isn't available in Phase 1" className={cn(buttonClass.secondary, "whitespace-nowrap !py-1.5")}>
+      <Btn kind="secondary" className="whitespace-nowrap !py-1.5" disabled title="Overriding a position's status isn't available in Phase 1" >
         Override
-      </button>
+      </Btn>
     </>
   );
 
@@ -239,14 +239,14 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
                 </span>
               )}
             </div>
-            <button
-              className={cn(buttonClass.secondary, "!py-1.5")}
+            <Btn kind="secondary" className="!py-1.5"
+              
               onClick={() => setMoving(true)}
               disabled={p.status !== "open"}
               title={p.status === "open" ? "Move this position to another bot" : "Only an open position can be moved"}
             >
               Move
-            </button>
+            </Btn>
           </div>
         </section>
 
@@ -296,12 +296,12 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
           onClose={() => setConfirmingClose(false)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setConfirmingClose(false)}>
+              <Btn kind="secondary"  onClick={() => setConfirmingClose(false)}>
                 Cancel
-              </button>
-              <button className={buttonClass.danger} onClick={doClose} disabled={closing}>
+              </Btn>
+              <Btn kind="danger"  onClick={doClose} disabled={closing}>
                 {closing ? "Closing..." : "Close position"}
-              </button>
+              </Btn>
             </>
           }
         >
@@ -382,9 +382,9 @@ function DeleteBlock({ position: p, onChanged, onClose, notify }: { position: Po
   };
   return (
     <div className="border-t border-line pt-4">
-      <button className={buttonClass.secondary} disabled={busy} onClick={remove}>
+      <Btn kind="secondary"  disabled={busy} onClick={remove}>
         Delete position
-      </button>
+      </Btn>
     </div>
   );
 }
@@ -415,12 +415,12 @@ function NotesBlock({ position: p, onChanged, notify }: { position: Position; on
         <div className="space-y-2">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={4} className={inputClass} autoFocus aria-label="Notes" />
           <div className="flex justify-end gap-2">
-            <button className={buttonClass.secondary} onClick={() => { setDraft(p.notes ?? ""); setEditing(false); }}>
+            <Btn kind="secondary"  onClick={() => { setDraft(p.notes ?? ""); setEditing(false); }}>
               Cancel
-            </button>
-            <button className={buttonClass.primary} onClick={save}>
+            </Btn>
+            <Btn kind="primary"  onClick={save}>
               Save
-            </button>
+            </Btn>
           </div>
         </div>
       ) : p.notes ? (
@@ -483,12 +483,12 @@ function MoveModal({ position: p, currentBot, onClose, onMoved, notify }: { posi
       onClose={onClose}
       footer={
         <>
-          <button className={buttonClass.secondary} onClick={onClose}>
+          <Btn kind="secondary"  onClick={onClose}>
             Cancel
-          </button>
-          <button className={buttonClass.primary} onClick={move} disabled={!target || busy}>
+          </Btn>
+          <Btn kind="primary"  onClick={move} disabled={!target || busy}>
             {busy ? "Moving..." : "Move"}
-          </button>
+          </Btn>
         </>
       }
     >

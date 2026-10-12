@@ -5,7 +5,7 @@ import { useState } from "react";
 import { IconInfo } from "@/components/icons";
 import { cn } from "@/lib/format";
 import type { Run, TraceAction, TraceDecision } from "@/lib/automation/types";
-import { Drawer, Pill, buttonClass } from "./primitives";
+import { Btn, Drawer, Pill } from "./primitives";
 import { etDateTime, outcomeInfo } from "./model";
 
 type View = { name: "trace" } | { name: "decision"; node: TraceDecision };
@@ -140,14 +140,14 @@ function ActionCard({ node, exists, onViewPosition }: { node: TraceAction; exist
         </div>
       )}
       {node.positionId && (
-        <button
+        <Btn kind="secondary" className="mt-3 !px-3 !py-1.5"
           onClick={() => onViewPosition(node.positionId!)}
           disabled={!exists}
           title={exists ? undefined : "This position is no longer in the list"}
-          className={cn(buttonClass.secondary, "mt-3 !px-3 !py-1.5")}
+          
         >
           View position
-        </button>
+        </Btn>
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Drawer, InfoTip, Modal, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, InfoTip, inputClass, Modal } from "../bot/primitives";
 import { TRADE_OPS, describeFinals, validateClosePricing, type CloseSpeed, type ClosePricing, type TradeOp } from "@/lib/automation/closePricing";
 import type { BotContext } from "../bot/BotDetail";
 import type { BotInputs } from "@/lib/automation/types";
@@ -33,7 +33,7 @@ export function Shell({ title, ctx, onClose, footer, children }: { title: string
 
 export function NeedsInputs({ ctx, onClose }: { ctx: BotContext; onClose: () => void }) {
   return (
-    <Drawer title="Not set up yet" onClose={onClose} footer={<button className={`${buttonClass.secondary} w-full`} onClick={onClose}>Close</button>}>
+    <Drawer title="Not set up yet" onClose={onClose} footer={<Btn kind="secondary" className="w-full"  onClick={onClose}>Close</Btn>}>
       <p className="text-sm text-muted">{ctx.data.bot.configError ?? "This bot has no trading inputs yet."} Set them first under Settings &gt; Bot inputs; then this step can be edited here.</p>
     </Drawer>
   );
@@ -87,7 +87,7 @@ export function SmartPricingModal({ pricing, onApply, onClose, forOpen }: { pric
   const small = `${inputClass} !w-24`;
 
   return (
-    <Modal title="SmartPricing" onClose={onClose} footer={<button className={`${buttonClass.primary} px-8`} disabled={!market && !checked.ok} onClick={() => onApply(market && !checked.ok ? { speed: "market" } : (checked as { ok: true; pricing: ClosePricing }).pricing)}>Save</button>}>
+    <Modal title="SmartPricing" onClose={onClose} footer={<Btn kind="primary" className="px-8"  disabled={!market && !checked.ok} onClick={() => onApply(market && !checked.ok ? { speed: "market" } : (checked as { ok: true; pricing: ClosePricing }).pricing)}>Save</Btn>}>
       <div className="space-y-5">
         <p className="text-sm text-muted">The bot places timed, limit orders traversing the bid/ask spread to the final price set below.</p>
         <select className={inputClass} value={speed} onChange={(e) => setSpeed(e.target.value as CloseSpeed)} aria-label="SmartPricing">

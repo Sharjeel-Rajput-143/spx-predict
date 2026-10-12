@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { IconLink } from "@/components/icons";
-import { Drawer, Dropdown, Field, InfoTip, Modal, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, Dropdown, Field, InfoTip, inputClass, Modal } from "../bot/primitives";
 import { TRADE_OPS, describeFinals, describeQuantity, validateCloseQuantity, validateClosePricing, type CloseSpeed, type ClosePricing, type TradeOp } from "@/lib/automation/closePricing";
 import type { BotContext } from "../bot/BotDetail";
 import type { BotInputs, MonitorKey, StrikeRounding } from "@/lib/automation/types";
@@ -56,13 +56,13 @@ export function TimeWindowEditor({ ctx, onClose }: { ctx: BotContext; onClose: (
       onClose={onClose}
       footer={
         <div className="space-y-2">
-          <button className={`${buttonClass.primary} w-full`} onClick={() => save({ hours: { start: from, end: to } })} disabled={busy || bad}>
+          <Btn kind="primary" className="w-full"  onClick={() => save({ hours: { start: from, end: to } })} disabled={busy || bad}>
             {busy ? "Saving..." : "Save"}
-          </button>
+          </Btn>
           {cfg.hours && (
-            <button className={`${buttonClass.secondary} w-full`} onClick={() => save({ hours: null })} disabled={busy}>
+            <Btn kind="secondary" className="w-full"  onClick={() => save({ hours: null })} disabled={busy}>
               Use the default window ({clock12(fallback.start)} - {clock12(fallback.end)})
-            </button>
+            </Btn>
           )}
         </div>
       }
@@ -126,7 +126,7 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
 
   return (
     <>
-      <Shell title="Close Position" ctx={ctx} onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy || !quantity.ok} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
+      <Shell title="Close Position" ctx={ctx} onClose={onClose} footer={<Btn kind="primary" className="w-full"  disabled={busy || !quantity.ok} onClick={save}>{busy ? "Saving..." : "Save"}</Btn>}>
         <div className="grid grid-cols-[5.5rem_1fr] items-center gap-x-3 gap-y-5 text-sm">
           <span>Position</span>
           <button onClick={() => setLookup(true)} className="inline-flex w-fit max-w-full items-center gap-2 rounded-lg border border-dashed border-accent/50 bg-accent/5 px-3 py-1.5 text-accent" title="Open the position lookup">
@@ -197,7 +197,7 @@ export function CloseEditor({ direction, ctx, onClose }: { direction: Direction;
         />
       )}
       {lookup && (
-        <Drawer title="Position Lookup" onClose={() => setLookup(false)} footer={<button className={`${buttonClass.secondary} w-full`} onClick={() => setLookup(false)}>Close</button>}>
+        <Drawer title="Position Lookup" onClose={() => setLookup(false)} footer={<Btn kind="secondary" className="w-full"  onClick={() => setLookup(false)}>Close</Btn>}>
           <div className="space-y-4 text-sm">
             <p className="text-muted">Finds the positions that match these filters:</p>
             <Row label="Symbol" value={cfg.underlying} />
@@ -240,13 +240,13 @@ export function PositionCheckEditor({ slot, direction, type, ctx, onClose }: { s
       onClose={onClose}
       footer={
         <div className="space-y-2">
-          <button className={`${buttonClass.primary} w-full`} disabled={busy} onClick={() => save(check)}>
+          <Btn kind="primary" className="w-full"  disabled={busy} onClick={() => save(check)}>
             {busy ? "Saving..." : "Save"}
-          </button>
+          </Btn>
           {saved && (
-            <button className={`${buttonClass.secondary} w-full`} disabled={busy} onClick={() => save(null)}>
+            <Btn kind="secondary" className="w-full"  disabled={busy} onClick={() => save(null)}>
               Back to the default{slot === "open" ? ` (${positionsWord(ctx.data.limits.maxPositionsPerType)}, the Per type safeguard)` : ""}
-            </button>
+            </Btn>
           )}
         </div>
       }
@@ -303,7 +303,7 @@ export function MonitorCloseEditor({ monitor, ctx, onClose }: { monitor: Monitor
   };
 
   return (
-    <Drawer title="Close Position" onClose={onClose} footer={<button className={`${buttonClass.primary} w-full`} disabled={busy} onClick={save}>{busy ? "Saving..." : "Save"}</button>}>
+    <Drawer title="Close Position" onClose={onClose} footer={<Btn kind="primary" className="w-full"  disabled={busy} onClick={save}>{busy ? "Saving..." : "Save"}</Btn>}>
       <div className="space-y-5">
         <div className="grid grid-cols-[6rem_1fr] items-center gap-3 text-sm">
           <span>Position</span>

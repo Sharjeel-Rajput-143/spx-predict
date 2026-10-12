@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { IconLink } from "@/components/icons";
-import { Checkbox, Drawer, Field, InfoTip, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Checkbox, Drawer, Field, InfoTip, inputClass } from "../bot/primitives";
 import { POSITION_TYPES, type Step } from "./model";
 
 const PRICES = ["100% of bid/ask", "98% of bid/ask", "95% of bid/ask", "Mid price", "Bid price"];
@@ -22,13 +22,13 @@ export function ClosePositionDrawer({ step, readOnly, onSave, onClose }: { step:
       onClose={onClose}
       footer={
         readOnly ? (
-          <button className={`${buttonClass.secondary} w-full`} onClick={onClose}>
+          <Btn kind="secondary" className="w-full"  onClick={onClose}>
             Close
-          </button>
+          </Btn>
         ) : (
-          <button className={`${buttonClass.primary} w-full`} onClick={() => onSave(c)}>
+          <Btn kind="primary" className="w-full"  onClick={() => onSave(c)}>
             Save
-          </button>
+          </Btn>
         )
       }
     >

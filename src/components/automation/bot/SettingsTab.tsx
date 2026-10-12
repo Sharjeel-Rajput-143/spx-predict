@@ -17,7 +17,7 @@ import { SymbolsPanel } from "./SymbolsPanel";
 import { TriggerWebhook } from "./TriggerWebhook";
 import type { BotAlerts, BotSafeguards, MonitorKey } from "@/lib/automation/types";
 import type { BotContext } from "./BotDetail";
-import { Checkbox, Drawer, Dropdown, Field, InfoTip, KeyValue, MenuItem, Pill, Switch, buttonClass, inputClass } from "./primitives";
+import { Btn, Checkbox, Drawer, Dropdown, Field, InfoTip, inputClass, KeyValue, MenuItem, Pill, Switch } from "./primitives";
 import { num, usd, usd2, type BotDetailData } from "./model";
 
 
@@ -234,12 +234,12 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
         title="Automations"
         action={
           <div className="flex items-center gap-2">
-            <button className={`${buttonClass.secondary} flex items-center gap-1.5 !py-1.5`} onClick={() => setAdding({})}>
+            <Btn kind="secondary" className="flex items-center gap-1.5 !py-1.5"  onClick={() => setAdding({})}>
               <IconPlus width={14} height={14} /> Add automation
-            </button>
-            <button className={`${buttonClass.secondary} !py-1.5`} onClick={() => openRun()}>
+            </Btn>
+            <Btn kind="secondary" className="!py-1.5"  onClick={() => openRun()}>
               Run
-            </button>
+            </Btn>
           </div>
         }
       />
@@ -358,7 +358,7 @@ function MonitorDrawer({ monitor, windowText, ctx, onClose }: { monitor: Monitor
   const on = !!ctx.data.bot.monitors?.[monitor]?.enabled;
   const box = "rounded-lg border border-line bg-bg px-3 py-2.5 text-sm";
   return (
-    <Drawer title="Edit Settings" onClose={onClose} footer={<button className={`${buttonClass.secondary} w-full`} onClick={onClose}>Close</button>}>
+    <Drawer title="Edit Settings" onClose={onClose} footer={<Btn kind="secondary" className="w-full"  onClick={onClose}>Close</Btn>}>
       <div className="space-y-5">
         <section className="space-y-2">
           <h3 className="text-sm font-semibold">Automation</h3>
@@ -400,9 +400,9 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
           saveAlwaysOn={(on) => patch({ alwaysOn: { ...(data.bot.alwaysOn ?? { bullish: true, bearish: true }), [dir]: on } }, "Always On saved.")}
         />
 
-        <button className={`${buttonClass.secondary} w-full`} onClick={() => { onClose(); openRun(dir); }}>
+        <Btn kind="secondary" className="w-full"  onClick={() => { onClose(); openRun(dir); }}>
           Run this trigger now...
-        </button>
+        </Btn>
         <Link href="/settings" className="block text-center text-xs text-muted hover:text-fg">
           Webhook settings <IconChevronRight width={11} height={11} className="inline" />
         </Link>
@@ -434,9 +434,9 @@ function InputsCard({ ctx }: { ctx: BotContext }) {
       ) : (
         <div className="space-y-3">
           <div className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">{data.bot.configError ?? "Required settings are missing."}</div>
-          <button className={buttonClass.primary} onClick={() => setEditing(true)}>
+          <Btn kind="primary"  onClick={() => setEditing(true)}>
             Set the inputs
-          </button>
+          </Btn>
         </div>
       )}
       {editing && <InputsDrawer ctx={ctx} onClose={() => setEditing(false)} />}
@@ -485,9 +485,9 @@ export function InputsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: () =>
       onClose={onClose}
       wide
       footer={
-        <button className={`${buttonClass.primary} w-full`} onClick={save} disabled={busy}>
+        <Btn kind="primary" className="w-full"  onClick={save} disabled={busy}>
           {busy ? "Saving..." : "Save"}
-        </button>
+        </Btn>
       }
     >
       <div className="space-y-4">
@@ -528,15 +528,15 @@ function NotesCard({ ctx }: { ctx: BotContext }) {
         title="Notes"
         action={
           !editing && (
-            <button
-              className={`${buttonClass.secondary} !py-1.5`}
+            <Btn kind="secondary" className="!py-1.5"
+              
               onClick={() => {
                 setDraft(data.bot.notes);
                 setEditing(true);
               }}
             >
               Edit
-            </button>
+            </Btn>
           )
         }
       />
@@ -544,17 +544,17 @@ function NotesCard({ ctx }: { ctx: BotContext }) {
         <div className="space-y-2">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={5} className={inputClass} placeholder="Why this bot exists, what to watch for..." autoFocus />
           <div className="flex justify-end gap-2">
-            <button className={buttonClass.secondary} onClick={() => setEditing(false)}>
+            <Btn kind="secondary"  onClick={() => setEditing(false)}>
               Cancel
-            </button>
-            <button
-              className={buttonClass.primary}
+            </Btn>
+            <Btn kind="primary"
+              
               onClick={async () => {
                 if (await patch({ notes: draft }, "Notes saved.")) setEditing(false);
               }}
             >
               Save
-            </button>
+            </Btn>
           </div>
         </div>
       ) : data.bot.notes ? (
@@ -644,9 +644,9 @@ export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: (
       title="Bot safeguards"
       onClose={onClose}
       footer={
-        <button className={`${buttonClass.primary} w-full`} onClick={() => save(false)}>
+        <Btn kind="primary" className="w-full"  onClick={() => save(false)}>
           Save
-        </button>
+        </Btn>
       }
     >
       <div className="space-y-5">

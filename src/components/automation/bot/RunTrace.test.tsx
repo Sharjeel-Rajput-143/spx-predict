@@ -91,7 +91,7 @@ describe("Automation log - the replay", () => {
   });
 
   it("a position that no longer exists can't be viewed", () => {
-    expect(render(run, () => false).match(/<button[^>]*disabled[^>]*>View position<\/button>/g)).toHaveLength(2);
+    expect(render(run, () => false).match(/<button[^>]*disabled[^>]*>(?:<span>)?View position(?:<\/span>)?<\/button>/g)).toHaveLength(2);
   });
 
   it("a failed order shows its outcome and reason instead of looking like a success", () => {

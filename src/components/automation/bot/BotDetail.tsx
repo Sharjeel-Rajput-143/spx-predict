@@ -12,7 +12,7 @@ import { LogTab } from "./LogTab";
 import { PositionsTab } from "./PositionsTab";
 import { RunModal } from "./RunModal";
 import { SettingsTab } from "./SettingsTab";
-import { Dropdown, MenuDivider, MenuItem, Modal, OnOffSwitch, Pill, TextPromptModal, Toasts, buttonClass, type ToastItem } from "./primitives";
+import { Btn, Dropdown, MenuDivider, MenuItem, Modal, OnOffSwitch, Pill, TextPromptModal, Toasts, type ToastItem } from "./primitives";
 import { outcomeInfo, TYPE_LABEL, type BotDetailData } from "./model";
 import { usePolling } from "../usePolling";
 import { EXIT_OPTIONS_NOTE, botExitTriggers } from "@/lib/automation/exitOptionsText";
@@ -353,11 +353,11 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
           onClose={() => setConfirmDelete(false)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setConfirmDelete(false)}>
+              <Btn kind="secondary"  onClick={() => setConfirmDelete(false)}>
                 Cancel
-              </button>
-              <button
-                className={buttonClass.danger}
+              </Btn>
+              <Btn kind="danger"
+                
                 onClick={async () => {
                   const res = await fetch(`/api/automation/bots/${botId}`, { method: "DELETE" });
                   const json = await res.json().catch(() => ({}));
@@ -369,7 +369,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
                 }}
               >
                 Delete bot
-              </button>
+              </Btn>
             </>
           }
         >

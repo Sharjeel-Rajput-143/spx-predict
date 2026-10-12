@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { IconChevronDown, IconSearch } from "@/components/icons";
 import { cn } from "@/lib/format";
-import { Drawer, buttonClass } from "../bot/primitives";
+import { Btn, Drawer } from "../bot/primitives";
 import {
   CONDITION_CATALOG,
   CONDITION_CATEGORIES,
@@ -122,14 +122,14 @@ export function ConditionPicker({
                     return (
                       <li key={t.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
                         <ConditionSentence template={t} values={draft.values} onChange={(k, v) => setValue(t.id, k, v)} />
-                        <button
-                          className={cn(buttonClass.secondary, "shrink-0 !px-3 !py-1.5")}
+                        <Btn kind="secondary" className="shrink-0 !px-3 !py-1.5"
+                          
                           onClick={() => onPick(draft)}
                           disabled={!isConditionComplete(draft)}
                           title={isConditionComplete(draft) ? undefined : "Fill in the blanks first"}
                         >
                           Use
-                        </button>
+                        </Btn>
                       </li>
                     );
                   })}

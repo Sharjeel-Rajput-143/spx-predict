@@ -1,9 +1,20 @@
 "use client";
 
+import { Button, Checkbox as AntCheckbox, ConfigProvider, Drawer as AntDrawer, Modal as AntModal, Popover, Switch as AntSwitch, Tag, Tooltip, notification, type ButtonProps } from "antd";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconInfo } from "@/components/icons";
 import { cn } from "@/lib/format";
 import type { Tone } from "./model";
+
+/**
+ * On a server render (the tests; never a real page, where a panel only opens after a click) Ant Design's panels draw nothing at all, so
+ * a plain stand-in with the same structure is drawn instead, which is what lets the tests read a panel's contents. In a browser this is
+ * always false and the Ant Design panel is used.
+ */
+const inPlace = typeof document === "undefined";
+
+/** The green on/off switch: Ant Design's Switch, in the app's "up" green. */
+const GREEN = { components: { Switch: { colorPrimary: "#089981", colorPrimaryHover: "#0aa88e" } } };
 
 export function Switch({
   on,
@@ -17,45 +28,42 @@ export function Switch({
   label: string;
 }) {
   return (
-    <button
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation();
-        onChange();
-      }}
-      className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50",
-        on ? "bg-up" : "bg-surface-2 ring-1 ring-inset ring-line",
-      )}
-    >
-      <span
-        className={cn(
-          "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all",
-          on ? "left-[22px]" : "left-0.5 !bg-faint",
-        )}
+    <ConfigProvider theme={GREEN}>
+      <AntSwitch
+        checked={on}
+        disabled={disabled}
+        aria-label={label}
+        onClick={(_, e) => {
+          e.stopPropagation();
+          onChange();
+        }}
       />
-    </button>
+    </ConfigProvider>
   );
 }
 
-const TONE_CLASS: Record<Tone | "neutral" | "info", string> = {
-  ok: "bg-up-soft text-up",
-  error: "bg-down-soft text-down",
-  warn: "bg-amber-500/15 text-amber-500",
-  skip: "bg-surface-2 text-muted",
-  neutral: "bg-surface-2 text-muted",
-  info: "bg-accent/15 text-accent",
+const TAG_COLOR: Record<Tone | "neutral" | "info", string> = {
+  ok: "success",
+  error: "error",
+  warn: "warning",
+  skip: "default",
+  neutral: "default",
+  info: "processing",
 };
 
+/** A small status label: Ant Design's Tag, filled and borderless. */
 export function Pill({ tone = "neutral", children }: { tone?: Tone | "neutral" | "info"; children: ReactNode }) {
   return (
-    <span className={cn("inline-flex items-center whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium", TONE_CLASS[tone])}>
+    <Tag variant="filled" color={TAG_COLOR[tone]} style={{ margin: 0, padding: "0 6px", fontSize: 11, lineHeight: "18px", fontWeight: 500, whiteSpace: "nowrap" }}>
       {children}
-    </span>
+    </Tag>
   );
+}
+
+/** A button: Ant Design's Button in the app's three kinds (primary blue, plain, danger red). Takes what a <button> takes; `type` is the HTML type. */
+export type BtnKind = "primary" | "secondary" | "danger";
+export function Btn({ kind = "secondary", type, ...rest }: Omit<ButtonProps, "type" | "htmlType" | "danger" | "color" | "variant"> & { kind?: BtnKind; type?: "button" | "submit" | "reset" }) {
+  return <Button type={kind === "secondary" ? "default" : "primary"} danger={kind === "danger"} htmlType={type ?? "button"} {...rest} />;
 }
 
 export function DirectionTag({ direction }: { direction: string }) {
@@ -94,7 +102,7 @@ export function EscapeLayer({ onEscape }: { onEscape: () => void }) {
   return null;
 }
 
-/** Right-hand slide-over, closes on Escape or backdrop click. */
+/** Right-hand slide-over (Ant Design's Drawer), closes on Escape or backdrop click. */
 export function Drawer({
   title,
   onClose,
@@ -118,36 +126,41 @@ export function Drawer({
   /** Shows a back arrow before the title: a sub-panel returning to its parent. */
   onBack?: () => void;
 }) {
-  useEscapeToClose(onClose);
-
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal aria-label={title}>
-      <button aria-label="Close" className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <aside className={cn("relative flex h-full w-full flex-col border-l border-line bg-surface shadow-2xl", extraWide ? "max-w-2xl" : wide ? "max-w-lg" : "max-w-md")}>
-        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-4 py-3">
-          <div className="flex items-center gap-2">
-            {onBack && (
-              <button onClick={onBack} aria-label="Back" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
-                ←
-              </button>
-            )}
-            <h2 className="whitespace-nowrap text-sm font-semibold">{title}</h2>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {headerActions}
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg"
-            >
-              ×
-            </button>
-          </div>
+  if (inPlace) {
+    return (
+      <div role="dialog" aria-modal aria-label={title}>
+        <header>
+          {onBack && <button aria-label="Back">←</button>}
+          <h2>{title}</h2>
+          {headerActions}
+          <button aria-label="Close">×</button>
         </header>
-        <div className="flex-1 overflow-y-auto p-4">{children}</div>
-        {footer && <footer className="border-t border-line p-4">{footer}</footer>}
-      </aside>
-    </div>
+        <div>{children}</div>
+        {footer && <footer>{footer}</footer>}
+      </div>
+    );
+  }
+  return (
+    <AntDrawer
+      open
+      rootClassName="app-drawer"
+      onClose={onClose}
+      size={extraWide ? 672 : wide ? 512 : 448}
+      placement="right"
+      closable={{ placement: "end", "aria-label": "Close" }}
+      destroyOnHidden
+      title={
+        <span className="flex items-center gap-2 whitespace-nowrap">
+          {onBack && <Btn type="button" kind="secondary" size="small" aria-label="Back" onClick={onBack} icon={<span aria-hidden>←</span>} />}
+          {title}
+        </span>
+      }
+      extra={headerActions ? <span className="flex flex-wrap items-center justify-end gap-2">{headerActions}</span> : undefined}
+      footer={footer}
+      styles={{ header: { padding: "12px 16px" }, body: { padding: 16 }, footer: { padding: 16 } }}
+    >
+      {children}
+    </AntDrawer>
   );
 }
 
@@ -176,44 +189,25 @@ export function Td({ children, right, className }: { children?: ReactNode; right
   return <td className={cn("tabular whitespace-nowrap px-3 py-2.5 text-sm", right && "text-right", className)}>{children}</td>;
 }
 
-/** Pill switch with the state spelled out inside it. */
+/** Switch with the state spelled out inside it: Ant Design's Switch with ON and OFF in it. */
 export function OnOffSwitch({ on, onChange, disabled, label }: { on: boolean; onChange: () => void; disabled?: boolean; label: string }) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onChange}
-      className={cn(
-        "relative flex h-7 w-[68px] shrink-0 items-center rounded-full px-2 text-[11px] font-bold tracking-wide transition-colors disabled:opacity-50",
-        on ? "justify-start bg-accent text-white" : "justify-end bg-surface-2 text-muted ring-1 ring-inset ring-line",
-      )}
-    >
-      {on ? "ON" : "OFF"}
-      <span className={cn("absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all", on ? "right-1" : "left-1")} />
-    </button>
-  );
+  return <AntSwitch checked={on} disabled={disabled} aria-label={label} checkedChildren="ON" unCheckedChildren="OFF" onClick={() => onChange()} style={{ minWidth: 56 }} />;
 }
 
-/** (i) icon that explains a label on hover or keyboard focus. */
+/** (i) icon that explains a label on hover or keyboard focus: Ant Design's Tooltip. */
 export function InfoTip({ text }: { text: string }) {
   return (
-    <span className="group relative ml-1 inline-flex align-middle">
-      <button type="button" aria-label={text} className="text-faint hover:text-fg focus:text-fg">
-        <IconInfo width={13} height={13} />
-      </button>
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute left-1/2 top-full z-30 mt-1.5 hidden w-56 -translate-x-1/2 rounded-lg border border-line bg-surface px-3 py-2 text-left text-xs font-normal normal-case leading-snug tracking-normal text-fg shadow-xl group-focus-within:block group-hover:block"
-      >
-        {text}
-      </span>
+    <span className="ml-1 inline-flex align-middle">
+      <Tooltip title={text} styles={{ container: { maxWidth: 224, fontSize: 12 } }}>
+        <button type="button" aria-label={text} className="text-faint hover:text-fg focus:text-fg">
+          <IconInfo width={13} height={13} />
+        </button>
+      </Tooltip>
     </span>
   );
 }
 
-/** Centered dialog; closes on Escape or backdrop click. */
+/** Centered dialog (Ant Design's Modal); closes on Escape or backdrop click. */
 export function Modal({
   title,
   onClose,
@@ -227,22 +221,32 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
-  useEscapeToClose(onClose);
-
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center p-4" role="dialog" aria-modal aria-label={title}>
-      <button aria-label="Close" className="absolute inset-0 cursor-default bg-black/50" onClick={onClose} />
-      <div className={cn("relative flex max-h-[90vh] w-full flex-col rounded-2xl border border-line bg-surface shadow-2xl", wide ? "max-w-2xl" : "max-w-md")}>
-        <header className="flex items-center justify-between border-b border-line px-5 py-3.5">
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-surface-2 hover:text-fg">
-            ×
-          </button>
+  if (inPlace) {
+    return (
+      <div role="dialog" aria-modal aria-label={title}>
+        <header>
+          <h2>{title}</h2>
+          <button aria-label="Close">×</button>
         </header>
-        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <footer className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">{footer}</footer>}
+        <div>{children}</div>
+        {footer && <footer>{footer}</footer>}
       </div>
-    </div>
+    );
+  }
+  return (
+    <AntModal
+      open
+      centered
+      title={title}
+      onCancel={onClose}
+      width={wide ? 672 : 448}
+      destroyOnHidden
+      closable={{ "aria-label": "Close" }}
+      footer={footer ? <div className="flex items-center justify-end gap-2">{footer}</div> : null}
+      styles={{ body: { maxHeight: "70vh", overflowY: "auto" } }}
+    >
+      {children}
+    </AntModal>
   );
 }
 
@@ -265,7 +269,7 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
   );
 }
 
-/** Button that opens a floating panel; clicking away closes it. */
+/** Button that opens a floating panel; clicking away or Escape closes it. Ant Design's Popover. */
 export function Dropdown({
   trigger,
   children,
@@ -281,19 +285,24 @@ export function Dropdown({
   const close = () => setOpen(false);
   return (
     <div className="relative">
-      {trigger({ open, toggle: () => setOpen((o) => !o) })}
-      {open && (
-        <>
-          <EscapeLayer onEscape={close} />
-          <button aria-label="Close menu" className="fixed inset-0 z-10 cursor-default" onClick={close} />
-          <div
-            role="menu"
-            className={cn("absolute top-full z-20 mt-2 rounded-xl border border-line bg-surface p-1 shadow-xl", width, align === "right" ? "right-0" : "left-0")}
-          >
+      <Popover
+        trigger="click"
+        open={open}
+        onOpenChange={setOpen}
+        placement={align === "right" ? "bottomRight" : "bottomLeft"}
+        arrow={false}
+        classNames={{ root: width }}
+        styles={{ container: { padding: 4 } }}
+        content={
+          <div role="menu">
+            {open && <EscapeLayer onEscape={close} />}
             {children(close)}
           </div>
-        </>
-      )}
+        }
+      >
+        {/* The popover opens and closes itself on a click anywhere in here, so the trigger's own toggle does nothing. */}
+        <div>{trigger({ open, toggle: () => undefined })}</div>
+      </Popover>
     </div>
   );
 }
@@ -330,10 +339,9 @@ export function MenuDivider() {
 
 export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2.5 text-sm">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[var(--accent)]" />
+    <AntCheckbox checked={checked} onChange={(e) => onChange(e.target.checked)}>
       {label}
-    </label>
+    </AntCheckbox>
   );
 }
 
@@ -343,29 +351,28 @@ export interface ToastItem {
   text: string;
 }
 
+const NOTICE_TYPE = { ok: "success", warn: "warning", error: "error", info: "info" } as const;
+
+/** Pop-up messages at the bottom right (Ant Design's notifications). The page decides how long each stays (it removes it from `items`). */
 export function Toasts({ items, onDismiss }: { items: ToastItem[]; onDismiss: (id: number) => void }) {
-  return (
-    <div className="pointer-events-none fixed bottom-20 right-4 z-[60] flex w-80 flex-col gap-2 xl:bottom-6">
-      {items.map((t) => (
-        <div
-          key={t.id}
-          role="status"
-          className={cn(
-            "pointer-events-auto flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm shadow-xl",
-            t.tone === "ok" && "border-up/40 bg-surface text-up",
-            t.tone === "error" && "border-down/40 bg-surface text-down",
-            t.tone === "warn" && "border-amber-500/40 bg-surface text-amber-500",
-            t.tone === "info" && "border-line bg-surface text-fg",
-          )}
-        >
-          <span>{t.text}</span>
-          <button onClick={() => onDismiss(t.id)} aria-label="Dismiss" className="text-faint hover:text-fg">
-            ×
-          </button>
-        </div>
-      ))}
-    </div>
-  );
+  const [api, holder] = notification.useNotification({ placement: "bottomRight", duration: 0, showProgress: false });
+  const shown = useRef(new Set<number>());
+  const dismissed = useRef(onDismiss);
+  dismissed.current = onDismiss;
+  useEffect(() => {
+    const live = new Set(items.map((t) => t.id));
+    for (const t of items) {
+      if (shown.current.has(t.id)) continue;
+      shown.current.add(t.id);
+      api.open({ key: String(t.id), type: NOTICE_TYPE[t.tone], title: t.text, role: "status", onClose: () => dismissed.current(t.id) });
+    }
+    for (const id of [...shown.current]) {
+      if (live.has(id)) continue;
+      shown.current.delete(id);
+      api.destroy(String(id));
+    }
+  }, [items, api]);
+  return <>{holder}</>;
 }
 
 /** Asks for one line of text (a new account, a new group). */
@@ -395,12 +402,12 @@ export function TextPromptModal({
       onClose={onClose}
       footer={
         <>
-          <button className={buttonClass.secondary} onClick={onClose}>
+          <Btn kind="secondary" onClick={onClose}>
             Cancel
-          </button>
-          <button className={buttonClass.primary} onClick={submit} disabled={!allowEmpty && !value.trim()}>
+          </Btn>
+          <Btn kind="primary" onClick={submit} disabled={!allowEmpty && !value.trim()}>
             {confirmLabel}
-          </button>
+          </Btn>
         </>
       }
     >

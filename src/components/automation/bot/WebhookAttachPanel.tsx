@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { IconAutomation, IconChevronDown, IconCopy, IconPlus } from "@/components/icons";
 import type { TriggerOption } from "@/lib/automation/types";
-import { Dropdown, Pill, Switch, buttonClass, inputClass } from "./primitives";
+import { Btn, Dropdown, inputClass, Pill, Switch } from "./primitives";
 
 export interface AttachedWebhook {
   id: string;
@@ -140,9 +140,9 @@ export function WebhookAttachPanel({
               )}
             </Dropdown>
           </div>
-          <button type="button" disabled title="This trigger runs the engine's own automation; new ones can't be added" className={`${buttonClass.secondary} shrink-0`}>
+          <Btn kind="secondary" className="shrink-0" type="button" disabled title="This trigger runs the engine's own automation; new ones can't be added" >
             New
-          </button>
+          </Btn>
         </div>
         <p className="text-xs text-muted">The trigger runs this bot&apos;s own {automationName.toLowerCase()} flow: it can&apos;t be swapped.</p>
       </section>
@@ -193,9 +193,9 @@ export function WebhookAttachPanel({
             {creating && (
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line p-2">
                 <input className={`${inputClass} min-w-0 flex-1`} value={name} onChange={(e) => setName(e.target.value)} placeholder={triggerName.startsWith("Bullish") ? "e.g. BullishNDX" : "e.g. BearishNDX"} aria-label="New webhook name" />
-                <button
+                <Btn kind="secondary"
                   type="button"
-                  className={buttonClass.secondary}
+                  
                   disabled={busy || !name.trim()}
                   onClick={async () => {
                     setCreateError(null);
@@ -208,7 +208,7 @@ export function WebhookAttachPanel({
                   }}
                 >
                   Create
-                </button>
+                </Btn>
                 {createError && <span className="w-full text-xs text-down">{createError}</span>}
               </div>
             )}
@@ -240,12 +240,12 @@ export function WebhookAttachPanel({
 
       {error && <p className="text-sm text-down">{error}</p>}
       <div className="flex flex-wrap items-center justify-center gap-3 border-t border-line pt-4">
-        <button className={`${buttonClass.primary} min-w-40`} onClick={onSave} disabled={busy || saveDisabled}>
+        <Btn kind="primary" className="min-w-40"  onClick={onSave} disabled={busy || saveDisabled}>
           Save
-        </button>
-        <button className={buttonClass.secondary} onClick={onDetach} disabled={busy || !current}>
+        </Btn>
+        <Btn kind="secondary"  onClick={onDetach} disabled={busy || !current}>
           Detach webhook
-        </button>
+        </Btn>
       </div>
 
       {current && urlSlot}

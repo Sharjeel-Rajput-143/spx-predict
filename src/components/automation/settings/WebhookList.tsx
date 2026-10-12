@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { IconEdit } from "@/components/icons";
 import { cn } from "@/lib/format";
-import { Drawer, Field, Pill, buttonClass, inputClass } from "../bot/primitives";
+import { Btn, Drawer, Field, inputClass, Pill } from "../bot/primitives";
 import { SecretUrl } from "../SecretUrl";
 import type { WebhookView } from "./sections";
 
@@ -62,9 +62,9 @@ export function NewWebhookDrawer({ onCreate, onClose }: { onCreate: (name: strin
         </div>
         {error && <p className="text-sm text-down">{error}</p>}
         <div className="text-center">
-          <button className={`${buttonClass.primary} min-w-44`} disabled={busy || !name.trim()} onClick={() => void create()}>
+          <Btn kind="primary" className="min-w-44"  disabled={busy || !name.trim()} onClick={() => void create()}>
             {busy ? "Creating..." : "Create"}
-          </button>
+          </Btn>
         </div>
       </div>
     </Drawer>
@@ -111,25 +111,25 @@ export function EditWebhookDrawer({
         </div>
         {error && <p className="text-sm text-down">{error}</p>}
         <div className="text-center">
-          <button className={`${buttonClass.primary} min-w-44`} disabled={busy || !name.trim()} onClick={() => void save()}>
+          <Btn kind="primary" className="min-w-44"  disabled={busy || !name.trim()} onClick={() => void save()}>
             Save
-          </button>
+          </Btn>
         </div>
         <div className="space-y-2 border-t border-line pt-4 text-sm">
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted">{hook.active ? "On: calls to its URL are accepted." : "Off: calls to its URL get \"not found\"."}</span>
-            <button className={buttonClass.secondary} onClick={() => { onToggle(hook.id, !hook.active); onClose(); }}>
+            <Btn kind="secondary"  onClick={() => { onToggle(hook.id, !hook.active); onClose(); }}>
               {hook.active ? "Switch off" : "Switch on"}
-            </button>
+            </Btn>
           </div>
           {hook.direction && (
             <div className="flex items-center justify-between gap-3 border-t border-line pt-3">
               <span className="text-muted">
                 {hook.requireDirectionText !== false ? `Alert text must say "${hook.direction}": a call without it is refused.` : `Alert text isn't required to say "${hook.direction}". A text that says the other direction is still refused.`}
               </span>
-              <button className={buttonClass.secondary} onClick={() => { onRequireText(hook.id, hook.requireDirectionText === false); onClose(); }}>
+              <Btn kind="secondary"  onClick={() => { onRequireText(hook.id, hook.requireDirectionText === false); onClose(); }}>
                 {hook.requireDirectionText !== false ? "Don't require" : "Require"}
-              </button>
+              </Btn>
             </div>
           )}
         </div>

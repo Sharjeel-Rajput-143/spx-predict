@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutomationLogin } from "@/components/automation/AutomationLogin";
 import { PageHeader, headerButtonClass } from "@/components/automation/PageHeader";
 import { NewBotPanel, type NewBotView } from "@/components/automation/NewBotPanel";
-import { Dropdown, InfoTip, MenuDivider, MenuItem, Pill, Switch, Td, Th, buttonClass } from "@/components/automation/bot/primitives";
+import { Btn, Dropdown, InfoTip, MenuDivider, MenuItem, Pill, Switch, Td, Th } from "@/components/automation/bot/primitives";
 import { NO_PRICE_TIP, pctText, plClass, plText } from "@/components/automation/bot/model";
 import { IconAutomation, IconChevronDown, IconCopy, IconFolder, IconPlus, IconSearch } from "@/components/icons";
 import { Card } from "@/components/ui";
@@ -186,9 +186,9 @@ export function BotsList() {
             {/* The older indicator-rule feature (/automations/rules) is left in the code and still opens at its URL, but the
                 NDX system's pages only show the webhook-driven bullish and bearish bot, so it isn't linked from here. */}
             <LibraryMenu />
-            <button className={cn(buttonClass.primary, "flex items-center gap-1.5")} onClick={() => setNewBot({})}>
+            <Btn kind="primary" className="flex items-center gap-1.5"  onClick={() => setNewBot({})}>
               <IconPlus width={14} height={14} /> New Bot
-            </button>
+            </Btn>
           </>
         }
       />

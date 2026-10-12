@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AutomationLogin } from "@/components/automation/AutomationLogin";
 import { PageHeader, headerButtonClass } from "@/components/automation/PageHeader";
-import { Modal, buttonClass } from "@/components/automation/bot/primitives";
+import { Btn, buttonClass, Modal } from "@/components/automation/bot/primitives";
 import { IconFolder, IconSad } from "@/components/icons";
 import { Card } from "@/components/ui";
 import type { BotTemplate } from "@/lib/automation/types";
@@ -88,12 +88,12 @@ export function TemplatesPage() {
           onClose={() => setDeleting(null)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setDeleting(null)}>
+              <Btn kind="secondary"  onClick={() => setDeleting(null)}>
                 Cancel
-              </button>
-              <button className={buttonClass.danger} onClick={() => remove(deleting)}>
+              </Btn>
+              <Btn kind="danger"  onClick={() => remove(deleting)}>
                 Delete
-              </button>
+              </Btn>
             </>
           }
         >

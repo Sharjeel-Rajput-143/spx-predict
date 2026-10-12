@@ -51,7 +51,7 @@ describe("Trading Accounts", () => {
     expect(out).toContain("paper-1");
     expect(out).toContain("SPX EMA 9/20 Bias");
     expect(out).toContain("No bots use it yet");
-    expect(out).toMatch(/<button[^>]*disabled[^>]*>Add account<\/button>/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Add account(?:<\/span>)?<\/button>/);
     expect(out).toContain("not connected to any account");
   });
 

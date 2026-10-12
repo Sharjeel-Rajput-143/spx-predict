@@ -46,7 +46,7 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
   it("New Webhook is a slide-over with Name, its helper line, and Create", () => {
     const out = html(<NewWebhookDrawer onCreate={async () => null} onClose={noop} />);
     for (const t of ["New Webhook", "Name", "You&#x27;ll use this name to reference it in your bots.", ">Create<", 'role="dialog"']) expect(out, t).toContain(t);
-    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>Create<\/button>/); // nothing typed yet
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>(?:<span>)?Create(?:<\/span>)?<\/button>/); // nothing typed yet
   });
 
   it("each webhook shows its name, Test Hook, a pencil, Usages, and the URL line with a copy icon (masked)", () => {
@@ -69,7 +69,7 @@ describe("Settings > Webhooks, laid out like Option Alpha's", () => {
     expect(out).toContain("0 bots");
     expect(out).not.toContain("<details");
     expect(out).toMatch(/<span class="text-sm text-faint"[^>]*>Test Hook<\/span>/);
-    expect(out).not.toMatch(/<button[^>]*>Test Hook<\/button>/);
+    expect(out).not.toMatch(/<button[^>]*>(?:<span>)?Test Hook(?:<\/span>)?<\/button>/);
     expect(out).toContain('aria-label="Delete BullishNDX"');
   });
 

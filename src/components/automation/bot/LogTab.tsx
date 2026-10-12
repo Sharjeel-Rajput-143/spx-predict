@@ -6,7 +6,7 @@ import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import type { Decision, Run, Signal } from "@/lib/automation/types";
 import type { BotContext } from "./BotDetail";
-import { DirectionTag, Drawer, KeyValue, Modal, Pill, buttonClass } from "./primitives";
+import { Btn, DirectionTag, Drawer, KeyValue, Modal, Pill } from "./primitives";
 import { ORIGIN_LABEL, originLabel, signalOrigin } from "@/lib/automation/origin";
 import { RunTrace } from "./RunTrace";
 import { etDateTime, etDayKey, etTime, groupByDay, num, outcomeInfo, type Tone } from "./model";
@@ -184,9 +184,9 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
             className="w-52 rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm outline-none focus:border-fg"
           />
         </div>
-        <button className={cn(buttonClass.secondary, "ml-auto")} onClick={() => setConfirmClear(true)} disabled={entries.length === 0}>
+        <Btn kind="secondary" className="ml-auto"  onClick={() => setConfirmClear(true)} disabled={entries.length === 0}>
           Clear log
-        </button>
+        </Btn>
       </div>
 
       <Card className="overflow-hidden">
@@ -235,12 +235,12 @@ export function LogTab({ ctx }: { ctx: BotContext }) {
           onClose={() => setConfirmClear(false)}
           footer={
             <>
-              <button className={buttonClass.secondary} onClick={() => setConfirmClear(false)}>
+              <Btn kind="secondary"  onClick={() => setConfirmClear(false)}>
                 Cancel
-              </button>
-              <button className={buttonClass.primary} onClick={clearLog}>
+              </Btn>
+              <Btn kind="primary"  onClick={clearLog}>
                 Clear log
-              </button>
+              </Btn>
             </>
           }
         >
