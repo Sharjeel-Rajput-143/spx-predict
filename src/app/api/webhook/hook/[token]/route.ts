@@ -80,11 +80,14 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ toke
   // the minute's slot is taken and saved, and the answer goes out. Everything else (loading the rest of the records, the quote,
   // the checks, the flip, the orders) is done behind the answer. The Log shows every call, including one the bot then refused.
   if (backend.remote) {
+    // The live price is asked for right now, while the answer goes out and the rest of the records load: a lookup started only after the
+    // records had loaded made every alert wait for the two one after the other.
+    const priceLookup = resolveHookPrice(underlying, Date.now(), SLOW_QUOTE_WAIT_MS).catch(() => null);
     const background = async () => {
       await loadEverything();
       pruneOncePerDay(now);
       await checkInterruptedRuns(now).catch(() => undefined);
-      const found = await resolveHookPrice(underlying, Date.now(), SLOW_QUOTE_WAIT_MS);
+      const found = await priceLookup;
       if (found === null) {
         giveBack();
         signalsStore.insert({ id: `sig-rejected-${now}-${crypto.randomUUID()}`, botId, signal: direction, barTime, price: 0, interval: "", receivedAt: now, status: "rejected", rejectReason: "no_price", raw: { webhook: hook.name } });

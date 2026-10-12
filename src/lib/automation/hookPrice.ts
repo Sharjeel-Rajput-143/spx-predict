@@ -1,8 +1,10 @@
 import "server-only";
 import { waitForTick } from "@/lib/marketData/tickStore";
 
-/** A live quote older than this isn't a price to trade on. */
-const MAX_QUOTE_AGE_MS = 5 * 60_000;
+/** A quote at most this old is used as it is; an older one is replaced by asking the feed again. */
+export const QUOTE_FRESH_MS = 15_000;
+/** A live quote older than this isn't a price to trade on, even when the feed could not be reached to replace it. */
+const MAX_QUOTE_AGE_MS = 60_000;
 /** A server that has only just started has no quote yet. A TradingView call must be answered within about 3 seconds, so the call waits
  * this long for the first quote, then answers and finishes in the background (SLOW wait). The Test Hook button, with no such limit, uses SLOW at once. */
 export const QUICK_QUOTE_WAIT_MS = 1_500;
@@ -15,6 +17,6 @@ export const SLOW_QUOTE_WAIT_MS = 8_000;
  */
 export async function resolveHookPrice(underlying: string | null, now: number = Date.now(), waitMs: number = QUICK_QUOTE_WAIT_MS): Promise<number | null> {
   if (!underlying) return null;
-  const tick = await waitForTick(underlying, waitMs);
-  return tick && now - tick.t <= MAX_QUOTE_AGE_MS ? tick.price : null;
+  const tick = await waitForTick(underlying, waitMs, QUOTE_FRESH_MS);
+  return tick && Date.now() - tick.t <= MAX_QUOTE_AGE_MS ? tick.price : null;
 }

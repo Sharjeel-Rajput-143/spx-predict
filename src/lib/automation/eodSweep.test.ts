@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockExecutor } from "./executor";
 import { processSignal, receiveAndSaveSignal } from "./engine";
-import { runEndOfDaySweep } from "./eodSweep";
+import { runEndOfDaySweep, startEodScheduler } from "./eodSweep";
 import { positionsStore } from "./store";
 import { BASE_NOW, TEST_BOT_ID, buildPosition, resetAutomationStores, setTestBotEnv } from "./testSupport";
 
@@ -54,3 +54,17 @@ describe("stale-position safety net", () => {
     expect(freshPut.find((p) => p.status === "open")).toBeDefined();
   });
 });
+
+describe("the scheduler's timer", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is never started on Vercel: a serverless function has no process to keep a timer, and a frozen one fires all at once on the next request", () => {
+    vi.stubEnv("VERCEL", "1");
+    const interval = vi.spyOn(globalThis, "setInterval");
+    startEodScheduler();
+    startEodScheduler();
+    expect(interval).not.toHaveBeenCalled();
+    interval.mockRestore();
+  });
+});
+

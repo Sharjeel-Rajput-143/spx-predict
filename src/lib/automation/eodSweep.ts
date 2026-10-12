@@ -258,6 +258,10 @@ function recoverOnStartup(): void {
  * webhook; kept alive for the life of the process. The per-signal stale-position check (expiry.ts's
  * expireStalePositions) is the safety net if this never gets started or a tick is missed. */
 export function startEodScheduler(): void {
+  // Not on Vercel: a serverless function has no process that stays up for a timer. A timer started there is frozen between requests and
+  // then fires all at once, against whatever records that instance happens to hold, in the same moments as a real alert. On that host
+  // the same jobs come from the secured addresses /api/cron/sweep and /api/cron/scan (see docs/deploying.md).
+  if (process.env.VERCEL) return;
   if (state.started) return;
   state.started = true;
   recoverOnStartup();

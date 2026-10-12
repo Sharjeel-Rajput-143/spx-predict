@@ -45,19 +45,66 @@ function getState(symbol: string): SymbolState {
   return s;
 }
 
+/** How long either source gets before the lookup gives up on it. */
+const FEED_TIMEOUT_MS = 3000;
+/** Google Finance is the nearer-to-real-time source, so it gets this long to answer before Yahoo's answer is taken instead. */
+const GOOGLE_HEAD_START_MS = 700;
+
 /**
- * Google Finance first (near-realtime) - Yahoo Finance's chart endpoint
- * (yahooFinance.ts) is only ever reached for as a fallback, since it's
- * typically slightly staler. Neither is an official/licensed API, so
- * relying on just one would make every automation watching this feed only
- * as reliable as that one undocumented endpoint.
+ * Both sources are asked at once. Google Finance (near-realtime) is preferred: if it answers within a short head start its price is
+ * used. If it hasn't, the first good answer wins - Yahoo Finance's chart endpoint (yahooFinance.ts) is typically slightly staler, but
+ * a price a second later beats a better price eight seconds later (asking one after the other, with long limits, made a cold server
+ * wait out Google's own retries before Yahoo was even tried). Neither is an official/licensed API, so relying on just one would make
+ * every automation watching this feed only as reliable as that one undocumented endpoint.
  */
-async function fetchPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
-  const google = await fetchGoogleFinancePrice(symbol);
-  if (google != null) return { price: google, source: "google" };
-  const yahoo = await fetchYahooFinancePrice(symbol);
-  if (yahoo != null) return { price: yahoo, source: "yahoo" };
-  return null;
+export function fetchPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
+  const google = fetchGoogleFinancePrice(symbol, FEED_TIMEOUT_MS).catch(() => null);
+  const yahoo = fetchYahooFinancePrice(symbol, FEED_TIMEOUT_MS).catch(() => null);
+  return new Promise((resolve) => {
+    let googleDone = false;
+    let yahooDone = false;
+    let yahooPrice: number | null = null;
+    let headStartOver = false;
+    let settled = false;
+    const finish = (r: { price: number; source: FeedSource } | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    const check = () => {
+      if (settled) return;
+      // Yahoo's price is taken once Google has said it has none, or once Google's head start is over.
+      if (yahooPrice != null && (googleDone || headStartOver)) finish({ price: yahooPrice, source: "yahoo" });
+      else if (googleDone && yahooDone && yahooPrice == null) finish(null);
+    };
+    google.then((p) => {
+      googleDone = true;
+      if (p != null) finish({ price: p, source: "google" });
+      else check();
+    });
+    yahoo.then((p) => {
+      yahooDone = true;
+      yahooPrice = p;
+      check();
+    });
+    const timer = setTimeout(() => {
+      headStartOver = true;
+      check();
+    }, GOOGLE_HEAD_START_MS);
+    timer.unref?.();
+  });
+}
+
+/** Records a price the feed gave as the symbol's latest tick, and tells whoever is listening. */
+function recordTick(state: SymbolState, result: { price: number; source: FeedSource }): Tick {
+  state.lastFetchOk = true;
+  state.lastSource = result.source;
+  state.consecutiveFailures = 0;
+  const tick: Tick = { t: Date.now(), price: result.price };
+  state.ticks.push(tick);
+  if (state.ticks.length > MAX_TICKS) state.ticks.splice(0, state.ticks.length - MAX_TICKS);
+  state.listeners.forEach((fn) => fn(tick));
+  return tick;
 }
 
 function startPolling(symbol: string) {
@@ -78,13 +125,7 @@ function startPolling(symbol: string) {
       return;
     }
 
-    state.lastFetchOk = true;
-    state.lastSource = result.source;
-    state.consecutiveFailures = 0;
-    const tick: Tick = { t: Date.now(), price: result.price };
-    state.ticks.push(tick);
-    if (state.ticks.length > MAX_TICKS) state.ticks.splice(0, state.ticks.length - MAX_TICKS);
-    state.listeners.forEach((fn) => fn(tick));
+    recordTick(state, result);
     state.timer = setTimeout(poll, BASE_POLL_MS);
   };
 
@@ -107,22 +148,30 @@ export function getLastTick(symbol: string): Tick | null {
   return state.ticks[state.ticks.length - 1] ?? null;
 }
 
+/** A price older than this, when the feed can't be reached, is not used at all. */
+export const STALE_FALLBACK_MS = 60_000;
+
 /**
- * The latest tick, waiting up to `timeoutMs` for the first one when the poller has only just been started (a cold server
- * has no tick yet; the first poll takes a moment). Resolves to null if the feed gives nothing in time.
+ * The latest tick, and a recent one. A tick no older than `maxAgeMs` is returned at once (an always-on server's poller keeps one a couple of
+ * seconds old). Otherwise - the poller has only just been started, or a serverless instance has been asleep and holds an old tick - the feed
+ * is asked directly now, for up to `timeoutMs`, rather than waiting for a poll timer that may have been frozen. If the feed gives nothing in
+ * time, the last tick is used only if it is at most STALE_FALLBACK_MS old; otherwise null. Without `maxAgeMs` any tick counts, as before.
  */
-export function waitForTick(symbol: string, timeoutMs: number): Promise<Tick | null> {
+export async function waitForTick(symbol: string, timeoutMs: number, maxAgeMs: number = Infinity): Promise<Tick | null> {
   const last = getLastTick(symbol);
-  if (last || timeoutMs <= 0) return Promise.resolve(last);
-  return new Promise((resolve) => {
-    const done = (tick: Tick | null) => {
-      clearTimeout(timer);
-      unsubscribe();
-      resolve(tick);
-    };
-    const timer = setTimeout(() => done(null), timeoutMs);
-    const unsubscribe = subscribeTicks(symbol, (tick) => done(tick));
-  });
+  if (last && Date.now() - last.t <= maxAgeMs) return last;
+  if (timeoutMs <= 0) return last && Date.now() - last.t <= STALE_FALLBACK_MS ? last : null;
+  const state = getState(symbol);
+  const fresh = await Promise.race([
+    fetchPrice(symbol).then((r) => (r ? recordTick(state, r) : null)),
+    new Promise<null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+  if (fresh) return fresh;
+  const latest = state.ticks[state.ticks.length - 1] ?? null;
+  return latest && Date.now() - latest.t <= STALE_FALLBACK_MS ? latest : null;
 }
 
 export interface FeedStatus {

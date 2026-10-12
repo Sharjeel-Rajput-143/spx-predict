@@ -42,7 +42,7 @@ function extractSetCookies(res: Response): string[] {
   return single ? [single] : [];
 }
 
-async function fetchWithCookies(url: string): Promise<Response> {
+async function fetchWithCookies(url: string, timeoutMs: number): Promise<Response> {
   const res = await fetch(url, {
     headers: {
       "User-Agent": UA,
@@ -50,7 +50,7 @@ async function fetchWithCookies(url: string): Promise<Response> {
       ...(cookieJar ? { Cookie: cookieJar } : {}),
     },
     cache: "no-store",
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const setCookies = extractSetCookies(res);
   if (setCookies.length > 0) {
@@ -69,13 +69,13 @@ function parsePrice(html: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function fetchGoogleFinancePrice(symbol: string): Promise<number | null> {
+export async function fetchGoogleFinancePrice(symbol: string, timeoutMs = 8000): Promise<number | null> {
   const code = GOOGLE_FINANCE_CODES[symbol];
   if (!code) return null;
   const url = `https://www.google.com/finance/quote/${code}?hl=en`;
 
   try {
-    const res = await fetchWithCookies(url);
+    const res = await fetchWithCookies(url, timeoutMs);
     if (!res.ok) return null;
     const price = parsePrice(await res.text());
     if (price != null) return price;
@@ -84,7 +84,7 @@ export async function fetchGoogleFinancePrice(symbol: string): Promise<number | 
     // cookie - Google then serves a smaller page with no price widget at
     // all. Drop the jar and retry once with a fresh one.
     cookieJar = "";
-    const retry = await fetchWithCookies(url);
+    const retry = await fetchWithCookies(url, timeoutMs);
     if (!retry.ok) return null;
     return parsePrice(await retry.text());
   } catch {

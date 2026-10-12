@@ -1,4 +1,4 @@
-import { createClient, type Client, type InStatement } from "@libsql/client";
+import type { Client, InStatement } from "@libsql/client";
 import { COLLECTIONS, StorageError, type CollectionName, type Repository, type StorageBackend } from "./repository";
 
 /**
@@ -22,6 +22,22 @@ export interface TursoOptions {
   instance?: string;
 }
 
+/**
+ * Opens the connection. A database over the network (Turso: libsql://, https://) is reached with libsql's HTTP-only client: the default
+ * client loads a ~7 MB native binary the moment it is imported, and a serverless function that has just started pays for that, and for a
+ * WebSocket handshake, out of the 3 seconds TradingView allows an alert. HTTP is one request per call and needs neither. A local file (a
+ * laptop, the tests) needs the full client, which is only loaded then.
+ */
+async function openClient(options: TursoOptions): Promise<Client> {
+  const url = options.url.trim();
+  if (/^(libsql|https?):/i.test(url)) {
+    const { createClient } = await import("@libsql/client/http");
+    return createClient({ url: url.replace(/^libsql:/i, "https:"), authToken: options.authToken });
+  }
+  const { createClient } = await import("@libsql/client");
+  return createClient({ url, authToken: options.authToken });
+}
+
 type Op = { kind: "put"; collection: CollectionName; id: string; json: string } | { kind: "del"; collection: CollectionName; id: string };
 
 interface State {
@@ -43,7 +59,7 @@ const reason = (err: unknown) => (err instanceof Error ? err.message : String(er
 
 export class TursoBackend implements StorageBackend {
   readonly remote = true;
-  private connection: Client | null = null;
+  private connection: Promise<Client> | null = null;
   private readonly key: string;
 
   constructor(readonly options: TursoOptions) {
@@ -51,8 +67,13 @@ export class TursoBackend implements StorageBackend {
   }
 
   /** Connects on first use, so a wrong address is reported as a failed load (503 with the reason), not as a crash at start-up. */
-  private get client(): Client {
-    return (this.connection ??= createClient({ url: this.options.url, authToken: this.options.authToken }));
+  private getClient(): Promise<Client> {
+    const opening = (this.connection ??= openClient(this.options));
+    // A connection that could not be opened is tried again by the next call, not remembered as failed.
+    opening.catch(() => {
+      if (this.connection === opening) this.connection = null;
+    });
+    return opening;
   }
 
   private get state(): State {
@@ -111,7 +132,7 @@ export class TursoBackend implements StorageBackend {
   private async ensureTable(): Promise<void> {
     const s = this.state;
     if (s.ready) return;
-    await this.client.execute("CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY (collection, id))");
+    await (await this.getClient()).execute("CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, id TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY (collection, id))");
     s.ready = true;
   }
 
@@ -139,7 +160,7 @@ export class TursoBackend implements StorageBackend {
     try {
       if (s.pending.length > 0) await this.flush();
       const marks = names.map(() => "?").join(", ");
-      const result = await this.withTable(() => this.client.execute({ sql: `SELECT collection, json FROM records WHERE collection IN (${marks}) ORDER BY rowid`, args: names }));
+      const result = await this.withTable(async () => (await this.getClient()).execute({ sql: `SELECT collection, json FROM records WHERE collection IN (${marks}) ORDER BY rowid`, args: names }));
       const fresh = new Map<CollectionName, unknown[]>(names.map((n) => [n, []]));
       for (const row of result.rows) {
         const list = fresh.get(String(row.collection) as CollectionName);
@@ -166,7 +187,7 @@ export class TursoBackend implements StorageBackend {
     try {
       // What this instance has changed but not yet saved goes first, so loading can't throw it away.
       if (s.pending.length > 0) await this.flush();
-      const result = await this.withTable(() => this.client.execute("SELECT collection, json FROM records ORDER BY rowid"));
+      const result = await this.withTable(async () => (await this.getClient()).execute("SELECT collection, json FROM records ORDER BY rowid"));
       const data = new Map<CollectionName, unknown[]>();
       for (const name of COLLECTIONS) data.set(name, []);
       for (const row of result.rows) {
@@ -207,7 +228,7 @@ export class TursoBackend implements StorageBackend {
         : { sql: "DELETE FROM records WHERE collection = ? AND id = ?", args: [op.collection, op.id] },
     );
     try {
-      await this.withTable(() => this.client.batch(statements, "write"));
+      await this.withTable(async () => (await this.getClient()).batch(statements, "write"));
       s.lastError = null;
     } catch (err) {
       s.pending.unshift(...ops);
@@ -222,7 +243,7 @@ export class TursoBackend implements StorageBackend {
     const s = this.state;
     s.pending.length = 0;
     await this.ensureTable();
-    await this.client.execute("DELETE FROM records");
+    await (await this.getClient()).execute("DELETE FROM records");
     for (const name of COLLECTIONS) s.data.set(name, []);
   }
 }

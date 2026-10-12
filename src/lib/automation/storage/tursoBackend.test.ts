@@ -286,3 +286,71 @@ describe("which storage is used", () => {
     expect(tursoChoice({ TURSO_DB_URL: "libsql://x.turso.io", VERCEL: "1" })).toBeNull(); // no token: not usable
   });
 });
+
+describe("which database client is loaded", () => {
+  const fake = () => ({ execute: vi.fn(async () => ({ rows: [] })), batch: vi.fn(async () => []) });
+
+  async function backendWith(address: string, token = "tok") {
+    vi.resetModules();
+    const http = vi.fn(() => fake());
+    const full = vi.fn(() => fake());
+    vi.doMock("@libsql/client/http", () => ({ createClient: http }));
+    vi.doMock("@libsql/client", () => ({ createClient: full }));
+    const { TursoBackend: Fresh } = await import("./tursoBackend");
+    return { backend: new Fresh({ url: address, authToken: token, instance: `pick-${address}` }), http, full };
+  }
+  afterEach(() => {
+    vi.doUnmock("@libsql/client/http");
+    vi.doUnmock("@libsql/client");
+  });
+
+  it("a Turso address uses the HTTP-only client (no native binary, no WebSocket), over https, with the token", async () => {
+    const { backend, http, full } = await backendWith("libsql://shark-db.aws-ap-south-1.turso.io");
+    await backend.hydrate();
+    expect(http).toHaveBeenCalledTimes(1);
+    expect(http).toHaveBeenCalledWith({ url: "https://shark-db.aws-ap-south-1.turso.io", authToken: "tok" });
+    expect(full).not.toHaveBeenCalled();
+  });
+
+  it("an https address is used as it is, and an http one too", async () => {
+    const a = await backendWith("https://db.example.turso.io");
+    await a.backend.hydrate();
+    expect(a.http).toHaveBeenCalledWith({ url: "https://db.example.turso.io", authToken: "tok" });
+    const b = await backendWith("http://127.0.0.1:8080");
+    await b.backend.hydrate();
+    expect(b.http).toHaveBeenCalledWith({ url: "http://127.0.0.1:8080", authToken: "tok" });
+    expect(a.full).not.toHaveBeenCalled();
+    expect(b.full).not.toHaveBeenCalled();
+  });
+
+  it("a local file is the only thing that loads the full client", async () => {
+    const { backend, http, full } = await backendWith("file:/tmp/some.db");
+    await backend.hydrate();
+    expect(full).toHaveBeenCalledWith({ url: "file:/tmp/some.db", authToken: "tok" });
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  it("the client is opened once and reused by every later call", async () => {
+    const { backend, http } = await backendWith("libsql://db.turso.io");
+    await backend.hydrate();
+    await backend.hydrateCollections(["bots"]);
+    await backend.flush();
+    expect(http).toHaveBeenCalledTimes(1);
+  });
+
+  it("a connection that failed to open is tried again by the next call, not remembered as failed", async () => {
+    vi.resetModules();
+    let attempts = 0;
+    vi.doMock("@libsql/client/http", () => ({
+      createClient: () => {
+        if (++attempts === 1) throw new Error("could not connect");
+        return fake();
+      },
+    }));
+    const { TursoBackend: Fresh } = await import("./tursoBackend");
+    const backend = new Fresh({ url: "libsql://db.turso.io", authToken: "t", instance: "retry-open" });
+    await expect(backend.hydrate()).rejects.toThrow(/can't be reached/);
+    await expect(backend.hydrate()).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+  });
+});

@@ -17,7 +17,7 @@ export const YAHOO_CODES: Partial<Record<string, string>> = {
   QQQ: "QQQ",
 };
 
-export async function fetchYahooFinancePrice(symbol: string): Promise<number | null> {
+export async function fetchYahooFinancePrice(symbol: string, timeoutMs = 8000): Promise<number | null> {
   const code = YAHOO_CODES[symbol];
   if (!code) return null;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}?interval=1m&range=1d`;
@@ -26,7 +26,7 @@ export async function fetchYahooFinancePrice(symbol: string): Promise<number | n
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {

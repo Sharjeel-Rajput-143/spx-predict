@@ -16,10 +16,10 @@ async function handleGET(req: NextRequest) {
   const bots = listBotIds().map((id) => {
     try {
       const c = getBotStaticConfig(id);
-      return { id, name: c.name, estimate: c.openingCreditEstimate, accountId: c.accountId as string | null };
+      return { id, name: c.name, estimate: c.openingCreditEstimate, accountId: c.accountId as string | null, group: botsStore.get(id)?.group ?? null };
     } catch {
       const record = botsStore.get(id);
-      return { id, name: record?.name ?? id, estimate: null, accountId: (record?.draftInputs?.accountId ?? null) as string | null };
+      return { id, name: record?.name ?? id, estimate: null, accountId: (record?.draftInputs?.accountId ?? null) as string | null, group: record?.group ?? null };
     }
   });
 

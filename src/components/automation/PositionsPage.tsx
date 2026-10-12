@@ -7,11 +7,12 @@ import { Toasts, type ToastItem } from "@/components/automation/bot/primitives";
 import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import { ACTIVE_POSITION_STATUSES, type Order, type Position, type Signal } from "@/lib/automation/types";
+import { AnalyzeView } from "./analyze/AnalyzeView";
 import { usePolling } from "./usePolling";
 
 interface PositionsData {
   now: number;
-  bots: { id: string; name: string; estimate: number | null; accountId: string | null }[];
+  bots: { id: string; name: string; estimate: number | null; accountId: string | null; group: string | null }[];
   positions: Position[];
   orders: Order[];
   signals: Signal[];
@@ -29,7 +30,10 @@ const matches = (p: Position, f: Filter) => (f === "open" ? ACTIVE_POSITION_STAT
 const POLL_MS = 5000;
 
 /** Positions across every bot - the all-bots counterpart of a bot's own Positions tab. */
-export function PositionsPage() {
+export type PositionsViewName = "list" | "analyze";
+
+export function PositionsPage({ initialView = "list" }: { initialView?: PositionsViewName }) {
+  const [view, setView] = useState<PositionsViewName>(initialView);
   const [data, setData] = useState<PositionsData | null>(null);
   const [signedOut, setSignedOut] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +92,27 @@ export function PositionsPage() {
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Positions</h1>
 
+      <div className="flex gap-1 border-b border-line" role="tablist" aria-label="Positions views">
+        {([["list", "Positions"], ["analyze", "Analyze"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => {
+              setView(key);
+              window.history.replaceState(null, "", key === "list" ? "/positions" : "/positions?view=analyze");
+            }}
+            className={cn("-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors", view === key ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "analyze" ? (
+        <AnalyzeView positions={data.positions} bots={data.bots} now={data.now} botName={(id) => byId.get(id)?.name ?? id} />
+      ) : (
+      <>
       <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map(({ key, label }) => (
           <button
@@ -128,6 +153,8 @@ export function PositionsPage() {
         onChanged={load}
         notify={notify}
       />
+      </>
+      )}
       <Toasts items={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
     </div>
   );

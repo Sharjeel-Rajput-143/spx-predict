@@ -167,8 +167,8 @@ describe("the price", () => {
     expect(sent()).toEqual(["open PUT"]);
   });
 
-  it("a quote more than five minutes old is not traded on: the alert is refused and logged, nothing is sent", async () => {
-    feed.ageMs = 6 * MIN;
+  it("a quote more than a minute old is not traded on: the alert is refused and logged, nothing is sent", async () => {
+    feed.ageMs = 90_000;
     const res = await alert(bull);
     expect(res.status).toBe(202); // answered at once: "waiting for a live price"
     // ...and when none arrives the call is logged as rejected (the wait for a quote is real time, so give it a moment)
@@ -176,7 +176,7 @@ describe("the price", () => {
     expect(sent()).toEqual([]);
     expect(held()).toHaveLength(0);
     expect(signalsStore.all().at(-1)).toMatchObject({ status: "rejected", rejectReason: "no_price" });
-    feed.ageMs = 4 * MIN; // fresh enough
+    feed.ageMs = 45_000; // recent enough
     await alert(bull);
     expect(sent()).toEqual(["open PUT"]);
   });

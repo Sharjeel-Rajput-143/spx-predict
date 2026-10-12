@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as scan } from "@/app/api/cron/scan/route";
+import { withBotLock } from "./botLock";
 import { ensureBotRecord } from "./bots";
 import { MAX_FAILED_ORDERS, runDueEntryRetries, runEntryRetry } from "./entryRetry";
 import { processSignal, receiveAndSaveSignal } from "./engine";
@@ -273,3 +274,38 @@ describe("the every-minute address for a host that doesn't stay running", () => 
     expect(held().map((p) => p.type)).toEqual(["short_call_spread"]);
   });
 });
+
+describe("a retry never gets in the way of a real alert", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("the bot's lock is free while the retry waits for a price: a real alert's turn does not wait behind it", async () => {
+    executor.queueScenario(NDX_BOT_ID, { kind: "reject", reason: "no" });
+    await alert("bullish", et(10, 0)); // dropped
+    let priceAsked = false;
+    const slowPrice = async () => {
+      priceAsked = true;
+      await sleep(400);
+      return 21_003.7;
+    };
+    const running = runEntryRetry(NDX_BOT_ID, et(10, 2), { executor, price: slowPrice, ...fast });
+    while (!priceAsked) await sleep(5);
+    const t0 = Date.now();
+    await withBotLock(NDX_BOT_ID, async () => undefined); // what a real alert needs first
+    expect(Date.now() - t0).toBeLessThan(150); // not held up by the 400 ms price wait
+    expect((await running).retried).toBe(true);
+  });
+
+  it("if something changed while the price was being fetched (a newer alert came and opened), the retry does not go ahead", async () => {
+    executor.queueScenario(NDX_BOT_ID, { kind: "reject", reason: "no" });
+    await alert("bullish", et(10, 0)); // dropped
+    const priceThenAlert = async () => {
+      await alert("bearish", et(10, 2)); // a real alert lands in the meantime and opens the call spread
+      return 21_003.7;
+    };
+    const r = await runEntryRetry(NDX_BOT_ID, et(10, 2) + 5_000, { executor, price: priceThenAlert, ...fast });
+    expect(r.retried).toBe(false);
+    expect(sent()).toEqual(["open PUT", "open CALL"]); // no second put was sent by the retry
+    expect(held().map((p) => p.type)).toEqual(["short_call_spread"]);
+  });
+});
+

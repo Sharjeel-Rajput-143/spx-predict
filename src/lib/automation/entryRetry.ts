@@ -56,60 +56,79 @@ export interface EntryRetryResult {
 
 const HIDDEN = "nothing_to_retry";
 
-/** One look at one bot. Quiet when there is nothing to do: it writes nothing unless it retries. */
-export function runEntryRetry(botId: string, now: number = Date.now(), options: EntryRetryOptions = {}): Promise<EntryRetryResult> {
+type Plan =
+  | { skipped: string }
+  | { root: Signal; direction: SignalDirection; ended: string; attempt: number; underlying: string };
+
+/** Everything that decides whether to retry, except the price. Reads only, so it is cheap to run twice. */
+function plan(botId: string, now: number): Plan {
+  const skip = (why: string): Plan => ({ skipped: why });
+
+  // The bot's latest real alert: an accepted one, or one the webhook could not price at the time. Its own retries don't count.
+  const real = signalsStore
+    .query((s) => s.botId === botId && !isRetry(s) && (s.status === "accepted" || (s.status === "rejected" && s.rejectReason === "no_price")))
+    .sort((a, b) => a.receivedAt - b.receivedAt);
+  const root = real.at(-1);
+  if (!root) return skip(HIDDEN);
+  const direction = root.signal as SignalDirection;
+  if (easternDateKey(root.receivedAt) !== easternDateKey(now)) return skip(HIDDEN);
+
+  const retries = signalsStore.query((s) => s.botId === botId && isRetry(s) && retryOf(s) === root.id);
+  const chain = new Set([root.id, ...retries.map((s) => s.id)]);
+
+  // Something was opened for this alert at some point (or is half-way): done, or a person's to check.
+  if (positionsStore.query((p) => p.openSignalId !== null && chain.has(p.openSignalId) && p.status !== "rejected").length > 0) return skip(HIDDEN);
+  // Anything held on either side: a retry opens nothing next to it, and never stands in for a close.
+  if (activePositionsForBot(botId).length > 0) return skip(HIDDEN);
+
+  // How the alert's run ended: the last thing logged for it or its retries (not our own "retrying" notes).
+  const logged = decisionsStore
+    .query((d) => d.signalId !== null && chain.has(d.signalId) && d.outcome !== "entry_retry")
+    .sort((a, b) => a.createdAt - b.createdAt);
+  const ended = logged.at(-1)?.outcome ?? (root.status === "rejected" ? "no_price" : null);
+  if (ended === null || !RETRYABLE.has(ended)) return skip(HIDDEN);
+  if (logged.filter((d) => FAILED_ORDERS.has(d.outcome)).length >= MAX_FAILED_ORDERS) return skip("too_many_failed_orders");
+  if (retries.length >= MAX_RETRIES_PER_ALERT) return skip("too_many_retries");
+
+  // The bot must be in a state to trade by itself.
+  const bot = botsStore.get(botId);
+  if (!bot || !bot.enabled || bot.killSwitch || bot.needsAttention) return skip("bot_not_ready");
+  if (bot.triggers && bot.triggers[direction] === false) return skip("trigger_off");
+  if (isDryRun()) return skip("dry_run");
+  let config;
+  try {
+    config = getBotStaticConfig(botId);
+  } catch {
+    return skip("not_set_up");
+  }
+  if (!isWithinTradingHours(now, hoursConfigFor(config.hours))) return skip("outside_hours");
+
+  // At most one try a minute.
+  const lastTry = Math.max(root.receivedAt, ...retries.map((s) => s.receivedAt));
+  if (now - lastTry < MIN_GAP_MS) return skip("too_soon");
+
+  return { root, direction, ended, attempt: retries.length + 1, underlying: config.underlying };
+}
+
+/**
+ * One look at one bot. Quiet when there is nothing to do: it writes nothing unless it retries. The price is fetched with the bot's lock
+ * NOT held (a lookup can take seconds, and a real alert must never wait behind it); everything is then checked again under the lock, and
+ * the retry only goes ahead if nothing changed in between.
+ */
+export async function runEntryRetry(botId: string, now: number = Date.now(), options: EntryRetryOptions = {}): Promise<EntryRetryResult> {
+  const first = await withBotLock(botId, async () => plan(botId, now));
+  if ("skipped" in first) return { botId, skipped: first.skipped, retried: false };
+
+  // A fresh live price is what the strikes are built from; none yet, and it waits for the next minute.
+  const price = await (options.price ?? ((u: string) => resolveHookPrice(u, Date.now(), 3_000)))(first.underlying);
+  if (price === null || !Number.isFinite(price) || price <= 0) return { botId, skipped: "no_price_yet", retried: false };
+
   return withBotLock(botId, async (): Promise<EntryRetryResult> => {
-    const skip = (why: string): EntryRetryResult => ({ botId, skipped: why, retried: false });
-
-    // The bot's latest real alert: an accepted one, or one the webhook could not price at the time. Its own retries don't count.
-    const real = signalsStore
-      .query((s) => s.botId === botId && !isRetry(s) && (s.status === "accepted" || (s.status === "rejected" && s.rejectReason === "no_price")))
-      .sort((a, b) => a.receivedAt - b.receivedAt);
-    const root = real.at(-1);
-    if (!root) return skip(HIDDEN);
-    const direction = root.signal as SignalDirection;
-    if (easternDateKey(root.receivedAt) !== easternDateKey(now)) return skip(HIDDEN);
-
-    const retries = signalsStore.query((s) => s.botId === botId && isRetry(s) && retryOf(s) === root.id);
-    const chain = new Set([root.id, ...retries.map((s) => s.id)]);
-
-    // Something was opened for this alert at some point (or is half-way): done, or a person's to check.
-    if (positionsStore.query((p) => p.openSignalId !== null && chain.has(p.openSignalId) && p.status !== "rejected").length > 0) return skip(HIDDEN);
-    // Anything held on either side: a retry opens nothing next to it, and never stands in for a close.
-    if (activePositionsForBot(botId).length > 0) return skip(HIDDEN);
-
-    // How the alert's run ended: the last thing logged for it or its retries (not our own "retrying" notes).
-    const logged = decisionsStore
-      .query((d) => d.signalId !== null && chain.has(d.signalId) && d.outcome !== "entry_retry")
-      .sort((a, b) => a.createdAt - b.createdAt);
-    const ended = logged.at(-1)?.outcome ?? (root.status === "rejected" ? "no_price" : null);
-    if (ended === null || !RETRYABLE.has(ended)) return skip(HIDDEN);
-    const failed = logged.filter((d) => FAILED_ORDERS.has(d.outcome)).length;
-    if (failed >= MAX_FAILED_ORDERS) return skip("too_many_failed_orders");
-    if (retries.length >= MAX_RETRIES_PER_ALERT) return skip("too_many_retries");
-
-    // The bot must be in a state to trade by itself.
-    const bot = botsStore.get(botId);
-    if (!bot || !bot.enabled || bot.killSwitch || bot.needsAttention) return skip("bot_not_ready");
-    if (bot.triggers && bot.triggers[direction] === false) return skip("trigger_off");
-    if (isDryRun()) return skip("dry_run");
-    let config;
-    try {
-      config = getBotStaticConfig(botId);
-    } catch {
-      return skip("not_set_up");
-    }
-    if (!isWithinTradingHours(now, hoursConfigFor(config.hours))) return skip("outside_hours");
-
-    // At most one try a minute.
-    const lastTry = Math.max(root.receivedAt, ...retries.map((s) => s.receivedAt));
-    if (now - lastTry < MIN_GAP_MS) return skip("too_soon");
-
-    // A fresh live price is what the strikes are built from; none yet, and it waits for the next minute.
-    const price = await (options.price ?? ((u: string) => resolveHookPrice(u, Date.now(), 3_000)))(config.underlying);
-    if (price === null || !Number.isFinite(price) || price <= 0) return skip("no_price_yet");
-
-    const attempt = retries.length + 1;
+    const again = plan(botId, now);
+    if ("skipped" in again) return { botId, skipped: again.skipped, retried: false };
+    if (again.root.id !== first.root.id || again.attempt !== first.attempt) return { botId, skipped: "changed", retried: false };
+    const { root, direction, ended, attempt } = again;
+    const config = getBotStaticConfig(botId);
     const retry = receiveAndSaveSignal({
       botId,
       signal: direction,
