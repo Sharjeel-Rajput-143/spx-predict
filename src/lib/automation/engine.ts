@@ -237,12 +237,13 @@ export async function closePosition(
   const ladder = plan?.ladder ?? null;
   const pricingNote = plan?.note;
 
+  let closeStep = 0;
   const result = await placeAndWatch({
     executor,
     kind: "close",
     positionId: position.id,
     now,
-    place: (price) => executor.placeCloseOrder(position, { pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
+    place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${signal?.id ?? position.id}:close:${position.id}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
     prices: ladder?.prices ?? null,
     stepMs: pricing?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
     finalMs: timeoutMs,
@@ -998,6 +999,8 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("executor_error", reason, { positionId: position.id });
   };
 
+  // One id per price step, built from the alert (or the position, for a manual open): the same step sent twice carries the same id.
+  let openStep = 0;
   const result = await placeAndWatch({
     executor,
     kind: "open",
@@ -1005,6 +1008,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     now,
     place: (price) =>
       executor.placeOpenOrder({
+        clientOrderId: `${signal?.id ?? position.id}:open:${++openStep}`,
         botId,
         pricePercent: staticConfig.openPricePercent,
         underlying: staticConfig.underlying,

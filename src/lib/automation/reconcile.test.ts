@@ -41,6 +41,25 @@ describe("reconcile", () => {
     expect(r.problems).toEqual([expect.objectContaining({ kind: "unknown_at_broker", symbol: "NDXP261006C21040000", actual: -1 })]);
   });
 
+  it("legs still held for a position our records have closed are noticed, even with nothing open (a close that never completed at the broker)", async () => {
+    positionsStore.insert(open({ ...NDX_PUT, status: "closed", closedAt: 1 }));
+    const r = await reconcile(broker(LEGS));
+    expect(r.ok).toBe(false);
+    expect(r.problems.map((p) => [p.kind, p.symbol, p.actual])).toEqual([["unknown_at_broker", "NDXP261006P20970000", -1], ["unknown_at_broker", "NDXP261006P20960000", 1]]);
+  });
+
+  it("the legs of an order still in flight are not called unknown (the close or open is not finished yet)", async () => {
+    positionsStore.insert(open({ ...NDX_PUT, status: "closing" }));
+    expect(await reconcile(broker(LEGS))).toMatchObject({ ok: true, problems: [] });
+    positionsStore.insert(open({ ...NDX_PUT, status: "opening", shortStrike: 20_950, longStrike: 20_940 }));
+    expect(await reconcile(broker([...LEGS, { symbol: "NDXP261006P20950000", quantity: -1 }, { symbol: "NDXP261006P20940000", quantity: 1 }]))).toMatchObject({ ok: true });
+  });
+
+  it("a series no position of ours was ever on is still none of our business", async () => {
+    positionsStore.insert(open({ ...NDX_PUT, status: "closed", closedAt: 1 }));
+    expect((await reconcile(broker([{ symbol: "SPXW261006P07700000", quantity: -1 }]))).ok).toBe(true);
+  });
+
   it("other things in the account - stocks, other series - are none of our business", async () => {
     positionsStore.insert(open(NDX_PUT));
     const r = await reconcile(broker([...LEGS, { symbol: "AAPL", quantity: 100 }, { symbol: "SPY261016C00500000", quantity: -1 }]));

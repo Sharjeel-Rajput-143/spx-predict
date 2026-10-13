@@ -9,7 +9,7 @@ async function handleGET(req: NextRequest) {
   if (denied) return denied;
   return guarded(async () => {
     const status = executorStatus();
-    if (status.venue !== "tradier" || status.error || !sharedExecutor.getBalances) {
+    if (status.venue === "mock" || status.error || !sharedExecutor.getBalances) {
       return NextResponse.json({ venue: status.venue, sandbox: status.sandbox ?? null, error: status.error, balances: null });
     }
     try {

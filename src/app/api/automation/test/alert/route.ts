@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBotStaticConfig, isKnownBot } from "@/lib/automation/bots";
 import { getWebhookSecret } from "@/lib/automation/config";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
-import { executorStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
+import { executorStatus, isPaperStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { withStorage } from "@/lib/automation/withStorage";
@@ -21,7 +21,7 @@ async function handlePOST(req: NextRequest) {
   return guarded(async () => {
     const status = executorStatus();
     // Test alerts place real (paper) orders on a broker's sandbox, but never on a production account.
-    if (!(status.venue === "mock" || (status.venue === "tradier" && status.sandbox === true))) return badRequest("Test alerts are only available on the mock executor or the Tradier sandbox - never against real money.", 409);
+    if (!isPaperStatus(status)) return badRequest("Test alerts are only available on the mock executor or a paper (sandbox) broker account - never against real money.", 409);
 
     const body = await readJson(req);
     const { bot, signal, price } = body;

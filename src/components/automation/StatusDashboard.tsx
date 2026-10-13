@@ -67,7 +67,7 @@ export interface StatusPosition {
   closePrice?: number | null;
   openedAt: number | null;
   closedAt: number | null;
-  venue?: "mock" | "tradier";
+  venue?: "mock" | "tradier" | "ibkr";
   test?: boolean;
   /** How an expired position's result was settled (estimated from the underlying, or typed in). */
   settlement?: { kind: "estimated" | "manual"; pl: number; underlyingPrice?: number };
@@ -86,7 +86,7 @@ export interface StatusOrder {
   shortStrike: number | null;
   longStrike: number | null;
   underlying: string | null;
-  venue: "mock" | "tradier";
+  venue: "mock" | "tradier" | "ibkr";
 }
 
 export interface StatusSignal {
@@ -103,11 +103,12 @@ export interface StatusSignal {
 }
 
 export interface StatusExecutor {
-  kind: "mock" | "tradier" | null;
-  venue: "mock" | "tradier" | null;
+  kind: "mock" | "tradier" | "ibkr" | null;
+  venue: "mock" | "tradier" | "ibkr" | null;
   error: string | null;
   baseUrl?: string;
   sandbox?: boolean;
+  priceSource?: "feed" | "broker";
   dryRun: boolean;
   testMode: boolean;
 }
@@ -285,7 +286,7 @@ function ExecutorBanner({ executor }: { executor: StatusExecutor }) {
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm", mock ? "bg-amber-500/10 text-amber-500" : live ? "bg-down-soft text-down" : "bg-accent/10 text-accent")}>
       <span className="font-semibold">
-        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : live ? "LIVE — Tradier PRODUCTION: real money" : "Tradier SANDBOX (paper money)"}
+        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : executor.venue === "ibkr" ? (live ? "LIVE — Interactive Brokers: real money" : "Interactive Brokers PAPER (paper money)") : live ? "LIVE — Tradier PRODUCTION: real money" : "Tradier SANDBOX (paper money)"}
       </span>
       {!mock && executor.baseUrl && <span className="font-mono text-xs">{executor.baseUrl}</span>}
       {executor.dryRun && <Pill tone="warn">Dry run: decisions only, no orders</Pill>}
@@ -322,9 +323,9 @@ function BotCard({
   const parsed = Number(price.replace(/,/g, ""));
   const priceOk = price.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
   // Test alerts run on the mock and on the Tradier sandbox (paper money) - never against a production account.
-  const safeVenue = executor.venue === "mock" || (executor.venue === "tradier" && executor.sandbox === true);
+  const safeVenue = executor.venue === "mock" || ((executor.venue === "tradier" || executor.venue === "ibkr") && executor.sandbox === true);
   const canTest = safeVenue && !executor.error && !bot.configError;
-  const why = !canTest ? (!safeVenue ? "Test alerts never run against real money: they need the mock executor or the Tradier sandbox." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
+  const why = !canTest ? (!safeVenue ? "Test alerts never run against real money: they need the mock executor or a paper broker account." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
 
   return (
     <Card className="space-y-3 p-4" >
@@ -505,7 +506,7 @@ export function StatusView({
       )}
       <ExecutorBanner executor={data.executor} />
 
-      {reconcile && data.executor.venue === "tradier" && (
+      {reconcile && (data.executor.venue === "tradier" || data.executor.venue === "ibkr") && (
         <Card className="space-y-2 p-4">
           <SectionTitle
             action={
@@ -516,7 +517,7 @@ export function StatusView({
           >
             Broker check
           </SectionTitle>
-          <p className="text-xs text-muted">Compares what the bots say is open with what {data.executor.sandbox ? "the Tradier sandbox" : "Tradier"} actually holds, leg by leg. It reports and flags the bot - it never opens or closes anything.</p>
+          <p className="text-xs text-muted">Compares what the bots say is open with what {data.executor.venue === "ibkr" ? "the Interactive Brokers account" : data.executor.sandbox ? "the Tradier sandbox" : "Tradier"} actually holds, leg by leg. It reports and flags the bot - it never opens or closes anything.</p>
           {reconcile.error && <p className="rounded-lg bg-down-soft px-3 py-2 text-sm text-down">{reconcile.error}</p>}
           {reconcile.report &&
             (reconcile.report.ok ? (

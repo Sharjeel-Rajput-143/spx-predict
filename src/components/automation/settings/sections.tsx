@@ -18,7 +18,7 @@ export interface SettingsData {
   email: { enabled: boolean; to: string | null; senderWired: boolean };
   sessionTimeoutChoices: number[];
   signInRequired: boolean;
-  executor: { kind: "mock" | "tradier" | null; venue: "mock" | "tradier" | null; error: string | null; baseUrl?: string; sandbox?: boolean; dryRun: boolean; testMode: boolean };
+  executor: { kind: "mock" | "tradier" | "ibkr" | null; venue: "mock" | "tradier" | "ibkr" | null; error: string | null; baseUrl?: string; sandbox?: boolean; priceSource?: "feed" | "broker"; dryRun: boolean; testMode: boolean };
   accounts: { id: string; bots: string[] }[];
   webhook: { path: string; secretSet: boolean; bots: { id: string; name: string; underlying: string | null }[] };
 }
@@ -215,7 +215,7 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
 // ---------------------------------------------------------------------------
 
 export interface BrokerView {
-  venue: "mock" | "tradier" | null;
+  venue: "mock" | "tradier" | "ibkr" | null;
   sandbox: boolean | null;
   error: string | null;
   balances: { accountId: string; totalEquity: number | null; optionBuyingPower: number | null; cash: number | null } | null;
@@ -261,9 +261,9 @@ export function AccountsSection({ data, broker, onRefresh }: { data: SettingsDat
         ) : x.venue === "mock" ? (
           <KeyValue rows={[["Executor", "Mock - test trades only, nothing reaches a broker"], ["Mode", x.dryRun ? "Dry run: decisions only, no orders" : "Orders go to the mock"], ["Testing mode", x.testMode ? "On: test alerts ignore trading hours" : "Off"]]} />
         ) : (
-          <KeyValue rows={[["Executor", x.sandbox ? "Tradier sandbox (paper money)" : "Tradier production"], ["Address", <span key="a" className="font-mono text-xs">{x.baseUrl}</span>], ["Mode", x.dryRun ? "Dry run" : "Live orders"]]} />
+          <KeyValue rows={[["Executor", x.venue === "ibkr" ? (x.sandbox ? "Interactive Brokers paper account, through the bridge" : "Interactive Brokers LIVE account, through the bridge") : x.sandbox ? "Tradier sandbox (paper money)" : "Tradier production"], ["Address", <span key="a" className="font-mono text-xs">{x.baseUrl}</span>], ...(x.venue === "ibkr" ? [["Prices", x.priceSource === "broker" ? "From the broker (the bridge)" : "From the public feed"] as [string, string]] : []), ["Mode", x.dryRun ? "Dry run" : "Live orders"]]} />
         )}
-        <p className="text-xs text-muted">Tradier is built behind this switch but disabled (EXECUTOR=mock). It is not connected to any account.</p>
+        {x.venue === "mock" && <p className="text-xs text-muted">Brokers (Tradier, Interactive Brokers) are built behind this switch but disabled (BROKER=internal). They are not connected to any account.</p>}
       </Section>
 
       <Section title="Accounts" hint="The accounts your bots trade on.">

@@ -55,6 +55,13 @@ export async function reconcile(executor: BrokerExecutor, now: number = Date.now
   const expected = new Map<string, { quantity: number; botIds: Set<string> }>();
   const problems: ReconcileProblem[] = [];
   const roots = new Set<string>();
+  // A series counts as ours if ANY position we ever recorded was on it, so a leg left at the broker is still noticed when our records say we are flat.
+  // The legs of an order still in flight (opening, closing) are neither expected nor unknown: that order is a person's, or the engine's, to settle.
+  const inFlight = new Set<string>();
+  for (const p of positionsStore.all()) {
+    if (p.optionRoot) roots.add(p.optionRoot);
+    if (p.status === "opening" || p.status === "closing") for (const leg of legsOf(p) ?? []) inFlight.add(leg.symbol);
+  }
 
   for (const p of positionsStore.query((x) => x.status === "open")) {
     const legs = legsOf(p);
@@ -81,7 +88,7 @@ export async function reconcile(executor: BrokerExecutor, now: number = Date.now
   // Only options on a series our bots trade count as "unknown" - the account may hold other things that aren't ours.
   for (const b of broker) {
     const root = OPTION_SYMBOL.exec(b.symbol)?.[1];
-    if (root && roots.has(root) && !expected.has(b.symbol) && b.quantity !== 0) {
+    if (root && roots.has(root) && !expected.has(b.symbol) && !inFlight.has(b.symbol) && b.quantity !== 0) {
       problems.push({ kind: "unknown_at_broker", symbol: b.symbol, expected: 0, actual: b.quantity, text: `${b.symbol}: the broker holds ${b.quantity} that none of our open positions explain.` });
     }
   }

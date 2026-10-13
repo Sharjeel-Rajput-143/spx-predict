@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { badRequest, guarded, unauthorized } from "@/lib/automation/routeAuth";
-import { executorStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
+import { executorStatus, isPaperStatus, sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore, webhooksStore } from "@/lib/automation/store";
 import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { SLOW_QUOTE_WAIT_MS, resolveHookPrice } from "@/lib/automation/hookPrice";
@@ -21,8 +21,8 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!hook) return badRequest("Webhook not found.", 404);
     if (!isAttached(hook)) return badRequest("Attach this webhook to a trigger first: a test call needs to know which bot and signal it is.", 409);
     const status = executorStatus();
-    if (!(status.venue === "mock" || (status.venue === "tradier" && status.sandbox === true))) {
-      return badRequest("A test call is only possible on the mock executor or the Tradier sandbox - never against real money.", 409);
+    if (!isPaperStatus(status)) {
+      return badRequest("A test call is only possible on the mock executor or a paper (sandbox) broker account - never against real money.", 409);
     }
     // Like the real call: no price is sent. The test runs on the live quote of the bot's underlying.
     const underlying = webhookUnderlying(hook.botId);

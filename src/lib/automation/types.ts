@@ -359,7 +359,7 @@ export interface OrderState {
   rejectReason?: string;
 }
 
-export type ExecutorVenue = "mock" | "tradier";
+export type ExecutorVenue = "mock" | "tradier" | "ibkr";
 
 export interface OpenSpreadRequest {
   botId: string;
@@ -375,6 +375,42 @@ export interface OpenSpreadRequest {
   quantity: number;
   /** The opening limit credit per spread. */
   limitCredit: number;
+  expiry: string;
+  /** A stable id for this order (the alert's id plus the price step), so a broker that sees it twice can refuse the second. */
+  clientOrderId?: string;
+}
+
+/** What a close order can carry. */
+export interface CloseOrderOptions {
+  pricePercent?: number;
+  limitDebit?: number;
+  quantity?: number;
+  /** As on OpenSpreadRequest: lets a broker refuse a repeat of the same order. */
+  clientOrderId?: string;
+}
+
+/** The broker's own quote for an underlying (an index), with the time the quote is from. */
+export interface UnderlyingQuote {
+  symbol: string;
+  price: number;
+  /** Epoch ms the quote is from (not when it was fetched). */
+  asOf: number;
+  /** True when the broker says the data is delayed. */
+  delayed?: boolean;
+}
+
+/** One row of an option chain, for a broker that can list one. */
+export interface OptionChainRow {
+  strike: number;
+  right: "call" | "put";
+  bid: number | null;
+  ask: number | null;
+  delta?: number | null;
+}
+
+export interface OptionChainRequest {
+  underlying: string;
+  optionRoot?: string;
   expiry: string;
 }
 
@@ -401,12 +437,16 @@ export interface BrokerExecutor {
   readonly venue?: ExecutorVenue;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
   /** `limitDebit`: the most to pay to buy the spread back. Unset = the executor's own default (the mock fills; Tradier sends a market order). */
-  placeCloseOrder(position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }): Promise<{ ref: string }>;
+  placeCloseOrder(position: Position, options?: CloseOrderOptions): Promise<{ ref: string }>;
   getOrder(ref: string): Promise<OrderState>;
   cancelOrder(ref: string): Promise<void>;
   listPositions(botId: string): Promise<Position[]>;
   /** The bid and ask of each leg, when the executor can see them. Executors without a market (the mock) omit it, and orders then go out at one price. */
   getSpreadQuote?(req: SpreadQuoteRequest): Promise<LegQuotes | null>;
+  /** The broker's own quote for an underlying, when it can give one. Null when there is no usable (or no recent enough) quote. */
+  getUnderlyingQuote?(symbol: string): Promise<UnderlyingQuote | null>;
+  /** The option chain for one expiry, when the broker can list it. Nothing in the engine needs it yet: strikes are built from the price. */
+  getOptionChain?(req: OptionChainRequest): Promise<OptionChainRow[] | null>;
   /** What the broker itself holds, for checking against our records. */
   listBrokerPositions?(): Promise<BrokerPosition[]>;
   /** The account's balances, for showing the paper (or real) balance next to the bots. */

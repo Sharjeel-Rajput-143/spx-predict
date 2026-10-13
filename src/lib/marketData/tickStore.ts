@@ -1,4 +1,6 @@
 import "server-only";
+import { priceSource } from "@/lib/automation/executorKind";
+import { fetchBrokerPrice } from "./brokerFeed";
 import { fetchGoogleFinancePrice, GOOGLE_FINANCE_CODES } from "./googleFinance";
 import { fetchYahooFinancePrice, YAHOO_CODES } from "./yahooFinance";
 
@@ -19,7 +21,7 @@ export interface Tick {
   price: number;
 }
 
-export type FeedSource = "google" | "yahoo";
+export type FeedSource = "google" | "yahoo" | "broker";
 
 const BASE_POLL_MS = 2000;
 const MAX_BACKOFF_MS = 30_000;
@@ -57,7 +59,7 @@ const GOOGLE_HEAD_START_MS = 700;
  * wait out Google's own retries before Yahoo was even tried). Neither is an official/licensed API, so relying on just one would make
  * every automation watching this feed only as reliable as that one undocumented endpoint.
  */
-export function fetchPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
+function fetchFeedPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
   const google = fetchGoogleFinancePrice(symbol, FEED_TIMEOUT_MS).catch(() => null);
   const yahoo = fetchYahooFinancePrice(symbol, FEED_TIMEOUT_MS).catch(() => null);
   return new Promise((resolve) => {
@@ -130,6 +132,18 @@ function startPolling(symbol: string) {
   };
 
   poll();
+}
+
+/** The live price of a symbol from the source the settings choose (PRICE_SOURCE: the public feed by default, or the broker's own quote). A bad setting gives no price, never a different source. */
+export function fetchPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
+  let source;
+  try {
+    source = priceSource();
+  } catch (err) {
+    console.error(`[marketData] ${err instanceof Error ? err.message : String(err)}`);
+    return Promise.resolve(null);
+  }
+  return source === "broker" ? fetchBrokerPrice(symbol) : fetchFeedPrice(symbol);
 }
 
 export function isLiveSymbol(symbol: string): boolean {

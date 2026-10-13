@@ -1,31 +1,33 @@
 import "server-only";
 import { MockExecutor } from "./executor";
+import { IbkrExecutor, readIbkrConfig } from "./ibkrExecutor";
 import { TradierExecutor, readTradierConfig } from "./tradierExecutor";
-import type { BrokerExecutor, ExecutorVenue, OpenSpreadRequest, OrderState, Position } from "./types";
+import { executorKind, priceSource, type ExecutorKind, type PriceSource } from "./executorKind";
+import type { BrokerExecutor, CloseOrderOptions, ExecutorVenue, OpenSpreadRequest, OrderState, Position } from "./types";
 
 /** AUTOMATION_MOCK_PRICING=simulated makes the mock report made-up close
  * prices so the P/L screens can be exercised; leave it unset otherwise. */
 export const MOCK_PRICING_SIMULATED = process.env.AUTOMATION_MOCK_PRICING === "simulated";
 
-export type ExecutorKind = "mock" | "tradier";
+export { executorKind };
+export type { ExecutorKind };
 
-/** EXECUTOR=mock (the default) or tradier. Anything else is an error, not a silent fallback. */
-export function executorKind(env: Record<string, string | undefined> = process.env): ExecutorKind {
-  const raw = (env.EXECUTOR ?? "mock").trim().toLowerCase() || "mock";
-  if (raw !== "mock" && raw !== "tradier") throw new Error(`EXECUTOR must be "mock" or "tradier", got "${raw}".`);
-  return raw;
+function buildExecutor(kind: ExecutorKind): BrokerExecutor {
+  if (kind === "tradier") return new TradierExecutor(readTradierConfig());
+  if (kind === "ibkr") return new IbkrExecutor(readIbkrConfig());
+  return new MockExecutor({ simulatePricing: MOCK_PRICING_SIMULATED });
 }
 
 // One instance per process, shared by every route's copy of this module (Next bundles routes separately).
 const g = globalThis as typeof globalThis & { __automationExecutor?: { key: string; executor: BrokerExecutor } };
 
 /** Builds (once) the executor the settings ask for. Throws a clear error when
- * EXECUTOR=tradier is selected but not safely configured - nothing is sent. */
+ * a broker is selected but not safely configured - nothing is sent. */
 export function getExecutor(): BrokerExecutor {
   const kind = executorKind();
   const key = `${kind}:${MOCK_PRICING_SIMULATED}`;
   if (g.__automationExecutor?.key !== key) {
-    g.__automationExecutor = { key, executor: kind === "tradier" ? new TradierExecutor(readTradierConfig()) : new MockExecutor({ simulatePricing: MOCK_PRICING_SIMULATED }) };
+    g.__automationExecutor = { key, executor: buildExecutor(kind) };
   }
   return g.__automationExecutor.executor;
 }
@@ -35,24 +37,39 @@ export interface ExecutorStatus {
   venue: ExecutorVenue | null;
   /** Why the chosen executor can't be used, or null when it can. */
   error: string | null;
-  /** Tradier only: where requests would go. */
+  /** A broker only: where requests would go (the Tradier API, or the bridge in front of IB Gateway). */
   baseUrl?: string;
+  /** A broker only: true for a paper/sandbox account, false when real money is allowed. */
   sandbox?: boolean;
+  /** Where the underlying's price comes from: the public feed, or the broker's own quote. */
+  priceSource?: PriceSource;
 }
+
+/** Paper money or nothing real at all: the only places a test call or a test alert may run. Real money never. */
+export const isPaperStatus = (s: Pick<ExecutorStatus, "venue" | "sandbox">): boolean => s.venue === "mock" || ((s.venue === "tradier" || s.venue === "ibkr") && s.sandbox === true);
 
 export function executorStatus(): ExecutorStatus {
   let kind: ExecutorKind;
+  let source: PriceSource;
   try {
     kind = executorKind();
+    source = priceSource();
   } catch (err) {
     return { kind: null, venue: null, error: err instanceof Error ? err.message : String(err) };
   }
-  if (kind === "mock") return { kind, venue: "mock", error: null };
+  if (source === "broker" && kind !== "ibkr") {
+    return { kind, venue: kind, error: 'PRICE_SOURCE=broker needs a broker that can quote prices (BROKER=ibkr). Set PRICE_SOURCE=feed, or BROKER=ibkr.', priceSource: source };
+  }
+  if (kind === "mock") return { kind, venue: "mock", error: null, priceSource: source };
   try {
+    if (kind === "ibkr") {
+      const c = readIbkrConfig();
+      return { kind, venue: "ibkr", error: null, baseUrl: c.baseUrl, sandbox: !c.allowLive, priceSource: source };
+    }
     const c = readTradierConfig();
-    return { kind, venue: "tradier", error: null, baseUrl: c.baseUrl, sandbox: c.sandbox };
+    return { kind, venue: "tradier", error: null, baseUrl: c.baseUrl, sandbox: c.sandbox, priceSource: source };
   } catch (err) {
-    return { kind, venue: "tradier", error: err instanceof Error ? err.message : String(err) };
+    return { kind, venue: kind, error: err instanceof Error ? err.message : String(err), priceSource: source };
   }
 }
 
@@ -64,7 +81,7 @@ export const sharedExecutor: BrokerExecutor = {
     return executorStatus().venue ?? undefined;
   },
   placeOpenOrder: (req: OpenSpreadRequest) => getExecutor().placeOpenOrder(req),
-  placeCloseOrder: (position: Position, options?: { pricePercent?: number; limitDebit?: number; quantity?: number }) => getExecutor().placeCloseOrder(position, options),
+  placeCloseOrder: (position: Position, options?: CloseOrderOptions) => getExecutor().placeCloseOrder(position, options),
   getOrder: (ref: string): Promise<OrderState> => getExecutor().getOrder(ref),
   cancelOrder: (ref: string) => getExecutor().cancelOrder(ref),
   listPositions: (botId: string) => getExecutor().listPositions(botId),
@@ -72,6 +89,14 @@ export const sharedExecutor: BrokerExecutor = {
   get getSpreadQuote() {
     const ex = executorStatus().error ? null : getExecutor();
     return ex?.getSpreadQuote ? ex.getSpreadQuote.bind(ex) : undefined;
+  },
+  get getUnderlyingQuote() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.getUnderlyingQuote ? ex.getUnderlyingQuote.bind(ex) : undefined;
+  },
+  get getOptionChain() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.getOptionChain ? ex.getOptionChain.bind(ex) : undefined;
   },
   get listBrokerPositions() {
     const ex = executorStatus().error ? null : getExecutor();

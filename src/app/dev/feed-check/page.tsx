@@ -15,7 +15,7 @@ const LIVE_MODE = process.env.NEXT_PUBLIC_DATA_SOURCE === "live";
  */
 interface FeedStatus {
   healthy: boolean;
-  source: "google" | "yahoo" | null;
+  source: "google" | "yahoo" | "broker" | null;
   consecutiveFailures: number;
   lastTickAt: number | null;
 }

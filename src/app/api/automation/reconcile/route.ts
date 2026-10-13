@@ -11,7 +11,7 @@ async function handlePOST(req: NextRequest) {
   if (denied) return denied;
   return guarded(async () => {
     const status = executorStatus();
-    if (status.venue !== "tradier") return badRequest("Nothing to check: the mock executor has no broker account.", 409);
+    if (status.venue === "mock" || status.venue === null) return badRequest("Nothing to check: the mock executor has no broker account.", 409);
     if (status.error) return badRequest(status.error, 409);
     const report = await reconcile(sharedExecutor);
     flagMismatches(report);

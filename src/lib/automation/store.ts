@@ -2,6 +2,7 @@ import "server-only";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isBrokerKind } from "./executorKind";
 import { JsonFileBackend } from "./storage/jsonFileBackend";
 import type { CollectionName, Repository, StorageBackend } from "./storage/repository";
 import { TursoBackend } from "./storage/tursoBackend";
@@ -64,12 +65,12 @@ const DATA_DIR = CHOICE.dir;
 export function storageProblem(): string | null {
   if (TURSO) {
     // The records are in the database, so there is no folder to check. A broker still can't be driven from a serverless host.
-    if (process.env.VERCEL && process.env.EXECUTOR?.trim().toLowerCase() === "tradier") {
+    if (process.env.VERCEL && isBrokerKind()) {
       return "A broker can't be driven from Vercel: it is a serverless host, and the engine keeps working after it answers an alert (placing orders, waiting for fills), which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
     }
     return storage.check();
   }
-  const broker = process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
+  const broker = isBrokerKind();
   if (process.env.VERCEL && broker) {
     return "A broker can't be driven from Vercel: it is a serverless host, and the engine keeps working after it answers an alert (placing orders, waiting for fills), which a serverless function may stop. Run it on a server that stays up (see docs/deploying.md).";
   }

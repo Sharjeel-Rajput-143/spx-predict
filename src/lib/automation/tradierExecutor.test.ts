@@ -336,7 +336,7 @@ describe("choosing the executor", () => {
   });
 
   it("rejects an unknown value instead of falling back", () => {
-    vi.stubEnv("EXECUTOR", "ibkr");
+    vi.stubEnv("EXECUTOR", "bogus");
     expect(() => executorKind()).toThrow(/"mock" or "tradier"/);
     expect(executorStatus().error).toMatch(/"mock" or "tradier"/);
   });

@@ -1,4 +1,5 @@
 import "server-only";
+import { isBrokerKind } from "./executorKind";
 
 export function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -97,7 +98,7 @@ export function isAuthOpenInProduction(): boolean {
  * money is in play (Tradier production), where sign-in stays on. */
 export function isAuthDisabled(): boolean {
   if (process.env.AUTOMATION_AUTH_DISABLED !== "true") return false;
-  const realMoney = isBrokerConfigured() && process.env.TRADIER_ALLOW_PRODUCTION === "true";
+  const realMoney = isBrokerConfigured() && (process.env.TRADIER_ALLOW_PRODUCTION === "true" || process.env.IBKR_ALLOW_LIVE === "true");
   return !realMoney;
 }
 
@@ -121,7 +122,7 @@ export function isTestMode(): boolean {
   return !isBrokerConfigured();
 }
 
-export const isBrokerConfigured = () => process.env.EXECUTOR?.trim().toLowerCase() === "tradier";
+export const isBrokerConfigured = () => isBrokerKind();
 
 /** A deployment on a serverless host (Vercel) that is only running the mock executor: a demo. It fills in the settings
  * nobody has given it, so the pages work with no environment variables at all. Never true locally and never with a broker. */

@@ -216,7 +216,7 @@ export async function runDueSweeps(now: number, options: SweepOptions = {}): Pro
 /** Only a real broker executor, configured, with orders actually being sent, has anything to recover or compare. */
 function brokerReady(): boolean {
   const s = executorStatus();
-  return s.venue === "tradier" && !s.error && !isDryRun();
+  return (s.venue === "tradier" || s.venue === "ibkr") && !s.error && !isDryRun();
 }
 
 async function tick(): Promise<void> {
