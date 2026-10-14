@@ -22,7 +22,11 @@ import type { BrokerExecutor, BrokerPosition, CloseOrderOptions, ExecutorVenue, 
  */
 
 export const IBKR_PAPER_ACCOUNT_PREFIX = "DU";
-const ORDER_TIMEOUT_MS = 10_000;
+// An order call can wait on the bridge looking up a contract it has not seen (up to 10 s each) and for the first status (2 s). A call that
+// is given up on too early leaves an order of UNKNOWN outcome, which blocks the bot until a person looks, so these are generous.
+const ORDER_TIMEOUT_MS = 20_000;
+/** The bridge asks for each leg's bid and ask in turn (up to 4 s each); a short limit here would quietly turn SmartPricing off. */
+const SPREAD_QUOTE_TIMEOUT_MS = 12_000;
 const QUOTE_TIMEOUT_MS = 4_000;
 /** The "am I connected, and to which account" answer is reused this long before an order asks again. */
 const HEALTH_TTL_MS = 30_000;
@@ -205,6 +209,7 @@ export class IbkrExecutor implements BrokerExecutor {
     if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`Refused: ${quantity} is not a whole number of contracts to close.`);
     if (options?.limitDebit !== undefined && !(options.limitDebit > 0)) throw new Error(`Refused: a limit debit of ${options.limitDebit} is not above 0.`);
     await this.assertReadyToTrade();
+    await this.assertAccountHolds(legs, quantity);
     return this.submit("/close_spread", {
       ...legs,
       positionId: position.id,
@@ -214,6 +219,23 @@ export class IbkrExecutor implements BrokerExecutor {
       ...(options?.limitDebit !== undefined ? { limitDebit: options.limitDebit } : {}),
       tif: "DAY",
     });
+  }
+
+  /**
+   * A close is a BUY of the spread. If the account does not actually hold it (closed by hand at the broker, or held in a smaller size), that
+   * same order would OPEN the opposite spread instead of closing anything. So a close is only sent when the account itself holds both legs,
+   * short and long, in at least this size. A second lock behind the bridge's own checks, and independent of our own records.
+   */
+  private async assertAccountHolds(legs: { root: string; expiry: string; right: "put" | "call"; shortStrike: number; longStrike: number }, quantity: number): Promise<void> {
+    const short = occSymbol(legs.root, legs.expiry, legs.right, legs.shortStrike);
+    const long = occSymbol(legs.root, legs.expiry, legs.right, legs.longStrike);
+    const held = await this.listBrokerPositions();
+    const of = (symbol: string) => held.filter((p) => p.symbol === symbol).reduce((sum, p) => sum + p.quantity, 0);
+    const shortHeld = of(short);
+    const longHeld = of(long);
+    if (shortHeld <= -quantity && longHeld >= quantity) return;
+    const sample = held.slice(0, 6).map((p) => `${p.symbol} ${p.quantity}`).join(", ") || "no positions";
+    throw new Error(`Refused: the account does not hold this spread in the size to close. Needed ${short} at ${-quantity} and ${long} at ${quantity}; it holds ${shortHeld} and ${longHeld} (account: ${sample}). Closing it would open the opposite spread, so no order was sent.`);
   }
 
   async getOrder(ref: string): Promise<OrderState> {
@@ -229,7 +251,7 @@ export class IbkrExecutor implements BrokerExecutor {
     const l = this.legs({ root: req.optionRoot, underlying: req.underlying, expiry: req.expiry, type: req.type, shortStrike: req.shortStrike, longStrike: req.longStrike });
     const json = await this.call("GET", "/quote/spread", {
       query: { underlying: l.underlying, root: l.root, expiry: l.expiry, type: l.type, shortStrike: String(l.shortStrike), longStrike: String(l.longStrike) },
-      timeoutMs: QUOTE_TIMEOUT_MS,
+      timeoutMs: SPREAD_QUOTE_TIMEOUT_MS,
     });
     const leg = (v: unknown) => {
       const o = (v ?? {}) as { bid?: unknown; ask?: unknown };

@@ -195,6 +195,18 @@ describe("an alert on the IBKR adapter: flip", () => {
     expect(ids[2]).toBe(`${s2.id}:open:1`);
   });
 
+  it("a position closed by hand at the broker is never 'closed' again by an order that would open the opposite spread", async () => {
+    await run("bullish", "b1");
+    bridge.orders.clear(); // someone closed it in TWS: the account holds nothing now
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(bridge.calls("/close_spread")).toHaveLength(0);
+    expect(bridge.calls("/open_spread")).toHaveLength(1); // only the first open: no new side either
+    expect(bridge.heldLegs()).toEqual([]);
+    expect(mine().map((p) => [p.type, p.status])).toEqual([["short_put_spread", "closing"]]);
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
+    expect(decisionsStore.all().map((d) => d.reason).join(" ")).toMatch(/does not hold this spread/);
+  });
+
   it("a close that fails opens nothing on the new side: the old position is left for a person", async () => {
     await run("bullish", "b1");
     bridge.down.add("close_spread");

@@ -220,15 +220,19 @@ describe("opening a spread", () => {
 });
 
 describe("closing a spread", () => {
+  /** What the account holds when it holds our put spread: short 20970, long 20960, `n` of each. */
+  const HOLDS = (n = 1) => ({ body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -n }, { symbol: "NDXP261006P20960000", quantity: n }] } });
+  const held = (n = 1) => ({ ...heldPut(), expiry: "2026-10-06", requestedQuantity: n, filledQuantity: n });
+
   it("a limit debit is a limit order carrying the position, the order id and the quantity; none is a market order", async () => {
-    const { calls, impl } = fakeBridge([{ body: PAPER }, { body: { ref: "c1" } }, { body: { ref: "c2" } }]);
+    const { calls, impl } = fakeBridge([{ body: PAPER }, HOLDS(), { body: { ref: "c1" } }, HOLDS(), { body: { ref: "c2" } }]);
     const ex = new IbkrExecutor(cfg, impl);
     const opts: CloseOrderOptions = { limitDebit: 3.5, clientOrderId: "sig-2:close:pos-1:1" };
-    await ex.placeCloseOrder(heldPut(), opts);
-    await ex.placeCloseOrder(heldPut(), { quantity: 1 });
+    await ex.placeCloseOrder(held(), opts);
+    await ex.placeCloseOrder(held(), { quantity: 1 });
     const [a, b] = calls.filter((c) => c.url.endsWith("/close_spread"));
     expect(a.body).toEqual({
-      underlying: "NDX", root: "NDXP", expiry: heldPut().expiry, type: "short_put_spread", right: "put", shortStrike: 20_970, longStrike: 20_960,
+      underlying: "NDX", root: "NDXP", expiry: "2026-10-06", type: "short_put_spread", right: "put", shortStrike: 20_970, longStrike: 20_960,
       positionId: "pos-1", clientOrderId: "sig-2:close:pos-1:1", quantity: 1, orderType: "limit", limitDebit: 3.5, tif: "DAY",
     });
     expect(b.body).toMatchObject({ orderType: "market", quantity: 1 });
@@ -237,22 +241,77 @@ describe("closing a spread", () => {
   });
 
   it("a partial close sends only that many contracts; nonsense quantities and prices are refused", async () => {
-    const { calls, impl } = fakeBridge([{ body: PAPER }, { body: { ref: "c1" } }]);
+    const { calls, impl } = fakeBridge([{ body: PAPER }, HOLDS(2), { body: { ref: "c1" } }]);
     const ex = new IbkrExecutor(cfg, impl);
-    const two = { ...heldPut(), requestedQuantity: 2, filledQuantity: 2 };
-    await ex.placeCloseOrder(two, { quantity: 1 });
+    await ex.placeCloseOrder(held(2), { quantity: 1 });
     expect(calls.at(-1)?.body).toMatchObject({ quantity: 1 });
-    await expect(ex.placeCloseOrder(two, { quantity: 0 })).rejects.toThrow(/whole number/);
-    await expect(ex.placeCloseOrder(two, { limitDebit: 0 })).rejects.toThrow(/above 0/);
+    await expect(ex.placeCloseOrder(held(2), { quantity: 0 })).rejects.toThrow(/whole number/);
+    await expect(ex.placeCloseOrder(held(2), { limitDebit: 0 })).rejects.toThrow(/above 0/);
   });
 
   it("is not blocked by the opening caps (closing is never capped), but still needs a paper account", async () => {
     const capped: IbkrConfig = { ...cfg, maxContracts: 1, maxRiskPerOrder: 10 };
-    const ok = fakeBridge([{ body: PAPER }, { body: { ref: "c" } }]);
-    await expect(new IbkrExecutor(capped, ok.impl).placeCloseOrder({ ...heldPut(), requestedQuantity: 5, filledQuantity: 5 })).resolves.toEqual({ ref: "c" });
+    const ok = fakeBridge([{ body: PAPER }, HOLDS(5), { body: { ref: "c" } }]);
+    await expect(new IbkrExecutor(capped, ok.impl).placeCloseOrder(held(5))).resolves.toEqual({ ref: "c" });
     const live = fakeBridge([{ body: { connected: true, account: "U1" } }]);
-    await expect(new IbkrExecutor(cfg, live.impl).placeCloseOrder(heldPut())).rejects.toThrow(/not a paper account/);
+    await expect(new IbkrExecutor(cfg, live.impl).placeCloseOrder(held())).rejects.toThrow(/not a paper account/);
     expect(live.calls).toHaveLength(1);
+  });
+});
+
+describe("a close is only sent when the account holds the spread", () => {
+  // A close BUYS the spread. Held, that closes it. Not held, the same order would open the opposite spread.
+  const pos = (n = 1) => ({ ...heldPut(), expiry: "2026-10-06", requestedQuantity: n, filledQuantity: n });
+  const account = (positions: { symbol: string; quantity: number }[]) => ({ body: { positions } });
+  const SHORT = "NDXP261006P20970000";
+  const LONG = "NDXP261006P20960000";
+
+  const refused = async (positions: { symbol: string; quantity: number }[], p = pos()) => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }, account(positions), { body: { ref: "would-be-wrong" } }]);
+    const err = await new IbkrExecutor(cfg, impl).placeCloseOrder(p).catch((e: Error) => e);
+    expect(calls.filter((c) => c.url.endsWith("/close_spread")), "no order may be sent").toHaveLength(0);
+    return (err as Error).message;
+  };
+
+  it("an empty account (closed by hand at the broker): nothing is sent, and it says why", async () => {
+    const message = await refused([]);
+    expect(message).toMatch(/does not hold this spread/);
+    expect(message).toMatch(/opposite spread/);
+    expect(message).toContain("no positions");
+  });
+
+  it("only one leg held, a smaller size, or the OPPOSITE spread: nothing is sent", async () => {
+    await refused([{ symbol: SHORT, quantity: -1 }]);
+    await refused([{ symbol: SHORT, quantity: -1 }, { symbol: LONG, quantity: 1 }], pos(2));
+    const opposite = await refused([{ symbol: SHORT, quantity: 1 }, { symbol: LONG, quantity: -1 }]);
+    expect(opposite).toContain(`${SHORT} at -1`);
+    expect(opposite).toMatch(/it holds 1 and -1/);
+  });
+
+  it("a different series, expiry or strike in the account doesn't count", async () => {
+    await refused([{ symbol: "NDXP261007P20970000", quantity: -1 }, { symbol: "NDXP261007P20960000", quantity: 1 }]);
+    await refused([{ symbol: "NDXP261006C20970000", quantity: -1 }, { symbol: "NDXP261006C20960000", quantity: 1 }]);
+    await refused([{ symbol: "NDXP261006P20975000", quantity: -1 }, { symbol: "NDXP261006P20965000", quantity: 1 }]);
+  });
+
+  it("holding at least that many of each leg is enough, including when other positions share the account", async () => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }, account([{ symbol: "SPY", quantity: 100 }, { symbol: SHORT, quantity: -3 }, { symbol: LONG, quantity: 3 }]), { body: { ref: "ok" } }]);
+    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos(2))).resolves.toEqual({ ref: "ok" });
+    expect(calls.filter((c) => c.url.endsWith("/close_spread"))).toHaveLength(1);
+  });
+
+  it("an account that can't be read stops the close rather than guessing", async () => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }, { status: 503, body: "gateway busy" }, { body: { ref: "x" } }]);
+    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos())).rejects.toThrow(/HTTP 503/);
+    expect(calls.filter((c) => c.url.endsWith("/close_spread"))).toHaveLength(0);
+    const odd = fakeBridge([{ body: PAPER }, { body: {} }]);
+    await expect(new IbkrExecutor(cfg, odd.impl).placeCloseOrder(pos())).rejects.toThrow(/no list of positions/);
+  });
+
+  it("opening is not affected: it never needs to hold anything", async () => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }, { body: { ref: "o1" } }]);
+    await new IbkrExecutor(cfg, impl).placeOpenOrder(open());
+    expect(calls.map((c) => c.url)).toEqual([`${URL_}/health`, `${URL_}/open_spread`]);
   });
 });
 

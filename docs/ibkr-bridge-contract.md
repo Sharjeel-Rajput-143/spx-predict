@@ -11,8 +11,12 @@ talks to the app over HTTPS. The app is only the client; the bridge is not writt
 | `BRIDGE_URL` | `https://...` (plain `http://` only for `localhost` / `127.0.0.1`). No user name or password in it. |
 | `BRIDGE_SECRET` | At least 16 characters. Sent on every request as the `X-Bridge-Secret` header. |
 | `PRICE_SOURCE=broker` | Prices (strikes, live checks, exits) come from `GET /quote/{symbol}`. Default `feed` (Google/Yahoo). No fallback between them. |
-| `BRIDGE_MAX_QUOTE_AGE_MS` | A quote older than this is "no price". Default 60000. Paper data without a subscription is delayed, so it is refused until this is raised on purpose. |
+| `BRIDGE_MAX_QUOTE_AGE_MS` | A quote older than this is "no price". Default 60000. Paper data without a subscription is delayed (about 15 minutes), so it is refused until this is raised on purpose: use `1200000` (20 minutes) for paper testing of the plumbing only. Real-time data needs a paid subscription. |
 | `IBKR_ALLOW_LIVE=true` | Allows an account that does not start with `DU`. Also needs `IBKR_MAX_CONTRACTS_PER_ORDER` and `IBKR_MAX_RISK_PER_ORDER` (no defaults). Leave unset. |
+
+Where the app runs: on the same small server as the bridge and IB Gateway (the app refuses to drive a broker from Vercel). Then `BRIDGE_URL`
+can be `http://localhost:<port>`, and the minute checks (missed-open retry, exit options, end-of-day sweep) run by themselves.
+TradingView reaches the app over HTTPS on a domain name; the bridge itself should listen on localhost only.
 
 The app refuses to send any order unless `GET /health` says `connected: true` and the account id starts with `DU`. The bridge must enforce the same
 rule itself: it is a second lock, not a replacement.
@@ -45,11 +49,16 @@ The app never repeats a failed order request: after a timeout the outcome is unk
 - **`tif` is always sent and always `DAY`.**
 - **Statuses are exactly the five above.** The app treats any other value as an error, never as "working".
 - **Refuse an account that does not start with `DU`** unless the bridge's own live flag was switched on on purpose.
+- **A close must be checked against the account** (recommended, as a second lock; the app already does it): a close BUYS the combo, so if the
+  account does not hold the spread it would OPEN the opposite spread. Refuse a close (e.g. 409) unless `GET /positions` shows the short leg at
+  `-quantity` or more and the long leg at `+quantity` or more.
 - `limitCredit` is per spread (a credit); `limitDebit` is per spread (a debit); `quantity` is a whole number of spreads.
 
 ## Not covered yet
 
 - Option chain (`getOptionChain` exists on the interface and nothing implements or uses it).
 - Balances (`getBalances`), so the Accounts page shows no IBKR balance.
-- Failure e-mails and a once-a-minute check of the app's positions against `GET /positions` (the check exists as a button, and as
+- A once-a-minute check of the app's positions against `GET /positions` (the check exists as a button, and as
   `RECONCILE_INTERVAL_MINUTES` on a server that stays up).
+
+Failure alerts are in-app notifications (the bell in the app's header) and do not involve the bridge.
