@@ -198,8 +198,13 @@ export function WebhookRow({
         )}
       </div>
       {used === 0 ? (
-        <div className="text-sm" title="Attach it from a bot's trigger (the gear icon). Until then a call to its URL is refused.">
-          <span className="text-muted">Usages:</span> 0 bots
+        <div className="space-y-1 text-sm">
+          <div title="Attach it from a bot's trigger (the gear icon). Until then a call to its URL is refused.">
+            <span className="text-muted">Usages:</span> 0 bots
+          </div>
+          <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+            Not attached yet, so a TradingView call to this URL is refused. To attach it: open the bot, go to its Settings tab, click the gear next to its Bullish or Bearish signal, and choose this webhook.
+          </p>
         </div>
       ) : (
         <details className="group text-sm">

@@ -49,8 +49,8 @@ The app never repeats a failed order request: after a timeout the outcome is unk
 - **`tif` is always sent and always `DAY`.**
 - **Statuses are exactly the five above.** The app treats any other value as an error, never as "working".
 - **Refuse an account that does not start with `DU`** unless the bridge's own live flag was switched on on purpose.
-- **A close must be checked against the account** (recommended, as a second lock; the app already does it): a close BUYS the combo, so if the
-  account does not hold the spread it would OPEN the opposite spread. Refuse a close (e.g. 409) unless `GET /positions` shows the short leg at
+- **A close is checked against the account** (implemented in the bridge, and also in the app, so there are two locks): a close BUYS the combo, so
+  if the account does not hold the spread it would OPEN the opposite spread. A close is refused unless the account holds the short leg at
   `-quantity` or more and the long leg at `+quantity` or more.
 - `limitCredit` is per spread (a credit); `limitDebit` is per spread (a debit); `quantity` is a whole number of spreads.
 

@@ -11,6 +11,15 @@ export interface AttachedWebhook {
   active: boolean;
 }
 
+/** A webhook whose name says the OTHER direction than the trigger it is being attached to ("BearishSPX" on the Bullish trigger): the name is only a label, but this is almost always a slip. Null when nothing looks wrong. */
+export function directionMismatch(triggerDirection: "bullish" | "bearish", webhookName: string | undefined): string | null {
+  if (!webhookName) return null;
+  const says = (w: string) => new RegExp(`(?<![a-z])${w}`, "i").test(webhookName);
+  const other = triggerDirection === "bullish" ? "bearish" : "bullish";
+  if (says(other) && !says(triggerDirection)) return `"${webhookName}" sounds like a ${other} webhook, but this is the ${triggerDirection} trigger. Check you picked the right one: a ${other} TradingView alert sent here would be refused.`;
+  return null;
+}
+
 /** "BullishNDX - on" / "BearishNDX - off - unavailable: already attached to the Bearish trigger of NDX Bias Bot (one webhook, one trigger)" */
 export function optionLabel(o: TriggerOption): string {
   const status = o.active ? "on" : "off";
@@ -107,6 +116,7 @@ export function WebhookAttachPanel({
   const [name, setName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const chosen = options.find((o) => o.id === selected);
+  const mismatch = directionMismatch(automationName.toLowerCase().startsWith("bullish") ? "bullish" : "bearish", chosen?.name);
 
   return (
     <div className="space-y-5" aria-label={`${triggerName} settings`}>
@@ -222,6 +232,7 @@ export function WebhookAttachPanel({
                 <span className="text-muted">No webhook attached: this trigger can&apos;t be called until you attach one.</span>
               )}
             </div>
+            {mismatch && <p role="alert" className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">{mismatch}</p>}
             <p className="text-xs text-muted">One webhook, one trigger. Copy the URL with the icon, and paste it into the TradingView alert.</p>
           </div>
 

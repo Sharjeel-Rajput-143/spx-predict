@@ -282,17 +282,25 @@ export function Dropdown({
   width?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [triggerWidth, setTriggerWidth] = useState<number | null>(null);
+  const holder = useRef<HTMLDivElement>(null);
   const close = () => setOpen(false);
+  // The floating panel is attached to the page, not to the button, so "w-full" would mean the whole screen. "Full width" is the button's own width.
+  const matchTrigger = width === "w-full";
+  const onOpenChange = (next: boolean) => {
+    if (next && matchTrigger) setTriggerWidth(holder.current?.offsetWidth ?? null);
+    setOpen(next);
+  };
   return (
     <div className="relative">
       <Popover
         trigger="click"
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={onOpenChange}
         placement={align === "right" ? "bottomRight" : "bottomLeft"}
         arrow={false}
-        classNames={{ root: width }}
-        styles={{ container: { padding: 4 } }}
+        classNames={{ root: matchTrigger ? "" : width }}
+        styles={{ root: matchTrigger && triggerWidth ? { width: triggerWidth } : undefined, container: { padding: 4 } }}
         content={
           <div role="menu">
             {open && <EscapeLayer onEscape={close} />}
@@ -301,7 +309,7 @@ export function Dropdown({
         }
       >
         {/* The popover opens and closes itself on a click anywhere in here, so the trigger's own toggle does nothing. */}
-        <div>{trigger({ open, toggle: () => undefined })}</div>
+        <div ref={holder}>{trigger({ open, toggle: () => undefined })}</div>
       </Popover>
     </div>
   );

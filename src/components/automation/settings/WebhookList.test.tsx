@@ -98,3 +98,14 @@ describe("light mode is the default", () => {
     expect(provider).toContain("localStorage.setItem(THEME_KEY, next)");
   });
 });
+
+describe("a webhook that isn't attached yet says how to attach it", () => {
+  it("shows the steps and that a call is refused until then; an attached one does not", () => {
+    const unattached = html(<WebhookRow hook={hook({ name: "BullishSPX", attached: false, botId: null, botName: null, direction: null, underlying: null })} origin="http://localhost:3000" onEdit={noop} />);
+    expect(unattached).toContain("Usages:</span> 0 bots");
+    expect(unattached).toContain("Not attached yet, so a TradingView call to this URL is refused");
+    expect(unattached).toContain("Settings tab");
+    expect(unattached).toContain("gear next to its Bullish or Bearish signal");
+    expect(html(<WebhookRow hook={hook()} origin="http://localhost:3000" onEdit={noop} />)).not.toContain("Not attached yet");
+  });
+});
