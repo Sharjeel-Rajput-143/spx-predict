@@ -21,7 +21,7 @@ afterEach(() => {
 
 describe("defaults", () => {
   it("email off, the environment's window, a one hour session", () => {
-    expect(getAppSettings()).toEqual({ tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, sessionTimeoutMinutes: 60 });
+    expect(getAppSettings()).toEqual({ tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, notifications: { trades: false, warnings: true }, sessionTimeoutMinutes: 60 });
     expect(getGlobalWindow()).toMatchObject({ startMinutes: 9 * 60 + 35, endMinutes: 15 * 60 + 55, source: "environment" });
     expect(getAlertEmail().enabled).toBe(false);
   });
@@ -120,5 +120,21 @@ describe("session timeout", () => {
     vi.setSystemTime(BASE_NOW + 31 * 60_000);
     expect(isValidSession(token)).toBe(false);
     expect(isValidSession(token)).toBe(false); // and it stays gone
+  });
+});
+
+describe("notification settings (the bell)", () => {
+  it("warnings on and trades off to begin with, saved one at a time, and kept apart from the email settings", () => {
+    expect(getAppSettings().notifications).toEqual({ trades: false, warnings: true });
+    expect(updateAppSettings({ notifications: { trades: true } }).notifications).toEqual({ trades: true, warnings: true });
+    expect(updateAppSettings({ notifications: { warnings: false } }).notifications).toEqual({ trades: true, warnings: false });
+    expect(getAppSettings().notifications).toEqual({ trades: true, warnings: false });
+    expect(getAppSettings().emailAlerts.enabled).toBe(false);
+  });
+
+  it("only on or off is accepted, and errors cannot be switched off (there is no such setting)", () => {
+    expect(() => updateAppSettings({ notifications: { trades: "yes" as unknown as boolean } })).toThrow(/must be on or off/);
+    const saved = updateAppSettings({ notifications: { errors: false } as never });
+    expect(Object.keys(saved.notifications).sort()).toEqual(["trades", "warnings"]);
   });
 });

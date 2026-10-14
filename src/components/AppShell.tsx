@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { APP_NAME } from "@/lib/config";
 import { cn } from "@/lib/format";
 import { useGame } from "./GameProvider";
+import { NotificationBell, bellShownFor } from "./NotificationBell";
 import { TEXT_SIZES, TEXT_SIZE_KEY, type TextSize } from "./automation/settings/sections";
 import { IconAutomation, IconCalendar, IconHistory, IconLogout, IconMoon, IconPanelLeft, IconPositions, IconPredict, IconSettings, IconSun, IconUser } from "./icons";
 
@@ -29,6 +30,20 @@ const isActive = (pathname: string, href: string) => {
 };
 
 const COLLAPSE_KEY = "automation:sidebar-collapsed";
+
+/** True from the desktop width up (Tailwind's xl), where the sidebar and the top bar show instead of the phone header. False on the server. */
+const DESKTOP = "(min-width: 1280px)";
+function useIsDesktop(): boolean {
+  return useSyncExternalStore(
+    (notify) => {
+      const query = window.matchMedia(DESKTOP);
+      query.addEventListener("change", notify);
+      return () => query.removeEventListener("change", notify);
+    },
+    () => window.matchMedia(DESKTOP).matches,
+    () => false,
+  );
+}
 
 /** New York time, ticking every 30s - the clock the trading window runs on. */
 function EasternClock({ collapsed }: { collapsed: boolean }) {
@@ -88,6 +103,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.refresh();
     setAuth((a) => (a ? { ...a, signedIn: false } : a));
   };
+  // The bell is for someone who is signed in (or where sign-in is not required).
+  // Shown once, in whichever header is on screen (two bells would each ask the server and each pop up the same message).
+  const desktop = useIsDesktop();
+  const showBell = bellShownFor(auth);
   const ThemeIcon = theme === "dark" ? IconSun : IconMoon;
   const themeLabel = `Switch to ${theme === "dark" ? "light" : "dark"} mode`;
 
@@ -174,17 +193,23 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
             <span>{APP_NAME}</span>
           </Link>
-          <button
-            onClick={toggleTheme}
-            aria-label={themeLabel}
-            className="grid h-9 w-9 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg"
-          >
-            <ThemeIcon width={18} height={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            {showBell && !desktop && <NotificationBell />}
+            <button
+              onClick={toggleTheme}
+              aria-label={themeLabel}
+              className="grid h-9 w-9 place-items-center rounded-lg text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            >
+              <ThemeIcon width={18} height={18} />
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className={cn("mx-auto max-w-5xl px-4 pb-28 pt-4 xl:max-w-none xl:px-8 xl:pb-12 xl:pt-6", collapsed ? "xl:ml-16" : "xl:ml-56")}>
+      {/* Desktop: a slim bar across the top of the page, for the bell. */}
+      <header className={cn("sticky top-0 z-20 hidden h-12 items-center justify-end border-b border-line bg-bg/85 px-8 backdrop-blur-md xl:flex", collapsed ? "xl:ml-16" : "xl:ml-56")}>{showBell && desktop && <NotificationBell />}</header>
+
+      <main className={cn("mx-auto max-w-5xl px-4 pb-28 pt-4 xl:max-w-none xl:px-8 xl:pb-12 xl:pt-4", collapsed ? "xl:ml-16" : "xl:ml-56")}>
         {children}
       </main>
 

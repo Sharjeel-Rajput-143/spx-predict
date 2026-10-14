@@ -10,6 +10,8 @@ export const SESSION_TIMEOUT_CHOICES = [30, 60, 120, 240, 480] as const;
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   tradingWindow: null,
   emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true },
+  // Errors always raise a notification. Warnings are useful and rare, so on; every trade, twice on a flip, would be noise, so off.
+  notifications: { trades: false, warnings: true },
   sessionTimeoutMinutes: 60,
 };
 
@@ -25,6 +27,7 @@ export function getAppSettings(): AppSettings {
   return {
     tradingWindow: row?.tradingWindow ?? DEFAULT_APP_SETTINGS.tradingWindow,
     emailAlerts: { ...DEFAULT_APP_SETTINGS.emailAlerts, ...(row?.emailAlerts ?? {}) },
+    notifications: { ...DEFAULT_APP_SETTINGS.notifications, ...(row?.notifications ?? {}) },
     sessionTimeoutMinutes: row?.sessionTimeoutMinutes ?? DEFAULT_APP_SETTINGS.sessionTimeoutMinutes,
   };
 }
@@ -33,6 +36,7 @@ export interface AppSettingsPatch {
   /** null returns to the environment's window. */
   tradingWindow?: { start: string; end: string } | null;
   emailAlerts?: Partial<AppSettings["emailAlerts"]>;
+  notifications?: Partial<AppSettings["notifications"]>;
   sessionTimeoutMinutes?: number;
 }
 
@@ -41,7 +45,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Validates and saves part of the settings. Throws a message fit to show. */
 export function updateAppSettings(patch: AppSettingsPatch): AppSettings {
   const current = getAppSettings();
-  const next: AppSettings = { ...current, emailAlerts: { ...current.emailAlerts } };
+  const next: AppSettings = { ...current, emailAlerts: { ...current.emailAlerts }, notifications: { ...current.notifications } };
 
   if (patch.tradingWindow !== undefined) {
     if (patch.tradingWindow === null) next.tradingWindow = null;
@@ -69,15 +73,24 @@ export function updateAppSettings(patch: AppSettingsPatch): AppSettings {
     if (next.emailAlerts.enabled && !next.emailAlerts.to) throw new Error("Enter the email address to send alerts to before switching email on.");
   }
 
+  if (patch.notifications) {
+    for (const key of ["trades", "warnings"] as const) {
+      const v = patch.notifications[key];
+      if (v === undefined) continue;
+      if (typeof v !== "boolean") throw new Error(`Notification setting "${key}" must be on or off.`);
+      next.notifications[key] = v;
+    }
+  }
+
   if (patch.sessionTimeoutMinutes !== undefined) {
     if (!(SESSION_TIMEOUT_CHOICES as readonly number[]).includes(patch.sessionTimeoutMinutes)) throw new Error(`Session timeout must be one of ${SESSION_TIMEOUT_CHOICES.join(", ")} minutes.`);
     next.sessionTimeoutMinutes = patch.sessionTimeoutMinutes;
   }
 
-  const { tradingWindow, emailAlerts, sessionTimeoutMinutes } = next;
+  const { tradingWindow, emailAlerts, notifications, sessionTimeoutMinutes } = next;
   const id = settingsRowId();
-  if (settingsStore.get(id)) settingsStore.update(id, { tradingWindow, emailAlerts, sessionTimeoutMinutes });
-  else settingsStore.insert({ id, tradingWindow, emailAlerts, sessionTimeoutMinutes });
+  if (settingsStore.get(id)) settingsStore.update(id, { tradingWindow, emailAlerts, notifications, sessionTimeoutMinutes });
+  else settingsStore.insert({ id, tradingWindow, emailAlerts, notifications, sessionTimeoutMinutes });
   return getAppSettings();
 }
 

@@ -12,6 +12,7 @@ export interface SettingsData {
   settings: {
     tradingWindow: { start: string; end: string } | null;
     emailAlerts: { enabled: boolean; to: string; onTrade: boolean; onWarningError: boolean; includeTest: boolean };
+    notifications: { trades: boolean; warnings: boolean };
     sessionTimeoutMinutes: number;
   };
   window: { start: string; end: string; source: "settings" | "environment"; timezone: string };
@@ -80,6 +81,7 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
   const [to, setTo] = useState(data.window.end);
   const e = data.settings.emailAlerts;
   const [email, setEmail] = useState(e);
+  const [bell, setBell] = useState(data.settings.notifications);
   const [timeout, setTimeoutMinutes] = useState(data.settings.sessionTimeoutMinutes);
   const [size, setSize] = useState<TextSize>("normal");
   useEffect(() => {
@@ -151,6 +153,19 @@ export function GeneralSection({ data, save }: { data: SettingsData; save: Save 
             ["Estimated P/L", "Only from prices an executor reports; blank otherwise (nothing is estimated)"],
           ]}
         />
+      </Section>
+
+      <Section
+        title="Notifications"
+        hint="The bell in the header. Errors always show there; the rest is up to you."
+        footer={<SaveBar onSave={() => save({ notifications: bell })} />}
+      >
+        <div className="space-y-2">
+          <Checkbox checked disabled onChange={() => undefined} label="Errors (always on): a failed or rejected close, an open that was rejected or never filled, an unsafe account, a broker mismatch" />
+          <Checkbox checked={bell.warnings} onChange={(v) => setBell({ ...bell, warnings: v })} label="Warnings: a safeguard stopped a signal (no live price, price out of range, a limit reached)" />
+          <Checkbox checked={bell.trades} onChange={(v) => setBell({ ...bell, trades: v })} label="Trades: a position was opened or closed" />
+        </div>
+        <p className="text-xs text-muted">The same alert is listed once (a repeat inside an hour is counted, not listed again), and the latest 200 are kept. The red &quot;Needs attention&quot; banner on a bot is separate and stays.</p>
       </Section>
 
       <Section

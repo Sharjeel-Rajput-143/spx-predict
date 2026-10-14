@@ -337,9 +337,9 @@ export function MenuDivider() {
   return <div className="my-1 border-t border-line" />;
 }
 
-export function Checkbox({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+export function Checkbox({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
-    <AntCheckbox checked={checked} onChange={(e) => onChange(e.target.checked)}>
+    <AntCheckbox checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)}>
       {label}
     </AntCheckbox>
   );

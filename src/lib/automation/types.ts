@@ -525,6 +525,36 @@ export interface ActivityAlert {
   email: "off" | "queued";
 }
 
+// --- Notifications: the bell in the app's header ---
+
+export type NotificationSeverity = "error" | "warning" | "trade";
+
+/** One entry in the bell's list. Written from the same events as the activity alerts, but it does not depend on a bot's alert switches. */
+export interface Notification {
+  id: string;
+  /** The user this record belongs to (a reference to `users`). A record without one belongs to the owner. */
+  userId?: string;
+  botId: string;
+  severity: NotificationSeverity;
+  /** The decision outcome that raised it. */
+  outcome: DecisionOutcome;
+  /** A short message in plain words (the decision's own reason, cut). */
+  message: string;
+  signalId: string | null;
+  positionId?: string;
+  /** Where to look: the bot's positions or its Log. */
+  link: string;
+  createdAt: number;
+  /** When the same alert last came in again (it is not listed again: `repeats` counts it). */
+  lastSeenAt: number;
+  /** 1 = once; more when the same alert came in again inside the quiet window. */
+  repeats: number;
+  /** What makes two alerts "the same alert". */
+  dedupeKey: string;
+  /** Null until someone marks it read. */
+  readAt: number | null;
+}
+
 // --- Named webhooks: one unique URL per bot and direction, like Option Alpha's ---
 
 export interface Webhook {
@@ -577,6 +607,13 @@ export interface AppSettings {
     onWarningError: boolean;
     /** Alerts for test trades (the mock executor's). */
     includeTest: boolean;
+  };
+  /** The bell. Errors always raise a notification; these two are optional. */
+  notifications: {
+    /** A position opened or closed. */
+    trades: boolean;
+    /** A safeguard stopped a signal the bot would otherwise have acted on. */
+    warnings: boolean;
   };
   /** Minutes before a sign-in expires: 30, 60, 120, 240 or 480. */
   sessionTimeoutMinutes: number;

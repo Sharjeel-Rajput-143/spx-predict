@@ -16,9 +16,9 @@ export interface Repository<T extends { id: string }> {
 }
 
 /** Every collection the engine keeps. A backend sets all of them up together. */
-export const COLLECTIONS = ["bots", "signals", "positions", "orders", "decisions", "errors", "templates", "runs", "alerts", "webhooks", "settings", "users"] as const;
+export const COLLECTIONS = ["bots", "signals", "positions", "orders", "decisions", "errors", "templates", "runs", "alerts", "webhooks", "settings", "users", "notifications"] as const;
 /** Collections added after the first release. A data folder set up before them has no file for them yet: it is created empty, not reported missing. */
-export const ADDED_COLLECTIONS: readonly CollectionName[] = ["users"];
+export const ADDED_COLLECTIONS: readonly CollectionName[] = ["users", "notifications"];
 export type CollectionName = (typeof COLLECTIONS)[number];
 
 /** The version written into every file. Raise it (and add a step to the migration) when the shape of a file changes. */

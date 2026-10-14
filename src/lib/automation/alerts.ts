@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { botDisplayName } from "./bots";
 import { getAlertEmail } from "./appSettings";
+import { recordNotification } from "./notifications";
 import { alertsStore, botsStore, signalsStore } from "./store";
 import { DEFAULT_ALERTS, type AlertKind, type Decision, type DecisionOutcome } from "./types";
 
@@ -56,6 +57,12 @@ function wantsEmail(kind: AlertKind, signalId: string | null): boolean {
 export function recordActivityAlert(decision: Decision): void {
   const kind = alertKindFor(decision.outcome);
   if (!kind) return;
+  // The bell has its own rules (errors always; trades and warnings as Settings says) and is not switched by the bot's four alert switches.
+  try {
+    recordNotification(decision, kind);
+  } catch (err) {
+    console.error("[automation] could not record a notification", err);
+  }
   const settings = botsStore.get(decision.botId)?.alerts ?? DEFAULT_ALERTS;
   if (!settings[kind]) return;
 

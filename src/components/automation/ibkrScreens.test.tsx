@@ -62,7 +62,7 @@ describe("the status banner on IBKR", () => {
 });
 
 const settings = (executor: SettingsData["executor"]): SettingsData => ({
-  settings: { tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, sessionTimeoutMinutes: 60 },
+  settings: { tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, notifications: { trades: false, warnings: true }, sessionTimeoutMinutes: 60 },
   window: { start: "09:35", end: "15:55", source: "environment", timezone: "America/New_York" },
   email: { enabled: false, to: null, senderWired: false },
   sessionTimeoutChoices: [30, 60, 120],

@@ -8,7 +8,7 @@ import type { CollectionName, Repository, StorageBackend } from "./storage/repos
 import { TursoBackend } from "./storage/tursoBackend";
 import { ownerUserId } from "@/lib/auth/users";
 import { currentUserId } from "./userContext";
-import type { ActivityAlert, AppSettingsRow, Bot, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal, User } from "./types";
+import type { ActivityAlert, AppSettingsRow, Bot, Notification, Webhook, BotTemplate, Decision, ErrorRecord, Order, Position, Run, Signal, User } from "./types";
 
 /**
  * The engine's records. This module is the only place that knows where they live; everything else calls the
@@ -160,6 +160,8 @@ export const templatesStore = repo<BotTemplate>("templates");
 export const runsStore = repo<Run>("runs");
 export const alertsStore = repo<ActivityAlert>("alerts");
 export const webhooksStore = repo<Webhook>("webhooks");
+/** The bell's list (notifications.ts): newest 200 per user. */
+export const notificationsStore = repo<Notification>("notifications");
 /** App-wide settings, one row per user (id "app" for the owner, "app:<userId>" for anyone else). */
 export const settingsStore = repo<AppSettingsRow>("settings");
 
@@ -201,6 +203,7 @@ export function __resetAllStores(): void {
   templatesStore.__reset();
   runsStore.__reset();
   alertsStore.__reset();
+  notificationsStore.__reset();
   settingsStore.__reset();
   webhooksStore.__reset();
   usersStore.__reset();
