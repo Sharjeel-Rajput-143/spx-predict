@@ -8,6 +8,7 @@ import {
   CLOSE_CONFIRM_TIMEOUT_SECONDS,
   ORDER_FILL_TIMEOUT_SECONDS,
   STRIKE_QUOTE_MAX_AGE_SECONDS,
+  closeChaseMax,
   closeMaxAboveMarket,
   getFlipCooldownSeconds,
   quoteMaxWidth,
@@ -19,6 +20,7 @@ import { recordError } from "./errors";
 import { expireStalePositions } from "./expiry";
 import { watchOrder } from "./orderWatch";
 import { describeBand, placeAndWatch } from "./placeAndWatch";
+import { chaseRungs } from "./closeChase";
 import { brokerSaid, trailText } from "./orderEnd";
 import { OrderNotPlacedError } from "./orderErrors";
 import { getLastTick } from "@/lib/marketData/tickStore";
@@ -187,6 +189,8 @@ interface PricePlan {
   note: string;
   /** Set when a quote exists but can't be traded on. */
   unusable?: string;
+  /** The quote's worst price on this side (the most a debit could cost, the least a credit could bring). */
+  worst?: number;
 }
 
 /** SmartPricing needs a market: the executor's quote of the spread. An executor without quotes (the mock) gets one
@@ -214,7 +218,7 @@ async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spr
   const finals = own ? { percent: own.percent, slippage: own.slippage, flat: own.flat, ...(own.tradePrice ? { tradePrice: applyTradeOp(openedFor, own.tradePrice) ?? undefined } : {}) } : undefined;
   const built = buildLadder({ side, legs, mode: pricing.mode, finalPercent: pricing.percent, ...(finals ? { finals } : {}), width: pricing.width, tick: DEFAULT_PRICE_TICK });
   if (!built.ok) return { ladder: null, note: `No usable price: ${built.reason}`, unusable: built.reason };
-  return { ladder: built.ladder, note: describeLadder(built.ladder, own ? describeFinals(own) : pricing.percent) };
+  return { ladder: built.ladder, note: describeLadder(built.ladder, own ? describeFinals(own) : pricing.percent), ...(market ? { worst: market.natural } : {}) };
 }
 
 export const spreadOf = (p: Position): SpreadQuoteRequest => ({ underlying: p.underlying, optionRoot: p.optionRoot, expiry: p.expiry, type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike });
@@ -241,6 +245,8 @@ export async function closePosition(
   pricing?: Pricing,
   /** How many of the position's contracts to close; unset or all of them = the whole position. */
   contracts?: number,
+  /** `chase`: this close may continue past its ladder's top price (REHEARSAL close chase, CLOSE_CHASE_MAX). Left off for the close inside a flip. */
+  options?: { chase?: boolean },
 ): Promise<CloseResult> {
   const total = position.filledQuantity || position.requestedQuantity;
   const target = contracts !== undefined ? Math.min(total, Math.max(1, contracts)) : total;
@@ -267,6 +273,32 @@ export async function closePosition(
       pricing: plan?.note,
     };
   }
+  // REHEARSAL close chase: only for a closing ladder on a limit-only broker, only when CLOSE_CHASE_MAX is above 0, and only when the bridge says
+  // the account is paper. Decided (and said in the Log) before anything is sent.
+  const chaseNotes: string[] = [];
+  let chase: { prices: number[]; limit: number; step: number } | null = null;
+  const chaseMax = options?.chase && limitOnly && plan?.ladder ? closeChaseMax() : 0;
+  if (chaseMax > 0 && plan?.ladder) {
+    let paper = false;
+    try {
+      paper = (await executor.isPaperAccount?.()) === true;
+    } catch {
+      paper = false;
+    }
+    if (!paper) {
+      chaseNotes.push(`Rehearsal chase: CLOSE_CHASE_MAX is $${chaseMax.toFixed(2)} but it is ignored, because the bridge does not say this is a paper account. The close is priced as usual.`);
+    } else if (plan.worst === undefined) {
+      chaseNotes.push("Rehearsal chase: not used, because the quote gave no worst price to continue from.");
+    } else {
+      const c = chaseRungs({ prices: plan.ladder.prices, worst: plan.worst, max: chaseMax, width: effective?.width });
+      if (c.ok) {
+        chase = { prices: c.prices, limit: c.limit, step: c.step };
+        chaseNotes.push(`Rehearsal chase (CLOSE_CHASE_MAX $${chaseMax.toFixed(2)}, paper account): if the ladder's top price ${plan.ladder.final.toFixed(2)} does not fill, ${c.prices.length === 1 ? "one more price" : `${c.prices.length} more prices`} follow in steps of ${c.step.toFixed(2)}, up to ${c.limit.toFixed(2)}: ${c.prices.map((p) => p.toFixed(2)).join(", ")}.`);
+      } else {
+        chaseNotes.push(`Rehearsal chase: not used (${c.reason}).`);
+      }
+    }
+  }
   // Every attempt to close has its own order ids: the bridge remembers every id it has seen (across restarts) and refuses one sent again with
   // a different price. The count is saved on the position before anything is sent, so a failed attempt is never repeated under its id.
   const attempt = (positionsStore.get(position.id)?.closeAttempts ?? position.closeAttempts ?? 0) + 1;
@@ -282,9 +314,11 @@ export async function closePosition(
     positionId: position.id,
     now,
     place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${position.id}:close:${attempt}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
-    prices: ladder?.prices ?? null,
-    // The broker refused a price as too far through its market: price again from its own numbers (never past the ladder's final price).
-    ...(ladder ? { reprice: ({ band, refused }: { band: PriceBand; refused: number }) => repriceAfterBand({ side: "debit", band, refused, finalPrice: ladder.final, rungs: ladder.prices.length, maxAboveMarket: closeMaxAboveMarket(), width: effective?.width }) } : {}),
+    prices: ladder ? [...ladder.prices, ...(chase?.prices ?? [])] : null,
+    ...(chase && ladder ? { chase: { from: ladder.prices.length } } : {}),
+    // The broker refused a price as too far through its market: price again from its own numbers (never past the ladder's final price - or, for a
+    // rung of the chase, never past the chase's own limit; the cap above the broker's market price applies either way).
+    ...(ladder ? { reprice: ({ band, refused }: { band: PriceBand; refused: number }) => repriceAfterBand({ side: "debit", band, refused, finalPrice: chase && refused > ladder.final + 1e-9 ? chase.limit : ladder.final, rungs: ladder.prices.length, maxAboveMarket: closeMaxAboveMarket(), width: effective?.width }) } : {}),
     stepMs: effective?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
     finalMs: timeoutMs,
     pollMs: pollIntervalMs,
@@ -299,13 +333,16 @@ export async function closePosition(
     // timeout) stays "closing" below, and so does a refusal because the account does not hold the spread (Resolve looks at that).
     if (result.stage === "place" && result.error instanceof OrderNotPlacedError && !result.error.needsResolve && statusBefore === "open") {
       positionsStore.update(position.id, { status: "open", closeSignalId: null });
-      return { ok: false, outcome: "executor_error", reason: `Close order not placed: ${errorMessage(result.error)} Nothing was sent to the broker, so the position is back to open.`, pricing: pricingNote, steps: result.steps };
+      return { ok: false, outcome: "executor_error", reason: `Close order not placed: ${errorMessage(result.error)} Nothing was sent to the broker, so the position is back to open.`, pricing: pricingNote, steps: [...chaseNotes, ...result.steps] };
     }
     return result.stage === "place"
-      ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps }
-      : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps };
+      ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote, steps: [...chaseNotes, ...result.steps] }
+      : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote, steps: [...chaseNotes, ...result.steps] };
   }
-  const { state, timedOut, steps } = result;
+  const { state, timedOut } = result;
+  const steps = [...chaseNotes, ...result.steps];
+  // When the close filled on a rung of the chase, the Log says which rung and at what price.
+  const chased = result.chase && state.status === "filled" ? ` Filled on rehearsal chase rung ${result.chase.chaseRung} (price ${result.chase.rung} of ${result.chase.of}) at the final price of $${result.chase.price.toFixed(2)}${state.averagePrice !== undefined ? ` (the broker reported $${state.averagePrice.toFixed(2)})` : ""}.` : "";
 
   const targetQuantity = target;
   if (state.status === "filled" && state.filledQuantity >= targetQuantity && partial) {
@@ -325,7 +362,7 @@ export async function closePosition(
     };
     positionsStore.insert(part);
     positionsStore.update(position.id, { status: "open", requestedQuantity: total - target, filledQuantity: total - target, closeSignalId: null });
-    return { ok: true, outcome: "closed", reason: `Close order filled: ${target} of ${total} contracts closed, ${total - target} still open.`, pricing: pricingNote, steps, closedPositionId: part.id };
+    return { ok: true, outcome: "closed", reason: `Close order filled: ${target} of ${total} contracts closed, ${total - target} still open.${chased}`, pricing: pricingNote, steps, closedPositionId: part.id };
   }
   if (state.status === "filled" && state.filledQuantity >= targetQuantity) {
     positionsStore.update(position.id, {
@@ -334,7 +371,7 @@ export async function closePosition(
       closePrice: state.averagePrice ?? null,
       underlyingAtClose: signal?.price ?? null,
     });
-    return { ok: true, outcome: "closed", reason: "Close order filled.", pricing: pricingNote, steps };
+    return { ok: true, outcome: "closed", reason: `Close order filled.${chased}`, pricing: pricingNote, steps };
   }
   // Nothing filled. The broker confirmed the order is over (a cancel we asked for is confirmed before we get here), but a cancelled order alone is
   // not proof the spread is still held: the position goes back to "open" only when the account itself shows the whole spread, and stays
@@ -1294,6 +1331,8 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
       now,
       botConfig ? pricingFor(botConfig, "close", options.ladderStepMs) : undefined,
+      undefined,
+      { chase: true },
     );
     rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
     // A close refused for want of a quote changed nothing and is not a failure of the bot: the person who pressed the button sees the message and can press it again.

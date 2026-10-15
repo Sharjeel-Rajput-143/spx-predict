@@ -492,6 +492,8 @@ export interface BrokerExecutor {
   listBrokerPositions?(): Promise<BrokerPosition[]>;
   /** The account's balances, for showing the paper (or real) balance next to the bots. */
   getBalances?(): Promise<BrokerBalances>;
+  /** Whether the broker's own answer says this is a paper account (the bridge's /health `paper`). Absent on executors that are not a real broker. */
+  isPaperAccount?(): Promise<boolean>;
 }
 
 export interface BrokerBalances {

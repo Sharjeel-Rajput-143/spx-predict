@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as hookRoute } from "@/app/api/webhook/hook/[token]/route";
 import { ensureBotRecord } from "./bots";
+import { MockExecutor } from "./executor";
 import { manualClose, processSignal, receiveAndSaveSignal } from "./engine";
 import { runEntryRetry } from "./entryRetry";
 import { IbkrExecutor, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
@@ -41,6 +42,7 @@ interface BridgeOrder {
   status: "working" | "filled" | "rejected" | "canceled";
   filledQuantity: number;
   averagePrice?: number;
+  band?: { edge: number; marketPrice: number };
 }
 
 class FakeBridge {
@@ -53,6 +55,12 @@ class FakeBridge {
   fill: "fill" | "reject" | "never" | "cancelNow" = "fill";
   /** What the bridge adds to the answer for an order that ended canceled or rejected: reason, priceBand, ibkrStatus, permId, events. */
   endExtras: Record<string, unknown> = {};
+  /** What /health says about `paper` (default: true for a DU account). */
+  paperOverride: boolean | undefined = undefined;
+  /** A close is filled only at this limit debit or higher; below it the order just sits working. null = the usual `fill` rule. */
+  closeFillAtOrAbove: number | null = null;
+  /** A close at this limit debit or higher is refused at once with a price band (market price and edge), as IBKR's error 202. */
+  band: { edge: number; marketPrice: number } | null = null;
   /** Paths (without the leading slash) that never answer at all: the connection fails. */
   unreachable = new Set<string>();
   /** Paths (without the leading slash) that answer with this HTTP status and body (a refusal such as 422). */
@@ -80,7 +88,7 @@ class FakeBridge {
     const refusal = this.refuse.get(path.slice(1));
     if (refusal) return reply(refusal.status, refusal.body);
 
-    if (path === "/health") return reply(200, { connected: this.connected, account: this.account, paper: this.account.startsWith("DU") });
+    if (path === "/health") return reply(200, { connected: this.connected, account: this.account, paper: this.paperOverride ?? this.account.startsWith("DU") });
     if (path === "/quote/ndx") return reply(200, { price: this.price, asOf: Date.now() - this.quoteAgeMs });
     if (path === "/quote/spread") return this.spreadQuote ? reply(200, this.spreadQuote) : reply(503, "No bid and ask for an option leg (market closed or no data)");
     if (path === "/positions") return reply(200, { positions: this.heldLegs() });
@@ -96,6 +104,25 @@ class FakeBridge {
         order.averagePrice = order.kind === "open" ? Number(body?.limitCredit) : Number(body?.limitDebit ?? this.closeDebit);
       } else if (this.fill === "reject") order.status = "rejected";
       else if (this.fill === "cancelNow") order.status = "canceled";
+      if (order.kind === "close") {
+        const price = Number(body?.limitDebit);
+        if (this.band && price >= this.band.edge) {
+          order.status = "canceled";
+          order.filledQuantity = 0;
+          order.averagePrice = undefined;
+          order.band = this.band;
+        } else if (this.closeFillAtOrAbove !== null) {
+          if (price >= this.closeFillAtOrAbove) {
+            order.status = "filled";
+            order.filledQuantity = Number(body?.quantity);
+            order.averagePrice = price;
+          } else {
+            order.status = "working";
+            order.filledQuantity = 0;
+            order.averagePrice = undefined;
+          }
+        }
+      }
       this.orders.set(order.ref, order);
       return reply(200, { ref: order.ref });
     }
@@ -107,7 +134,7 @@ class FakeBridge {
         if (order.status === "working") order.status = "canceled";
         return reply(200, { ok: true });
       }
-      return reply(200, { status: order.status, filledQuantity: order.filledQuantity, ...(order.averagePrice !== undefined && order.filledQuantity > 0 ? { averagePrice: order.averagePrice } : {}), ...(order.status === "rejected" ? { rejectReason: "Insufficient margin" } : {}) , ...(order.status === "canceled" || order.status === "rejected" ? this.endExtras : {}) });
+      return reply(200, { status: order.status, filledQuantity: order.filledQuantity, ...(order.averagePrice !== undefined && order.filledQuantity > 0 ? { averagePrice: order.averagePrice } : {}), ...(order.status === "rejected" ? { rejectReason: "Insufficient margin" } : {}) , ...(order.status === "canceled" || order.status === "rejected" ? this.endExtras : {}), ...(order.band ? { priceBand: order.band } : {}) });
     }
     return reply(404, "no such endpoint");
   };
@@ -774,4 +801,353 @@ describe("a close that ends canceled says what the broker said", () => {
     expect(d?.reason).toMatch(/IBKR status Cancelled \(permId 98765\)/);
     expect(ordersStore.all().find((o) => o.kind === "close")).toMatchObject({ status: "rejected", permId: 98765 });
   });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// REHEARSAL close chase (CLOSE_CHASE_MAX): after a close ladder's top price fails to fill, more prices above the quote's worst price.
+// The fake quote makes the close ladder 3.30, 3.50, 3.70, 3.90 (mid 3.30, worst price 3.90) on a spread 10 wide.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("the rehearsal close chase", () => {
+  const LADDER = [3.3, 3.5, 3.7, 3.9];
+  const closePrices = () => bridge.calls("/close_spread").map((r) => Number(r.body?.limitDebit));
+  const manual = (id: string) => manualClose(id, { executor, now: BASE_NOW + 8 * MIN, ...fast });
+  const closeSteps = () => {
+    const n = runsStore.all().flatMap((r) => r.nodes).filter((x) => x.kind === "action" && x.action === "close").at(-1);
+    return n && n.kind === "action" ? (n.steps ?? []) : [];
+  };
+  const openPut = async () => {
+    await run("bullish", "b1");
+    bridge.closeFillAtOrAbove = 99; // nothing fills at any price below 99 unless a test says otherwise
+    return mine()[0];
+  };
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is off by default: the close ladder ends at its top price, as before", async () => {
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(closeSteps().join(" ")).not.toMatch(/chase/i);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+  });
+
+  it("CLOSE_CHASE_MAX=0 is off too, and so is a value that is not a number", async () => {
+    for (const v of ["0", "nonsense", "-1"]) {
+      resetAutomationStores();
+      setNdxTestEnv();
+      bridge = new FakeBridge();
+      executor = new IbkrExecutor(cfg, bridge.fetch);
+      ensureBotRecord(NDX_BOT_ID);
+      vi.stubEnv("CLOSE_CHASE_MAX", v);
+      const p = await openPut();
+      await manual(p.id);
+      expect(closePrices()).toEqual(LADDER);
+    }
+  });
+
+  it("on and a paper account: more prices follow the top price, in the same step, up to the worst price plus the maximum", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "1");
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual([...LADDER, 4.1, 4.3, 4.5, 4.7, 4.9]); // the worst price 3.90 + 1.00 = 4.90 at most
+    const steps = closeSteps().join("\n");
+    expect(steps).toMatch(/Rehearsal chase \(CLOSE_CHASE_MAX \$1\.00, paper account\).*4\.10, 4\.30, 4\.50, 4\.70, 4\.90/);
+    expect(steps).toMatch(/Price 5 of 9 \(rehearsal chase\): \$4\.10/);
+    expect(steps).toMatch(/Price 9 of 9 \(rehearsal chase\): \$4\.90/);
+    expect(steps).not.toMatch(/Price 4 of 9 \(rehearsal chase\)/); // the ladder's own top price is not a chase rung
+    // waits: the ladder's top price keeps its full final wait (100ms here), the chase rungs wait a step (20ms), the very last the full final wait
+    expect(steps).toMatch(/Price 4 of 9: \$3\.90, waited up to 100ms/);
+    expect(steps).toMatch(/Price 5 of 9 \(rehearsal chase\): \$4\.10, waited up to 20ms/);
+    expect(steps).toMatch(/Price 9 of 9 \(rehearsal chase\): \$4\.90, waited up to 100ms/);
+    expect(steps).not.toMatch(/Price 1 of 9 \(rehearsal chase\)/);
+    expect(positionsStore.get(p.id)?.status).toBe("open"); // never filled: the account still holds it
+  });
+
+  it("on and NOT a paper account (the bridge's /health says paper is false): the setting is ignored, and the Log says so", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    bridge.paperOverride = false;
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(closeSteps().join(" ")).toMatch(/Rehearsal chase: CLOSE_CHASE_MAX is \$3\.00 but it is ignored, because the bridge does not say this is a paper account/);
+    expect(closeSteps().join(" ")).not.toMatch(/\(rehearsal chase\)/);
+  });
+
+  it("on and /health cannot be read: ignored the same way (never assumed to be paper)", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    const p = await openPut();
+    const real = executor.isPaperAccount.bind(executor);
+    vi.spyOn(executor, "isPaperAccount").mockImplementation(async () => {
+      bridge.unreachable.add("health");
+      try {
+        return await real();
+      } finally {
+        bridge.unreachable.delete("health");
+      }
+    });
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(closeSteps().join(" ")).toMatch(/ignored, because the bridge does not say this is a paper account/);
+  });
+
+  it("is never at or above the spread's width: a huge maximum stops under it", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "50");
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    expect(prices.slice(0, 4)).toEqual(LADDER);
+    expect(prices.length).toBeGreaterThan(8);
+    expect(prices.every((x) => x < 10)).toBe(true); // the spread is 10 wide
+    expect(Math.max(...prices)).toBe(9.9);
+    expect(prices.every((x, i) => i === 0 || x > prices[i - 1])).toBe(true);
+  });
+
+  it("a price band refusal during the chase still re-prices inside the band", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    bridge.band = { edge: 4.5, marketPrice: 4.0 }; // IBKR refuses 4.50 and above, and says the market is 4.00
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    const at = prices.indexOf(4.5);
+    expect(at).toBeGreaterThan(3); // reached on the chase, after the ladder's own four
+    const after = prices.slice(at + 1);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((x) => x < 4.5)).toBe(true); // nothing at or above the edge is sent again
+    expect(Math.max(...after)).toBeLessThanOrEqual(4.4); // the highest tick below the edge
+    expect(Math.max(...after)).toBeGreaterThan(3.9); // inside the band but above the ladder's own top price: the chase's limit, not the ladder's, bounds it
+    expect(prices.filter((x) => x >= 4.5)).toEqual([4.5]); // refused once, not argued with
+    const steps = closeSteps().join("\n");
+    expect(steps).toMatch(/\(rehearsal chase\): \$4\.50 - refused by the broker's price band \(the market is 4\.00, it will not take 4\.50 or beyond\).*re-priced to/);
+  });
+
+  it("the cap above the broker's market price still applies after a band refusal during the chase", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    vi.stubEnv("CLOSE_MAX_ABOVE_MARKET", "0.2");
+    bridge.band = { edge: 4.9, marketPrice: 4.0 };
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    const at = prices.indexOf(4.9);
+    expect(at).toBeGreaterThan(3);
+    const after = prices.slice(at + 1);
+    expect(after.length).toBeGreaterThan(0);
+    expect(Math.max(...after)).toBeLessThanOrEqual(4.2); // market 4.00 + 0.20, though the edge would have allowed 4.80
+  });
+
+  it("a band refusal BEFORE the chase hands the rest of the ladder to the broker's numbers: no chase follows it", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    bridge.band = { edge: 3.7, marketPrice: 3.5 };
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    expect(prices.slice(0, 3)).toEqual([3.3, 3.5, 3.7]);
+    expect(prices.slice(3).every((x) => x < 3.7)).toBe(true);
+    expect(Math.max(...prices.slice(3))).toBeLessThanOrEqual(3.6);
+    expect(closeSteps().join(" ")).not.toMatch(/Price \d+ of \d+ \(rehearsal chase\)/);
+  });
+
+  it("a fill on a chase rung closes the position and the Log names the rung and the final price", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "1");
+    const p = await openPut();
+    bridge.closeFillAtOrAbove = 4.3; // the market is above the delayed quote's worst price: only the second chase rung is high enough
+    const res = await manual(p.id);
+    expect(res.ok).toBe(true);
+    expect(closePrices()).toEqual([...LADDER, 4.1, 4.3]);
+    expect(positionsStore.get(p.id)).toMatchObject({ status: "closed", closePrice: 4.3 });
+    const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome === "closed");
+    expect(d?.reason).toMatch(/Filled on rehearsal chase rung 2 \(price 6 of 9\) at the final price of \$4\.30/);
+    const steps = closeSteps().join("\n");
+    expect(steps).toMatch(/Price 6 of 9 \(rehearsal chase\): \$4\.30.*Filled on rehearsal chase rung 2 at \$4\.30/);
+    expect(steps).toMatch(/Price 5 of 9 \(rehearsal chase\): \$4\.10.*not filled in time, canceled/);
+  });
+
+  it("a fill on a rung of the ladder itself is not called a chase", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "1");
+    const p = await openPut();
+    bridge.closeFillAtOrAbove = 3.7;
+    const res = await manual(p.id);
+    expect(res.ok).toBe(true);
+    expect(closePrices()).toEqual([3.3, 3.5, 3.7]);
+    expect(decisionsStore.all().find((x) => x.outcome === "closed")?.reason).not.toMatch(/chase/i);
+  });
+
+  it("the close inside a flip is not chased, and an open is never chased", async () => {
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    bridge.fill = "never";
+    await run("bullish", "b1"); // the open ladder: nothing fills, so it walks all its prices
+    const opens = bridge.calls("/open_spread").map((r) => Number(r.body?.limitCredit));
+    expect(opens).toHaveLength(4);
+    expect(closeSteps()).toEqual([]);
+    expect(decisionsStore.all().map((d) => d.reason).join(" ")).not.toMatch(/chase/i);
+
+    // a position that is held, and a flip alert whose close does not fill
+    resetAutomationStores();
+    setNdxTestEnv();
+    bridge = new FakeBridge();
+    executor = new IbkrExecutor(cfg, bridge.fetch);
+    ensureBotRecord(NDX_BOT_ID);
+    await run("bullish", "b1");
+    bridge.closeFillAtOrAbove = 99;
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(closePrices()).toEqual(LADDER);
+    expect(decisionsStore.all().map((d) => d.reason).join(" ")).not.toMatch(/chase/i);
+  });
+
+  it("the simulation (no real broker) has no chase to run", () => {
+    expect((new MockExecutor() as { isPaperAccount?: unknown }).isPaperAccount).toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The flip, as a state machine: every starting state x every signal, then long random runs of alerts - with and without things going wrong -
+// checking after EVERY alert the rules that must always hold.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("the flip: every state and every signal", () => {
+  const active = () => mine().filter((p) => p.status === "open" || p.status === "opening" || p.status === "closing");
+  const legsBy = (kind: "PUT" | "CALL") => bridge.placed().filter((x) => x.includes(kind));
+
+  const cases: Array<{ start: "none" | "put" | "call"; signal: "bullish" | "bearish"; orders: string[]; end: string[] }> = [
+    { start: "none", signal: "bullish", orders: ["open PUT 20970/20960"], end: ["short_put_spread:open"] },
+    { start: "none", signal: "bearish", orders: ["open CALL 21035/21045"], end: ["short_call_spread:open"] },
+    { start: "put", signal: "bullish", orders: [], end: ["short_put_spread:open"] },
+    { start: "call", signal: "bearish", orders: [], end: ["short_call_spread:open"] },
+    { start: "put", signal: "bearish", orders: ["close PUT 20970/20960", "open CALL 21035/21045"], end: ["short_put_spread:closed", "short_call_spread:open"] },
+    { start: "call", signal: "bullish", orders: ["close CALL 21035/21045", "open PUT 20970/20960"], end: ["short_call_spread:closed", "short_put_spread:open"] },
+  ];
+
+  for (const c of cases) {
+    it(`holding ${c.start === "none" ? "nothing" : `the ${c.start} spread`}, a ${c.signal} alert sends exactly: ${c.orders.length ? c.orders.join(", then ") : "no order"}`, async () => {
+      if (c.start !== "none") {
+        await run(c.start === "put" ? "bullish" : "bearish", "s0", BASE_NOW);
+        bridge.requests.length = 0;
+      }
+      await run(c.signal, "s1", BASE_NOW + 5 * MIN);
+      expect(bridge.placed()).toEqual(c.orders);
+      expect(mine().map((p) => `${p.type}:${p.status}`)).toEqual(c.end);
+      expect(active()).toHaveLength(1);
+      expect(await reconcile(executor)).toMatchObject({ ok: true, problems: [] });
+      expect(legsBy("PUT").length + legsBy("CALL").length).toBe(c.orders.length);
+    });
+  }
+
+  it("outside the trading window (9:35am - 3:55pm New York) an alert does nothing at all, a flip's close included", async () => {
+    await run("bullish", "s0", BASE_NOW);
+    bridge.requests.length = 0;
+    const late = Date.UTC(2026, 9, 6, 20, 30); // 4:30pm New York
+    await run("bearish", "s1", late);
+    expect(bridge.placed()).toEqual([]);
+    expect(mine().map((p) => `${p.type}:${p.status}`)).toEqual(["short_put_spread:open"]);
+    expect(outcomes().at(-1)).toBe("outside_hours");
+    const early = Date.UTC(2026, 9, 7, 13, 0); // 9:00am New York
+    await run("bearish", "s2", early);
+    expect(bridge.placed()).toEqual([]);
+  });
+
+  it("the kill switch stops everything, closes included; switching it off again lets the next alert flip normally", async () => {
+    await run("bullish", "s0", BASE_NOW);
+    botsStore.update(NDX_BOT_ID, { killSwitch: true });
+    bridge.requests.length = 0;
+    await run("bearish", "s1", BASE_NOW + 5 * MIN);
+    expect(bridge.placed()).toEqual([]);
+    botsStore.update(NDX_BOT_ID, { killSwitch: false });
+    await run("bearish", "s2", BASE_NOW + 10 * MIN);
+    expect(bridge.placed()).toEqual(["close PUT 20970/20960", "open CALL 21035/21045"]);
+  });
+
+  it("a duplicate alert (the same bar sent twice, or the same text inside two minutes) trades once", async () => {
+    await run("bullish", "s0", BASE_NOW);
+    await run("bullish", "s0", BASE_NOW + 10_000);
+    await run("bearish", "s1", BASE_NOW + 5 * MIN);
+    await run("bearish", "s1", BASE_NOW + 5 * MIN + 20_000);
+    expect(bridge.placed()).toEqual(["open PUT 20970/20960", "close PUT 20970/20960", "open CALL 21035/21045"]);
+    expect(outcomes()).toEqual(["opened", "duplicate_signal", "closed", "opened", "duplicate_signal"]); // each repeat is logged as a duplicate
+  });
+});
+
+/** A small deterministic random generator, so a failing run can be repeated exactly. */
+function rng(seed: number) {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 2 ** 32;
+  };
+}
+
+describe("the flip, over long random runs of alerts", () => {
+  const active = () => mine().filter((p) => p.status === "open" || p.status === "opening" || p.status === "closing");
+  const sideOf = (p: { type: string }) => (p.type === "short_put_spread" ? "put" : "call");
+  const lift = () => botsStore.update(NDX_BOT_ID, { safeguards: { dailyNewPositionLimit: 100_000 } });
+
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    it(`seed ${seed}: 60 random alerts, every one filled: exactly one position held, always the side the last alert asked for, account and records agree`, async () => {
+      lift();
+      const next = rng(seed);
+      let lastWanted: "put" | "call" | null = null;
+      let changes = 0;
+      for (let i = 0; i < 60; i++) {
+        const dir = next() < 0.5 ? "bullish" : "bearish";
+        const wanted = dir === "bullish" ? "put" : "call";
+        if (lastWanted !== null && wanted !== lastWanted) changes++;
+        const before = bridge.placed().length;
+        await run(dir, `r${seed}-${i}`, BASE_NOW + i * 3 * MIN);
+        lastWanted = wanted;
+        const held = active();
+        expect(held).toHaveLength(1);
+        expect(sideOf(held[0])).toBe(wanted);
+        expect(held[0].status).toBe("open");
+        // the account holds exactly this spread: two legs, one right
+        const legs = bridge.heldLegs();
+        expect(legs).toHaveLength(2);
+        expect(new Set(legs.map((l) => l.symbol.slice(11, 12))).size).toBe(1); // all puts or all calls
+        // a repeat of the side already held sends nothing; a change sends one close and one open
+        const sent = bridge.placed().length - before;
+        expect([0, 1, 2]).toContain(sent);
+      }
+      const requests = bridge.requests.filter((r) => r.path === "/open_spread" || r.path === "/close_spread");
+      expect(requests.filter((r) => r.path === "/close_spread")).toHaveLength(changes);
+      const ids = requests.map((r) => r.body?.clientOrderId as string);
+      expect(new Set(ids).size).toBe(ids.length); // no order id ever repeated
+      expect(await reconcile(executor)).toMatchObject({ ok: true, problems: [] });
+      expect(botsStore.get(NDX_BOT_ID)?.needsAttention ?? false).toBe(false);
+      expect(botsStore.get(NDX_BOT_ID)?.enabled).toBe(true);
+    });
+  }
+
+  for (const seed of [11, 12, 13, 14, 15, 16]) {
+    it(`seed ${seed}: 60 random alerts with random failures (refused, unreachable, never filled): never two positions, never both sides at the broker, never an open on top of an unclosed one`, async () => {
+      lift();
+      const next = rng(seed);
+      for (let i = 0; i < 60; i++) {
+        const dir = next() < 0.5 ? "bullish" : "bearish";
+        const roll = next();
+        // sometimes break one thing for this alert only
+        if (roll < 0.1) bridge.down.add("close_spread");
+        else if (roll < 0.17) bridge.down.add("open_spread");
+        else if (roll < 0.22) bridge.unreachable.add("close_spread");
+        else if (roll < 0.27) bridge.refuse.set("close_spread", { status: 422, body: { detail: "refused" } });
+        else if (roll < 0.32) bridge.closeFillAtOrAbove = 99;
+        else if (roll < 0.36) bridge.fill = "never";
+        else if (roll < 0.4) bridge.fill = "reject";
+        await run(dir, `f${seed}-${i}`, BASE_NOW + i * 3 * MIN);
+        bridge.down.clear();
+        bridge.unreachable.clear();
+        bridge.refuse.clear();
+        bridge.closeFillAtOrAbove = null;
+        bridge.fill = "fill";
+
+        const held = active();
+        expect(held.length).toBeLessThanOrEqual(1); // never two positions at once
+        const legs = bridge.heldLegs();
+        expect(legs.length).toBeLessThanOrEqual(2); // never more than one spread at the broker
+        if (legs.length > 0) expect(new Set(legs.map((l) => l.symbol.slice(11, 12))).size).toBe(1); // never puts and calls together
+        for (const p of held) if (p.status === "open") expect(legs.length).toBe(2); // an "open" position is really held
+        // something unresolved is never silent
+        if (held.some((p) => p.status === "closing" || p.status === "opening")) expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
+        // a flip never opens the new side while the old one might still be held: a stuck close means no other position exists
+        if (held.some((p) => p.status === "closing")) expect(held).toHaveLength(1);
+        if (botsStore.get(NDX_BOT_ID)?.enabled === false) botsStore.update(NDX_BOT_ID, { enabled: true });
+      }
+    });
+  }
 });

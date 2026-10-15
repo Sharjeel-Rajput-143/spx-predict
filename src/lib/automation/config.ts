@@ -48,6 +48,19 @@ export function quoteMaxWidth(): number {
 export function closeMaxAboveMarket(): number {
   return envNumber("CLOSE_MAX_ABOVE_MARKET", 1);
 }
+/**
+ * REHEARSAL ONLY: how many dollars above the quote's worst price a close ladder may keep trying after its top price fails to fill (see
+ * closeChase.ts). 0 (the default) = off. A value that is not a number above 0 is off. The engine ignores it unless the bridge says the
+ * account is paper.
+ */
+export function closeChaseMax(): number {
+  try {
+    const n = envNumber("CLOSE_CHASE_MAX", 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0; // an unreadable value turns the chase off; it never stops a close
+  }
+}
 export const ERROR_FAILSAFE_THRESHOLD = envNumber("ERROR_FAILSAFE_THRESHOLD", 10);
 export const ORDER_FILL_TIMEOUT_SECONDS = envNumber("ORDER_FILL_TIMEOUT_SECONDS", 120);
 export const CLOSE_CONFIRM_TIMEOUT_SECONDS = envNumber("CLOSE_CONFIRM_TIMEOUT_SECONDS", 120);

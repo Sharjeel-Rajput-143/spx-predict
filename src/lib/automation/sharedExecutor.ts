@@ -121,4 +121,8 @@ export const sharedExecutor: BrokerExecutor = {
     const ex = executorStatus().error ? null : getExecutor();
     return ex?.getBalances ? ex.getBalances.bind(ex) : undefined;
   },
+  get isPaperAccount() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.isPaperAccount ? ex.isPaperAccount.bind(ex) : undefined;
+  },
 };

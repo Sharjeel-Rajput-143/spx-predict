@@ -147,6 +147,8 @@ export function sweepBot(botId: string, now: number = Date.now(), options: Sweep
           options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
           now,
           marketPricing,
+          undefined,
+          { chase: true },
         );
         logDecision({ signalId: null, botId, outcome: closed.outcome, reason: `End-of-day sweep: ${closed.reason}`, detail: { sweep: true, mode, positionId: position.id, ...(closed.steps ? { steps: closed.steps } : {}) }, now });
         if (closed.ok) {

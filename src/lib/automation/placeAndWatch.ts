@@ -31,6 +31,12 @@ export interface PlaceAndWatchOptions {
    * attached): returns the prices to try instead, or why not. Without it a refusal ends the ladder. At most MAX_REPRICES times.
    */
   reprice?: (info: { band: PriceBand; refused: number }) => RepriceResult;
+  /**
+   * REHEARSAL close chase (see closeChase.ts): the prices from index `from` on are chase rungs. The rung just before them keeps the
+   * ladder's full final wait, as it did before the chase existed; the chase rungs wait like any other, the last of them the full final wait.
+   * Each chase rung is marked "rehearsal chase" in the steps. A price-band refusal before the chase drops the rest of the chase.
+   */
+  chase?: { from: number };
 }
 
 /** "10s", "2m", or milliseconds for the very short waits tests use. */
@@ -41,7 +47,7 @@ export function formatWait(ms: number): string {
 }
 
 export type PlaceAndWatchResult =
-  | { ok: true; state: OrderState; timedOut: boolean; ref: string; rungsTried: number; steps: string[] }
+  | { ok: true; state: OrderState; timedOut: boolean; ref: string; rungsTried: number; steps: string[]; chase?: { rung: number; chaseRung: number; of: number; price: number } }
   | { ok: false; stage: "place" | "watch"; ref: string | null; error: unknown; steps: string[] };
 
 /**
@@ -60,13 +66,16 @@ export async function placeAndWatch(opts: PlaceAndWatchOptions): Promise<PlaceAn
   const steps: string[] = [];
   const of = opts.quantity ? ` of ${opts.quantity}` : "";
   let reprices = 0;
+  let chaseFrom = opts.chase ? opts.chase.from : Infinity;
 
   for (let i = 0; i < rungs.length; i++) {
     const price = rungs[i];
     const last = i === rungs.length - 1;
-    const label = opts.prices ? `Price ${i + 1} of ${rungs.length}` : "Single price";
+    const isChase = i >= chaseFrom;
+    const label = opts.prices ? `Price ${i + 1} of ${rungs.length}${isChase ? " (rehearsal chase)" : ""}` : "Single price";
     const amount = price !== null ? `$${price.toFixed(2)}` : "the executor's own price";
-    const waitMs = last ? opts.finalMs : opts.stepMs;
+    // The top rung of the ladder keeps its full final wait even when a chase follows it.
+    const waitMs = last || i === chaseFrom - 1 ? opts.finalMs : opts.stepMs;
 
     let ref: string;
     try {
@@ -93,7 +102,7 @@ export async function placeAndWatch(opts: PlaceAndWatchOptions): Promise<PlaceAn
 
     let watched: Awaited<ReturnType<typeof watchOrder>>;
     try {
-      watched = await watchOrder(opts.executor, ref, { timeoutMs: last ? opts.finalMs : opts.stepMs, pollIntervalMs: opts.pollMs, partialTimeoutMs: opts.finalMs, ...(opts.cancelConfirmMs !== undefined ? { cancelConfirmMs: opts.cancelConfirmMs } : {}) });
+      watched = await watchOrder(opts.executor, ref, { timeoutMs: waitMs, pollIntervalMs: opts.pollMs, partialTimeoutMs: opts.finalMs, ...(opts.cancelConfirmMs !== undefined ? { cancelConfirmMs: opts.cancelConfirmMs } : {}) });
     } catch (error) {
       steps.push(`${label}: ${amount}, waited up to ${formatWait(waitMs)} - lost track of the order (${error instanceof Error ? error.message : String(error)})`);
       return { ok: false, stage: "watch", ref, error, steps };
@@ -110,6 +119,7 @@ export async function placeAndWatch(opts: PlaceAndWatchOptions): Promise<PlaceAn
         const next = opts.reprice({ band: state.priceBand!, refused: price! });
         if (next.ok) {
           reprices++;
+          if (i < chaseFrom) chaseFrom = Infinity; // the broker's own numbers replace the rest of the ladder, the chase with it
           steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal})${trail}; ${next.note}`);
           rungs.splice(i, rungs.length - i, ...next.prices);
           i--; // the loop's own i++ brings it back to this place, now holding the new first price
@@ -124,10 +134,11 @@ export async function placeAndWatch(opts: PlaceAndWatchOptions): Promise<PlaceAn
 
     // A close that ends canceled or rejected says what the broker said about it (its reason, status and last events), or that it said nothing.
     const brokerNote = opts.kind === "close" && state.filledQuantity === 0 && (state.status === "canceled" || state.status === "rejected") ? brokerSaid(state, !timedOut) : "";
-    steps.push(`${label}: ${amount}, waited up to ${formatWait(waitMs)} - ${describeResult(state, timedOut, of, formatWait(opts.finalMs))}${brokerNote ? `. ${brokerNote}` : ""}`);
+    const chaseFill = isChase && state.status === "filled" && state.filledQuantity > 0 ? `. Filled on rehearsal chase rung ${i - chaseFrom + 1} at $${(price ?? 0).toFixed(2)}` : "";
+    steps.push(`${label}: ${amount}, waited up to ${formatWait(waitMs)} - ${describeResult(state, timedOut, of, formatWait(opts.finalMs))}${chaseFill}${brokerNote ? `. ${brokerNote}` : ""}`);
     // Nothing filled and we canceled it ourselves because the rung's time ran out: try the next price.
     if (!last && timedOut && state.filledQuantity === 0) continue;
-    return { ok: true, state, timedOut, ref, rungsTried: i + 1, steps };
+    return { ok: true, state, timedOut, ref, rungsTried: i + 1, steps, ...(isChase ? { chase: { rung: i + 1, chaseRung: i - chaseFrom + 1, of: rungs.length, price: price ?? 0 } } : {}) };
   }
   throw new Error("unreachable: a ladder always has a last rung");
 }

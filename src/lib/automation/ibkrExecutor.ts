@@ -124,6 +124,8 @@ export type BridgeFetch = (url: string, init: { method: string; headers: Record<
 export interface BridgeHealth {
   connected: boolean;
   account: string | null;
+  /** The bridge's own statement that the account is a paper one. Only a literal `true` counts. */
+  paper: boolean;
 }
 
 const SYMBOL = /^[A-Za-z]{1,6}$/;
@@ -165,7 +167,17 @@ export class IbkrExecutor implements BrokerExecutor {
   async getHealth(): Promise<BridgeHealth> {
     const json = await this.call("GET", "/health", { timeoutMs: QUOTE_TIMEOUT_MS });
     const account = typeof json.account === "string" && json.account.trim() ? json.account.trim() : null;
-    return { connected: json.connected === true, account };
+    return { connected: json.connected === true, account, paper: json.paper === true };
+  }
+
+  /** True only when the bridge says so: /health `paper` is true (and it is connected). Anything else, including a failed call, is false. */
+  async isPaperAccount(): Promise<boolean> {
+    try {
+      const h = await this.getHealth();
+      return h.connected && h.paper;
+    } catch {
+      return false;
+    }
   }
 
   /** Orders only go out when the Gateway is connected and the account is a paper one (unless live was allowed on purpose).
@@ -174,13 +186,13 @@ export class IbkrExecutor implements BrokerExecutor {
     const now = this.clock();
     if (this.health && now - this.health.at <= HEALTH_TTL_MS) return;
     this.health = null;
-    const { connected, account } = await this.getHealth();
+    const { connected, account, paper } = await this.getHealth();
     if (!connected) throw new Error("Refused: the bridge says IB Gateway is not connected, so no order was sent.");
     if (!account) throw new Error("Refused: the bridge did not say which account it is connected to, so no order was sent.");
     if (!this.config.allowLive && !account.startsWith(IBKR_PAPER_ACCOUNT_PREFIX)) {
       throw new Error(`Refused: account ${account} is not a paper account (paper ids start with ${IBKR_PAPER_ACCOUNT_PREFIX}). Real money needs IBKR_ALLOW_LIVE=true, set on purpose.`);
     }
-    this.health = { at: now, value: { connected, account } };
+    this.health = { at: now, value: { connected, account, paper } };
   }
 
   private legs(args: { root: string | undefined; underlying: string | undefined; expiry: string; type: Position["type"]; shortStrike: number; longStrike: number }) {
