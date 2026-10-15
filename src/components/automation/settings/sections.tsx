@@ -5,6 +5,7 @@ import { Card } from "@/components/ui";
 import { cn } from "@/lib/format";
 import { Btn, Checkbox, Field, inputClass, KeyValue, Pill } from "../bot/primitives";
 import { clock12 } from "../builder/builtin";
+import { accountPill, routingNote } from "../executorLabels";
 import { EditWebhookDrawer, NewWebhookDrawer, WebhookIntro, WebhookRow } from "./WebhookList";
 
 /** Shape of GET /api/automation/settings. */
@@ -19,7 +20,7 @@ export interface SettingsData {
   email: { enabled: boolean; to: string | null; senderWired: boolean };
   sessionTimeoutChoices: number[];
   signInRequired: boolean;
-  executor: { kind: "mock" | "tradier" | "ibkr" | null; venue: "mock" | "tradier" | "ibkr" | null; error: string | null; baseUrl?: string; sandbox?: boolean; priceSource?: "feed" | "broker"; dryRun: boolean; testMode: boolean };
+  executor: { kind: "mock" | "tradier" | "ibkr" | null; venue: "mock" | "tradier" | "ibkr" | null; error: string | null; baseUrl?: string; sandbox?: boolean; priceSource?: "feed" | "broker"; bridgeSymbols?: string[]; dryRun: boolean; testMode: boolean };
   accounts: { id: string; bots: string[] }[];
   webhook: { path: string; secretSet: boolean; bots: { id: string; name: string; underlying: string | null }[] };
 }
@@ -289,10 +290,11 @@ export function AccountsSection({ data, broker, onRefresh }: { data: SettingsDat
                 <div className="text-sm font-medium">{a.id}</div>
                 <div className="text-xs text-muted">{a.bots.length > 0 ? a.bots.join(", ") : "No bots use it yet"}</div>
               </div>
-              <Pill tone="warn">Paper · mock executor</Pill>
+              <Pill tone={accountPill(data.executor).tone}>{accountPill(data.executor).text}</Pill>
             </li>
           ))}
         </ul>
+        {routingNote(data.executor) && <p className="text-xs text-muted">{routingNote(data.executor)}</p>}
         <Btn kind="secondary"  disabled title="Brokerage accounts can't be connected yet: the broker decision is still open.">
           Add account
         </Btn>

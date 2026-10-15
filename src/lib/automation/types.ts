@@ -62,6 +62,16 @@ export type DecisionOutcome =
   | "close_in_flight"
   /** Strike price from a live quote was asked for, and there wasn't a usable one. */
   | "no_live_price"
+  /** A close was refused because the broker only takes limit orders and there was no usable quote of the spread to price one from. The position is left exactly as it was. */
+  | "close_no_quote"
+  /** An open was refused for the same reason: no usable quote to price a limit order from. Nothing was sent. */
+  | "open_no_quote"
+  /** Every price the open ladder would try was under the bot's minimum credit, so nothing was opened. */
+  | "below_min_credit"
+  /** A signal wanted to close a position that is stuck in "closing" with no order working: nothing was sent, a person has to resolve it first. */
+  | "stuck_position"
+  /** A person resolved a stuck position (Resolve: return to open, mark closed, mark open, mark rejected, cancel orders), after the broker was asked. */
+  | "position_resolved"
   | "closed"
   | "opened"
   | "open_rejected"
@@ -102,6 +112,8 @@ export interface BotStaticConfig {
   /** The option series root ("NDXP" for NDX dailies). Informational until a
    * real broker executor needs it to build option symbols. */
   optionRoot?: string;
+  /** The lowest credit an open may be priced at. A ladder rung under it is dropped; with none left the open is skipped. Unset = a quarter of `openingCreditEstimate`. */
+  minCredit?: number;
   /** Default "alert". "live" needs a real-time quote source; with none (or a stale quote) the bot refuses to open rather than guess. */
   strikePriceSource?: StrikePriceSource;
   /** Default "outward". See StrikeRounding. */
@@ -320,6 +332,8 @@ export interface Order {
   limitPrice: number;
   filledQuantity: number;
   rejectReason?: string;
+  /** When the broker refused the price as too far through its market: its market price and the first price it would not take. */
+  priceBand?: { edge?: number; marketPrice?: number };
   /** The executor's own order reference, used to poll getOrder(). */
   ref: string;
   createdAt: number;
@@ -356,7 +370,10 @@ export interface OrderState {
   status: OrderStatus;
   filledQuantity: number;
   averagePrice?: number;
+  /** Why the broker ended or refused the order, in its own words (also on a cancel it did itself). */
   rejectReason?: string;
+  /** Set when the broker refused the price as too far through its market (see priceBand.ts): what it thinks the spread trades at, and the first price it won't take. */
+  priceBand?: { edge?: number; marketPrice?: number };
 }
 
 export type ExecutorVenue = "mock" | "tradier" | "ibkr";
@@ -435,6 +452,12 @@ export interface SpreadQuoteRequest {
 export interface BrokerExecutor {
   /** What kind of executor this is; unset is treated as "mock". */
   readonly venue?: ExecutorVenue;
+  /** True when this executor must never be sent a combo without a limit price (a bare market order on a spread): every order then needs a price from a real quote, or is refused. */
+  readonly limitOnly?: boolean;
+  /** For an executor that sends some symbols elsewhere (the others run on the internal simulation): where orders for this underlying go. */
+  venueFor?(underlying: string): ExecutorVenue;
+  /** The same, for `limitOnly`: whether orders for this underlying must carry a limit price. */
+  limitOnlyFor?(underlying: string): boolean;
   placeOpenOrder(req: OpenSpreadRequest): Promise<{ ref: string }>;
   /** `limitDebit`: the most to pay to buy the spread back. Unset = the executor's own default (the mock fills; Tradier sends a market order). */
   placeCloseOrder(position: Position, options?: CloseOrderOptions): Promise<{ ref: string }>;

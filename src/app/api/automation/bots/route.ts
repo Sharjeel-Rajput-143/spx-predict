@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cloneBot, createBot, createEmptyBot, createFromTemplate, getBotStaticConfig, isKnownBot, validateInputs } from "@/lib/automation/bots";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
+import { executorStatus } from "@/lib/automation/sharedExecutor";
 import { listAccounts, summarizeAllBots } from "@/lib/automation/summary";
 import { templatesStore } from "@/lib/automation/store";
 import type { BotInputs, BotSafeguards } from "@/lib/automation/types";
@@ -9,7 +10,8 @@ import { withStorage } from "@/lib/automation/withStorage";
 async function handleGET(req: NextRequest) {
   const denied = unauthorized(req);
   if (denied) return denied;
-  return NextResponse.json({ bots: summarizeAllBots(), accounts: listAccounts(), templates: templatesStore.all().sort((a, b) => b.createdAt - a.createdAt) });
+  const x = executorStatus();
+  return NextResponse.json({ executor: { venue: x.venue, sandbox: x.sandbox ?? null, bridgeSymbols: x.bridgeSymbols }, bots: summarizeAllBots(), accounts: listAccounts(), templates: templatesStore.all().sort((a, b) => b.createdAt - a.createdAt) });
 }
 
 /**

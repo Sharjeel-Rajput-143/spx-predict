@@ -4,7 +4,7 @@ import { botDisplayName, ensureBotRecord, getBotStaticConfig, listBotIds } from 
 import { withBotLock } from "./botLock";
 import { logDecision } from "./decisions";
 import { recordError } from "./errors";
-import { closePosition } from "./engine";
+import { applyClosePricing, closePosition, pricingFor } from "./engine";
 import { payoffAt } from "./payoff";
 import { positionQuantity } from "./pnl";
 import { checkInterruptedRuns } from "./interrupted";
@@ -131,7 +131,14 @@ export function sweepBot(botId: string, now: number = Date.now(), options: Sweep
           botsStore.update(botId, { needsAttention: true, needsAttentionReason: `end-of-day sweep: a ${position.status} position was left for you to check` });
           continue;
         }
-        // No pricing given: no ladder, no limit price - the executor's own (market) order.
+        // "At market": no ladder and no limit price, the executor's own order. A broker that is limit-only is never sent a bare market order
+        // on a spread: for it this becomes one limit order at the far end of the spread, priced from a quote (refused when there is none).
+        let marketPricing: Parameters<typeof closePosition>[6];
+        try {
+          marketPricing = applyClosePricing(pricingFor(getBotStaticConfig(botId), "close"), { speed: "market" });
+        } catch {
+          marketPricing = undefined;
+        }
         const closed = await closePosition(
           position,
           { id: null, price: priceOf(position.underlying, now) },
@@ -139,6 +146,7 @@ export function sweepBot(botId: string, now: number = Date.now(), options: Sweep
           options.closeConfirmTimeoutMs ?? CLOSE_CONFIRM_TIMEOUT_SECONDS * 1000,
           options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS,
           now,
+          marketPricing,
         );
         logDecision({ signalId: null, botId, outcome: closed.outcome, reason: `End-of-day sweep: ${closed.reason}`, detail: { sweep: true, mode, positionId: position.id, ...(closed.steps ? { steps: closed.steps } : {}) }, now });
         if (closed.ok) {

@@ -215,7 +215,7 @@ describe("a flip that goes wrong stays safe", () => {
     // The platform never guesses: with a close unconfirmed it sends no second close and opens nothing, until a person checks.
     await tradingView(bear);
     expect(sent()).toHaveLength(2);
-    expect(outcomes().at(-1)).toBe("close_in_flight");
+    expect(outcomes().at(-1)).toBe("stuck_position");
     expect(held().map((p) => p.type)).toEqual([PUT]);
   });
 

@@ -13,6 +13,7 @@ import { POSITION_TYPES } from "../builder/model";
 import { PayoffChart } from "./PayoffChart";
 import { Btn, Drawer, InfoTip, inputClass, Modal, Pill, type ToastItem } from "./primitives";
 import { LegPills } from "./LegPills";
+import { ResolvePanel } from "./ResolvePanel";
 import { NO_PRICE_TIP, TYPE_LABEL, etDateTime, etDayKey, num, pctText, plClass, plText, usd, usd2 } from "./model";
 
 const NEEDS_CHAIN = "Needs live option prices (an option chain), which Phase 1 doesn't have.";
@@ -44,6 +45,7 @@ const dayDiff = (fromKey: string, toKey: string) => Math.round((Date.parse(toKey
  * trade, the payoff at expiry, exit options, its bot, its fills, tags and notes. */
 export function PositionDetails({ position: p, orders: allOrders, signals, estimate, bot, last, now, onClose, onChanged, notify }: Props) {
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
 
@@ -71,6 +73,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
   const dte = Math.max(0, dayDiff(today, p.expiry));
   const expiryPill = new Date(`${p.expiry}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" }).toUpperCase();
   const closable = p.status === "open" || p.status === "closing";
+  const stuck = p.status === "closing" || p.status === "opening";
   const orders = allOrders.filter((o) => o.positionId === p.id).sort((a, b) => a.createdAt - b.createdAt);
 
   const summary = `${p.underlying} ${TYPE_LABEL[p.type]} ${p.shortStrike}/${p.longStrike} ${letter}, exp ${p.expiry}, ${quantity} contracts${credit != null ? `, credit ${usd2(credit)}` : ""}`;
@@ -101,8 +104,14 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
           Close position
         </Btn>
       )}
-      <Btn kind="secondary" className="whitespace-nowrap !py-1.5" disabled title="Overriding a position's status isn't available in Phase 1" >
-        Override
+      <Btn
+        kind="secondary"
+        className="whitespace-nowrap !py-1.5"
+        disabled={!stuck}
+        onClick={() => setResolving(true)}
+        title={stuck ? "Ask the broker what is really held and settle this position from that" : "Resolve is for a position stuck in closing or opening"}
+      >
+        Resolve…
       </Btn>
     </>
   );
@@ -260,7 +269,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
               {orders.map((o) => {
                 const filled = o.status === "filled" || o.status === "partially_filled";
                 const price = o.kind === "open" ? credit : p.closePrice;
-                const movement = o.kind === "open" ? `${o.limitPrice.toFixed(2)} → ${credit != null ? credit.toFixed(2) : "—"}` : `→ ${p.closePrice != null ? p.closePrice.toFixed(2) : "—"}`;
+                const movement = o.kind === "open" ? `${o.limitPrice.toFixed(2)} → ${credit != null ? credit.toFixed(2) : "—"}` : `${o.limitPrice > 0 ? `${o.limitPrice.toFixed(2)} ` : ""}→ ${p.closePrice != null && filled ? p.closePrice.toFixed(2) : "—"}`;
                 return (
                   <li key={o.id} className="px-4 py-3">
                     <div className="flex items-start justify-between gap-3">
@@ -272,6 +281,11 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
                       </div>
                       <div className="text-right text-sm">
                         {filled ? <span className="font-medium">{price != null ? `filled at ${usd2(price)}` : "filled"}</span> : <Pill tone={o.status === "rejected" ? "error" : "neutral"}>{o.status}</Pill>}
+                        {o.priceBand && (o.priceBand.edge !== undefined || o.priceBand.marketPrice !== undefined) && (
+                          <div className="text-xs text-down">
+                            IBKR price band: {[o.priceBand.marketPrice !== undefined ? `market ${o.priceBand.marketPrice.toFixed(2)}` : null, o.priceBand.edge !== undefined ? `won't take ${o.priceBand.edge.toFixed(2)} or beyond` : null].filter(Boolean).join(", ")}
+                          </div>
+                        )}
                         {o.rejectReason && <div className="text-xs text-down">{o.rejectReason}</div>}
                       </div>
                     </div>
@@ -289,6 +303,21 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         <NotesBlock position={p} onChanged={onChanged} notify={notify} />
         <DeleteBlock position={p} onChanged={onChanged} onClose={onClose} notify={notify} />
       </div>
+
+      {resolving && (
+        <Modal title="Resolve this position" onClose={() => setResolving(false)} wide>
+          <ResolvePanel
+            positionId={p.id}
+            onChanged={onChanged}
+            notify={notify}
+            onDone={() => setResolving(false)}
+            onRetryClose={() => {
+              setResolving(false);
+              setConfirmingClose(true);
+            }}
+          />
+        </Modal>
+      )}
 
       {confirmingClose && (
         <Modal

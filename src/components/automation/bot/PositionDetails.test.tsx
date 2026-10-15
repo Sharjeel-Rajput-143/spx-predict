@@ -60,11 +60,12 @@ describe("Position details panel", () => {
     expect(out).not.toContain("Bot exit options are off");
   });
 
-  it("header buttons: copy, Close position (an open position), and a disabled Override", () => {
+  it("header buttons: copy, Close position (an open position), and a disabled Resolve (nothing is stuck)", () => {
     const out = render(open);
     expect(out).toContain('aria-label="Copy position summary"');
     expect(out).toContain(">Close position<");
-    expect(out).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Override(?:<\/span>)?<\/button>/);
+    expect(out).toMatch(/<button[^>]*disabled[^>]*>(?:<span>)?Resolve…(?:<\/span>)?<\/button>/);
+    expect(out).not.toContain("Override");
   });
 
   it("numbers it can't know are dashes with an explanation, never estimates", () => {
@@ -155,5 +156,50 @@ describe("Show tags on the positions tables", () => {
       <PositionsView positions={[open, closed]} orders={[]} signals={[]} now={NOW} estimateFor={() => 2.2} onChanged={noop} notify={noop} />,
     );
     expect(out.match(/Show tags/g)).toHaveLength(2);
+  });
+});
+
+describe("Resolve, for a position that is stuck", () => {
+  const resolveButton = (out: string) => /<button[^>]*?(\sdisabled="")?[^>]*><span>Resolve…<\/span><\/button>/.exec(out);
+  const enabled = (out: string) => {
+    const m = /<button([^>]*)><span>Resolve…<\/span><\/button>/.exec(out);
+    return m !== null && !/\sdisabled=/.test(m[1]);
+  };
+
+  it("is available on a closing or opening position, and says what it does", () => {
+    for (const status of ["closing", "opening"] as const) {
+      const out = render({ ...open, status });
+      expect(resolveButton(out), status).not.toBeNull();
+      expect(enabled(out), status).toBe(true);
+      expect(out).toContain("Ask the broker what is really held and settle this position from that");
+    }
+  });
+
+  it("is switched off for a position that is not stuck, and the old Override is gone", () => {
+    for (const status of ["open", "closed", "expired", "rejected"] as const) {
+      const out = render({ ...open, status });
+      expect(enabled(out), status).toBe(false);
+      expect(out).toContain("Resolve is for a position stuck in closing or opening");
+      expect(out).not.toContain("Override");
+    }
+  });
+
+  it("a position stuck in closing can still be closed again with the Close position button", () => {
+    expect(render({ ...open, status: "closing" })).toContain(">Close position<");
+  });
+});
+
+describe("the Trades list shows what the broker said about a refused price", () => {
+  it("the price band in numbers, the broker's own words, and the limit that was sent on a close", () => {
+    const orders = [order({ id: "o1", positionId: "p1", kind: "close", status: "canceled", limitPrice: 4.35, filledQuantity: 0, rejectReason: "Order canceled - price band", priceBand: { edge: 1.6, marketPrice: 1.1 } })];
+    const out = render({ ...open, status: "closing" }, { orders });
+    expect(out).toContain("IBKR price band: market 1.10, won&#x27;t take 1.60 or beyond");
+    expect(out).toContain("Order canceled - price band");
+    expect(out).toContain("4.35 →");
+  });
+
+  it("an order with no refusal shows neither", () => {
+    const out = render(open, { orders: [order({ id: "o2", positionId: "p1" })] });
+    expect(out).not.toContain("price band");
   });
 });

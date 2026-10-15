@@ -41,6 +41,13 @@ export function isBrokerKind(env: Env = process.env): boolean {
   }
 }
 
+/** The underlyings the bridge to IBKR takes (BRIDGE_SYMBOLS, default just NDX). A bot on any other underlying runs on the internal simulation. */
+export function bridgeSymbols(env: Env = process.env): string[] {
+  const raw = (env.BRIDGE_SYMBOLS ?? "NDX").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+  for (const s of raw) if (!/^[A-Z]{1,6}$/.test(s)) throw new Error(`BRIDGE_SYMBOLS must be a comma-separated list of symbols like "NDX", got "${s}".`);
+  return raw.length > 0 ? raw : ["NDX"];
+}
+
 export function priceSource(env: Env = process.env): PriceSource {
   const raw = clean(env.PRICE_SOURCE) || "feed";
   if (raw !== "feed" && raw !== "broker") throw new Error(`PRICE_SOURCE must be "feed" or "broker", got "${raw}".`);

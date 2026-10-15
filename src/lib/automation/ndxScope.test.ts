@@ -310,7 +310,7 @@ describe("(e) closing counts as held, and never gets a second close", () => {
     await emit("bullish");
     expect(closeOrders()).toHaveLength(0); // no second close
     expect(executor.placedOrders).toHaveLength(0); // and no open
-    expect(outcomes()).toEqual(["close_in_flight"]);
+    expect(outcomes()).toEqual(["stuck_position"]);
     expect(positionsStore.get("c")?.status).toBe("closing");
     expect(runsStore.all()[0].nodes.find((n) => n.kind === "decision" && n.text.includes("isn't already closing"))).toMatchObject({ result: false });
   });

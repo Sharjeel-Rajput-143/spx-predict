@@ -59,11 +59,13 @@ export async function reconcile(executor: BrokerExecutor, now: number = Date.now
   // The legs of an order still in flight (opening, closing) are neither expected nor unknown: that order is a person's, or the engine's, to settle.
   const inFlight = new Set<string>();
   for (const p of positionsStore.all()) {
+    if (p.venue === "mock") continue;
     if (p.optionRoot) roots.add(p.optionRoot);
     if (p.status === "opening" || p.status === "closing") for (const leg of legsOf(p) ?? []) inFlight.add(leg.symbol);
   }
 
-  for (const p of positionsStore.query((x) => x.status === "open")) {
+  // A simulated position (a bot on an underlying the broker doesn't take) was never sent to the broker, so it is not expected there.
+  for (const p of positionsStore.query((x) => x.status === "open" && x.venue !== "mock")) {
     const legs = legsOf(p);
     if (!legs) {
       problems.push({ kind: "no_option_root", symbol: `${p.underlying} ${p.shortStrike}/${p.longStrike}`, botId: p.botId, text: `${p.botId}: an open position has no option root recorded, so it can't be matched at the broker.` });

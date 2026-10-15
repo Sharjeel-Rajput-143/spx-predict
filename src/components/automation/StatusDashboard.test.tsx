@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StatusView, legsText, type StatusResponse } from "./StatusDashboard";
+import { StatusView, legsText, orderLimitText, orderWhy, type StatusResponse } from "./StatusDashboard";
 
 const noop = () => undefined;
 
@@ -165,5 +165,30 @@ describe("StatusView", () => {
     expect(legsText({ type: "short_put_spread", shortStrike: 7700, longStrike: 7695 })).toBe("-7,700 put / +7,695 put");
     expect(legsText({ type: "short_call_spread", shortStrike: 7740, longStrike: 7745 })).toBe("-7,740 call / +7,745 call");
     expect(legsText({ type: null, shortStrike: null, longStrike: null })).toBe("—");
+  });
+});
+
+describe("the Orders table shows the price that was really sent, and why the broker refused one", () => {
+  const closeOrder = { id: "o9", botId: "ndx_ema_bias", kind: "close" as const, status: "canceled", limitPrice: 4.35, filledQuantity: 0, createdAt: 3, positionType: "short_put_spread" as const, shortStrike: 20_975, longStrike: 20_965, underlying: "NDX", venue: "ibkr" as const };
+
+  it("a close with a limit price says so (it used to say 'no limit' for every close)", () => {
+    expect(orderLimitText(closeOrder)).toBe("$4.35 debit");
+    expect(orderLimitText({ kind: "close", limitPrice: 0 })).toBe("no limit");
+    expect(orderLimitText({ kind: "open", limitPrice: 3.3 })).toBe("$3.30 credit");
+    const out = render(data({ orders: [closeOrder] }));
+    expect(out).toContain("$4.35 debit");
+    expect(out).not.toContain("no limit");
+  });
+
+  it("the broker's price band is shown in numbers; its own words otherwise; nothing when it said nothing", () => {
+    expect(orderWhy({ priceBand: { edge: 1.6, marketPrice: 1.1 } })).toBe("IBKR price band: market 1.10, won't take 1.60 or beyond");
+    expect(orderWhy({ priceBand: { edge: 1.6 } })).toBe("IBKR price band: won't take 1.60 or beyond");
+    expect(orderWhy({ priceBand: { marketPrice: 1.1 } })).toBe("IBKR price band: market 1.10");
+    expect(orderWhy({ rejectReason: "Insufficient margin" })).toBe("Insufficient margin");
+    expect(orderWhy({ rejectReason: "x".repeat(300) })).toHaveLength(90);
+    expect(orderWhy({})).toBeNull();
+    expect(orderWhy({ priceBand: {} })).toBeNull();
+    const out = render(data({ orders: [{ ...closeOrder, priceBand: { edge: 1.6, marketPrice: 1.1 }, rejectReason: "Order canceled - price band" }] }));
+    expect(out).toContain("IBKR price band: market 1.10, won&#x27;t take 1.60 or beyond");
   });
 });

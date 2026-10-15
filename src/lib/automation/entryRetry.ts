@@ -30,7 +30,7 @@ import type { BrokerExecutor, Signal, SignalDirection } from "./types";
  */
 
 /** What an alert's run can end with and still be worth trying again. */
-const RETRYABLE = new Set(["outside_hours", "open_rejected", "open_timeout_no_fill", "no_live_price", "no_price"]);
+const RETRYABLE = new Set(["outside_hours", "open_rejected", "open_timeout_no_fill", "no_live_price", "no_price", "open_no_quote"]);
 /** The ones that mean the broker was asked and said no, or never answered: only a few of those. */
 const FAILED_ORDERS = new Set(["open_rejected", "open_timeout_no_fill"]);
 export const MAX_FAILED_ORDERS = 3;

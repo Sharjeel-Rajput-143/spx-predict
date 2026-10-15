@@ -26,9 +26,14 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   close_rejected: "error",
   close_timeout: "error",
   close_partial_fill: "error",
+  close_no_quote: "error",
+  stuck_position: "error",
 
   // A safeguard stopped a signal the bot would otherwise have acted on.
   no_live_price: "warning",
+  open_no_quote: "warning",
+  below_min_credit: "warning",
+  position_resolved: "warning",
   symbol_mismatch: "warning",
   price_out_of_range: "warning",
   allocation_limit_reached: "warning",

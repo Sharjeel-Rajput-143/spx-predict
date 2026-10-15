@@ -100,8 +100,20 @@ export function mapBridgeOrder(order: Record<string, unknown>): OrderState {
   if (!Number.isFinite(filled) || filled < 0) throw new Error("The bridge returned an order with an unusable filled quantity.");
   const avg = order.averagePrice == null ? undefined : Number(order.averagePrice);
   const averagePrice = avg !== undefined && Number.isFinite(avg) && filled > 0 ? avg : undefined;
-  const reason = typeof order.rejectReason === "string" && order.rejectReason ? order.rejectReason : undefined;
-  return { status: status as OrderStatus, filledQuantity: filled, ...(averagePrice !== undefined ? { averagePrice } : {}), ...(status === "rejected" ? { rejectReason: reason ?? "Rejected by the broker." } : {}) };
+  const reason = typeof order.rejectReason === "string" && order.rejectReason ? order.rejectReason.slice(0, 400) : undefined;
+  // The broker refused the price as too far through its market (error 202): each number is there only if its message had it.
+  const raw = order.priceBand && typeof order.priceBand === "object" ? (order.priceBand as { edge?: unknown; marketPrice?: unknown }) : null;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+  const edge = raw ? num(raw.edge) : undefined;
+  const marketPrice = raw ? num(raw.marketPrice) : undefined;
+  const priceBand = edge !== undefined || marketPrice !== undefined ? { ...(edge !== undefined ? { edge } : {}), ...(marketPrice !== undefined ? { marketPrice } : {}) } : undefined;
+  return {
+    status: status as OrderStatus,
+    filledQuantity: filled,
+    ...(averagePrice !== undefined ? { averagePrice } : {}),
+    ...(status === "rejected" ? { rejectReason: reason ?? "Rejected by the broker." } : reason ? { rejectReason: reason } : {}),
+    ...(priceBand ? { priceBand } : {}),
+  };
 }
 
 export type BridgeFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
@@ -115,6 +127,8 @@ const SYMBOL = /^[A-Za-z]{1,6}$/;
 
 export class IbkrExecutor implements BrokerExecutor {
   readonly venue: ExecutorVenue = "ibkr";
+  /** A combo is never sent without a limit price: a market order on a spread can fill at any price. */
+  readonly limitOnly = true;
   private health: { at: number; value: BridgeHealth } | null = null;
 
   /** `fetchImpl` is injectable so tests never touch the network. Constructing the executor makes no request. */
@@ -202,12 +216,13 @@ export class IbkrExecutor implements BrokerExecutor {
     if (maxRiskPerOrder != null && risk > maxRiskPerOrder) throw new Error(`Refused: this order risks $${risk}, over the limit of $${maxRiskPerOrder} per order (IBKR_MAX_RISK_PER_ORDER).`);
   }
 
-  /** Closing: buy back the short, sell the long, as one combo order. With a limit debit it is a limit order; with none, a market order. */
+  /** Closing: buy back the short, sell the long, as one combo order, always at a limit debit. A close with no price is refused here, as the last lock behind the engine's own check: it is never sent as a market order. */
   async placeCloseOrder(position: Position, options?: CloseOrderOptions): Promise<{ ref: string }> {
     const legs = this.legs({ root: position.optionRoot, underlying: position.underlying, expiry: position.expiry, type: position.type, shortStrike: position.shortStrike, longStrike: position.longStrike });
     const quantity = options?.quantity ?? (position.filledQuantity || position.requestedQuantity);
     if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`Refused: ${quantity} is not a whole number of contracts to close.`);
-    if (options?.limitDebit !== undefined && !(options.limitDebit > 0)) throw new Error(`Refused: a limit debit of ${options.limitDebit} is not above 0.`);
+    if (options?.limitDebit === undefined) throw new Error("Refused: a close needs a limit price from a quote of the spread. It is never sent as a market order, so nothing was sent.");
+    if (!(options.limitDebit > 0)) throw new Error(`Refused: a limit debit of ${options.limitDebit} is not above 0.`);
     await this.assertReadyToTrade();
     await this.assertAccountHolds(legs, quantity);
     return this.submit("/close_spread", {
@@ -215,8 +230,8 @@ export class IbkrExecutor implements BrokerExecutor {
       positionId: position.id,
       ...(options?.clientOrderId ? { clientOrderId: options.clientOrderId } : {}),
       quantity,
-      orderType: options?.limitDebit !== undefined ? "limit" : "market",
-      ...(options?.limitDebit !== undefined ? { limitDebit: options.limitDebit } : {}),
+      orderType: "limit",
+      limitDebit: options.limitDebit,
       tif: "DAY",
     });
   }
@@ -261,7 +276,29 @@ export class IbkrExecutor implements BrokerExecutor {
     };
     const short = leg(json.short);
     const long = leg(json.long);
-    return short && long ? { short, long } : null;
+    if (!short || !long) return null;
+    // Whether the data is delayed decides if the quote-width limit applies (it is exempt while delayed). The reply may say; otherwise the
+    // index quote does. Not known counts as real-time: the limit then applies.
+    const delayed = json.delayed === true ? true : json.delayed === false ? false : await this.dataDelayed(l.underlying);
+    return { short, long, delayed };
+  }
+
+  private delayedCache = new Map<string, { at: number; delayed: boolean }>();
+
+  /** Whether the bridge says its data for this underlying is delayed, asked at most once a minute. A failed or unreadable answer is "not delayed". */
+  private async dataDelayed(symbol: string): Promise<boolean> {
+    if (!SYMBOL.test(symbol)) return false;
+    const cached = this.delayedCache.get(symbol);
+    if (cached && this.clock() - cached.at < 60_000) return cached.delayed;
+    let delayed = false;
+    try {
+      const json = await this.call("GET", `/quote/${symbol.toLowerCase()}`, { timeoutMs: QUOTE_TIMEOUT_MS });
+      delayed = json.delayed === true;
+    } catch {
+      return false;
+    }
+    this.delayedCache.set(symbol, { at: this.clock(), delayed });
+    return delayed;
   }
 
   /** The bridge's quote for an index. Null when it has no usable one, or the one it has is older than BRIDGE_MAX_QUOTE_AGE_MS. */

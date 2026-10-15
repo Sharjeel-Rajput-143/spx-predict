@@ -3,6 +3,7 @@ import { MockExecutor } from "./executor";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { executorKind, isBrokerKind, priceSource } from "./executorKind";
 import { IbkrConfigError, IbkrExecutor, mapBridgeOrder, readIbkrConfig, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
+import { RoutedExecutor } from "./routedExecutor";
 import { executorStatus, getExecutor, isPaperStatus, sharedExecutor } from "./sharedExecutor";
 import { positionsStore } from "./store";
 import { BASE_NOW, NDX_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
@@ -224,38 +225,60 @@ describe("closing a spread", () => {
   const HOLDS = (n = 1) => ({ body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -n }, { symbol: "NDXP261006P20960000", quantity: n }] } });
   const held = (n = 1) => ({ ...heldPut(), expiry: "2026-10-06", requestedQuantity: n, filledQuantity: n });
 
-  it("a limit debit is a limit order carrying the position, the order id and the quantity; none is a market order", async () => {
+  it("a close is a limit order carrying the position, the order id, the quantity and the price", async () => {
     const { calls, impl } = fakeBridge([{ body: PAPER }, HOLDS(), { body: { ref: "c1" } }, HOLDS(), { body: { ref: "c2" } }]);
     const ex = new IbkrExecutor(cfg, impl);
     const opts: CloseOrderOptions = { limitDebit: 3.5, clientOrderId: "sig-2:close:pos-1:1" };
     await ex.placeCloseOrder(held(), opts);
-    await ex.placeCloseOrder(held(), { quantity: 1 });
+    await ex.placeCloseOrder(held(), { quantity: 1, limitDebit: 1.2 });
     const [a, b] = calls.filter((c) => c.url.endsWith("/close_spread"));
     expect(a.body).toEqual({
       underlying: "NDX", root: "NDXP", expiry: "2026-10-06", type: "short_put_spread", right: "put", shortStrike: 20_970, longStrike: 20_960,
       positionId: "pos-1", clientOrderId: "sig-2:close:pos-1:1", quantity: 1, orderType: "limit", limitDebit: 3.5, tif: "DAY",
     });
-    expect(b.body).toMatchObject({ orderType: "market", quantity: 1 });
-    expect(b.body).not.toHaveProperty("limitDebit");
+    expect(b.body).toMatchObject({ orderType: "limit", limitDebit: 1.2, quantity: 1 });
     expect(b.body).not.toHaveProperty("clientOrderId");
   });
 
   it("a partial close sends only that many contracts; nonsense quantities and prices are refused", async () => {
     const { calls, impl } = fakeBridge([{ body: PAPER }, HOLDS(2), { body: { ref: "c1" } }]);
     const ex = new IbkrExecutor(cfg, impl);
-    await ex.placeCloseOrder(held(2), { quantity: 1 });
+    await ex.placeCloseOrder(held(2), { quantity: 1, limitDebit: 1.2 });
     expect(calls.at(-1)?.body).toMatchObject({ quantity: 1 });
-    await expect(ex.placeCloseOrder(held(2), { quantity: 0 })).rejects.toThrow(/whole number/);
+    await expect(ex.placeCloseOrder(held(2), { quantity: 0, limitDebit: 1.2 })).rejects.toThrow(/whole number/);
     await expect(ex.placeCloseOrder(held(2), { limitDebit: 0 })).rejects.toThrow(/above 0/);
   });
 
   it("is not blocked by the opening caps (closing is never capped), but still needs a paper account", async () => {
     const capped: IbkrConfig = { ...cfg, maxContracts: 1, maxRiskPerOrder: 10 };
     const ok = fakeBridge([{ body: PAPER }, HOLDS(5), { body: { ref: "c" } }]);
-    await expect(new IbkrExecutor(capped, ok.impl).placeCloseOrder(held(5))).resolves.toEqual({ ref: "c" });
+    await expect(new IbkrExecutor(capped, ok.impl).placeCloseOrder(held(5), { limitDebit: 1.2 })).resolves.toEqual({ ref: "c" });
     const live = fakeBridge([{ body: { connected: true, account: "U1" } }]);
-    await expect(new IbkrExecutor(cfg, live.impl).placeCloseOrder(held())).rejects.toThrow(/not a paper account/);
+    await expect(new IbkrExecutor(cfg, live.impl).placeCloseOrder(held(), { limitDebit: 1.2 })).rejects.toThrow(/not a paper account/);
     expect(live.calls).toHaveLength(1);
+  });
+});
+
+describe("a combo is never sent without a limit price", () => {
+  const pos = { ...heldPut(), expiry: "2026-10-06" };
+
+  it("says it is limit-only, and refuses a close with no price before asking the bridge anything", async () => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }]);
+    const ex = new IbkrExecutor(cfg, impl);
+    expect(ex.limitOnly).toBe(true);
+    await expect(ex.placeCloseOrder(pos)).rejects.toThrow(/never sent as a market order/);
+    await expect(ex.placeCloseOrder(pos, { quantity: 1 })).rejects.toThrow(/never sent as a market order/);
+    await expect(ex.placeCloseOrder(pos, { pricePercent: 100 })).rejects.toThrow(/limit price/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a close with a price is sent as a limit order, never as a market order, and the field is never 'market'", async () => {
+    const { calls, impl } = fakeBridge([{ body: PAPER }, { body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -1 }, { symbol: "NDXP261006P20960000", quantity: 1 }] } }, { body: { ref: "c1" } }]);
+    await new IbkrExecutor(cfg, impl).placeCloseOrder(pos, { limitDebit: 2.5 });
+    const sent = calls.filter((c) => c.url.endsWith("/close_spread")).map((c) => c.body);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ orderType: "limit", limitDebit: 2.5 });
+    expect(JSON.stringify(sent)).not.toContain("market");
   });
 });
 
@@ -268,7 +291,7 @@ describe("a close is only sent when the account holds the spread", () => {
 
   const refused = async (positions: { symbol: string; quantity: number }[], p = pos()) => {
     const { calls, impl } = fakeBridge([{ body: PAPER }, account(positions), { body: { ref: "would-be-wrong" } }]);
-    const err = await new IbkrExecutor(cfg, impl).placeCloseOrder(p).catch((e: Error) => e);
+    const err = await new IbkrExecutor(cfg, impl).placeCloseOrder(p, { limitDebit: 1.2 }).catch((e: Error) => e);
     expect(calls.filter((c) => c.url.endsWith("/close_spread")), "no order may be sent").toHaveLength(0);
     return (err as Error).message;
   };
@@ -296,16 +319,16 @@ describe("a close is only sent when the account holds the spread", () => {
 
   it("holding at least that many of each leg is enough, including when other positions share the account", async () => {
     const { calls, impl } = fakeBridge([{ body: PAPER }, account([{ symbol: "SPY", quantity: 100 }, { symbol: SHORT, quantity: -3 }, { symbol: LONG, quantity: 3 }]), { body: { ref: "ok" } }]);
-    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos(2))).resolves.toEqual({ ref: "ok" });
+    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos(2), { limitDebit: 1.2 })).resolves.toEqual({ ref: "ok" });
     expect(calls.filter((c) => c.url.endsWith("/close_spread"))).toHaveLength(1);
   });
 
   it("an account that can't be read stops the close rather than guessing", async () => {
     const { calls, impl } = fakeBridge([{ body: PAPER }, { status: 503, body: "gateway busy" }, { body: { ref: "x" } }]);
-    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos())).rejects.toThrow(/HTTP 503/);
+    await expect(new IbkrExecutor(cfg, impl).placeCloseOrder(pos(), { limitDebit: 1.2 })).rejects.toThrow(/HTTP 503/);
     expect(calls.filter((c) => c.url.endsWith("/close_spread"))).toHaveLength(0);
     const odd = fakeBridge([{ body: PAPER }, { body: {} }]);
-    await expect(new IbkrExecutor(cfg, odd.impl).placeCloseOrder(pos())).rejects.toThrow(/no list of positions/);
+    await expect(new IbkrExecutor(cfg, odd.impl).placeCloseOrder(pos(), { limitDebit: 1.2 })).rejects.toThrow(/no list of positions/);
   });
 
   it("opening is not affected: it never needs to hold anything", async () => {
@@ -331,12 +354,13 @@ describe("quotes", () => {
   it("reads the bid and ask of each leg, and gives null for anything unusable", async () => {
     const { calls, impl } = fakeBridge([
       { body: { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } } },
+      { body: { price: 21_003.7, asOf: 1, delayed: false } }, // the index quote, asked once to learn whether the data is delayed
       { body: { short: { bid: 12, ask: 12.6 } } },
       { body: { short: { bid: 13, ask: 12 }, long: { bid: 8.7, ask: 9.3 } } },
       { body: { short: { bid: "x", ask: 1 }, long: { bid: 1, ask: 2 } } },
     ]);
     const ex = new IbkrExecutor(cfg, impl);
-    expect(await ex.getSpreadQuote(spread)).toEqual({ short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } });
+    expect(await ex.getSpreadQuote(spread)).toEqual({ short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 }, delayed: false });
     expect(calls[0].method).toBe("GET");
     expect(calls[0].url).toBe(`${URL_}/quote/spread?underlying=NDX&root=NDXP&expiry=2026-10-06&type=short_put_spread&shortStrike=20970&longStrike=20960`);
     expect(await ex.getSpreadQuote(spread)).toBeNull(); // one leg missing
@@ -431,7 +455,7 @@ describe("choosing the broker and the price source", () => {
     vi.stubEnv("BRIDGE_SECRET", SECRET);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     expect(executorStatus()).toMatchObject({ kind: "ibkr", venue: "ibkr", error: null, baseUrl: URL_, sandbox: true, priceSource: "feed" });
-    expect(getExecutor()).toBeInstanceOf(IbkrExecutor);
+    expect(getExecutor()).toBeInstanceOf(RoutedExecutor); // the bridge for NDX, the simulation for anything the bridge does not take
     expect(sharedExecutor.venue).toBe("ibkr");
     expect(typeof sharedExecutor.getUnderlyingQuote).toBe("function");
     expect(typeof sharedExecutor.getSpreadQuote).toBe("function");
@@ -532,5 +556,64 @@ describe("the engine gives every order an id the bridge can recognise", () => {
     expect(spy.closes[0].options?.clientOrderId).toBe(`${second.id}:close:${spy.closes[0].id}:1`);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("a price the broker refused as too far through its market (the price band)", () => {
+  it("reads the band and the broker's own words; each key is there only if the broker's message had it", () => {
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, priceBand: { edge: 1.6, marketPrice: 1.1 }, rejectReason: "Order canceled - price is at or more aggressive than 1.60" })).toEqual({
+      status: "canceled", filledQuantity: 0, rejectReason: "Order canceled - price is at or more aggressive than 1.60", priceBand: { edge: 1.6, marketPrice: 1.1 },
+    });
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, priceBand: { edge: 1.6 } }).priceBand).toEqual({ edge: 1.6 });
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, priceBand: { marketPrice: 1.1 } }).priceBand).toEqual({ marketPrice: 1.1 });
+  });
+
+  it("junk in the band is ignored rather than trusted: a band with nothing usable is no band", () => {
+    for (const priceBand of [{}, { edge: "high" }, { edge: -1, marketPrice: 0 }, { edge: null }, "1.6", [1.6], null]) {
+      expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, priceBand }).priceBand, JSON.stringify(priceBand)).toBeUndefined();
+    }
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, priceBand: { edge: "high", marketPrice: 1.1 } }).priceBand).toEqual({ marketPrice: 1.1 });
+  });
+
+  it("a cancel the broker did itself keeps its reason (cut at 400 characters), and an ordinary cancel has none", () => {
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, rejectReason: "x".repeat(900) }).rejectReason).toHaveLength(400);
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0 })).toEqual({ status: "canceled", filledQuantity: 0 });
+    expect(mapBridgeOrder({ status: "filled", filledQuantity: 1, averagePrice: 2 }).priceBand).toBeUndefined();
+  });
+
+  it("through getOrder: the status stays 'canceled' and the band comes with it", async () => {
+    const { impl } = fakeBridge([{ body: { status: "canceled", filledQuantity: 0, priceBand: { edge: 1.6, marketPrice: 1.1 }, rejectReason: "price band" } }]);
+    expect(await new IbkrExecutor(cfg, impl).getOrder("ib-1")).toMatchObject({ status: "canceled", filledQuantity: 0, priceBand: { edge: 1.6, marketPrice: 1.1 } });
+  });
+});
+
+describe("whether the data is delayed (the quote-width limit is exempt while it is)", () => {
+  const spread = { underlying: "NDX", optionRoot: "NDXP", expiry: "2026-10-06", type: "short_put_spread" as const, shortStrike: 20_970, longStrike: 20_960 };
+  const legs = { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } };
+
+  it("the spread quote's own word counts first", async () => {
+    const { calls, impl } = fakeBridge([{ body: { ...legs, delayed: true } }, { body: { ...legs, delayed: false } }]);
+    const ex = new IbkrExecutor(cfg, impl);
+    expect((await ex.getSpreadQuote(spread))?.delayed).toBe(true);
+    expect((await ex.getSpreadQuote(spread))?.delayed).toBe(false);
+    expect(calls.filter((c) => c.url.includes("/quote/ndx"))).toHaveLength(0);
+  });
+
+  it("without a word on it the index quote is asked, once a minute", async () => {
+    let t = 1_000_000;
+    const { calls, impl } = fakeBridge([{ body: legs }, { body: { price: 21_000, asOf: t, delayed: true } }, { body: legs }, { body: legs }, { body: { price: 21_000, asOf: t, delayed: false } }]);
+    const ex = new IbkrExecutor(cfg, impl, () => t);
+    expect((await ex.getSpreadQuote(spread))?.delayed).toBe(true);
+    t += 30_000;
+    expect((await ex.getSpreadQuote(spread))?.delayed).toBe(true); // from the memory: no second index call
+    expect(calls.filter((c) => c.url.includes("/quote/ndx"))).toHaveLength(1);
+    t += 40_000;
+    expect((await ex.getSpreadQuote(spread))?.delayed).toBe(false); // asked again after a minute
+    expect(calls.filter((c) => c.url.includes("/quote/ndx"))).toHaveLength(2);
+  });
+
+  it("when that can't be found out it counts as real-time, so the limit applies (never assumed delayed)", async () => {
+    const { impl } = fakeBridge([{ body: legs }, { status: 503, body: "no index quote" }]);
+    expect((await new IbkrExecutor(cfg, impl).getSpreadQuote(spread))?.delayed).toBe(false);
   });
 });

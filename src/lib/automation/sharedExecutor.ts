@@ -2,7 +2,8 @@ import "server-only";
 import { MockExecutor } from "./executor";
 import { IbkrExecutor, readIbkrConfig } from "./ibkrExecutor";
 import { TradierExecutor, readTradierConfig } from "./tradierExecutor";
-import { executorKind, priceSource, type ExecutorKind, type PriceSource } from "./executorKind";
+import { bridgeSymbols, executorKind, priceSource, type ExecutorKind, type PriceSource } from "./executorKind";
+import { RoutedExecutor } from "./routedExecutor";
 import type { BrokerExecutor, CloseOrderOptions, ExecutorVenue, OpenSpreadRequest, OrderState, Position } from "./types";
 
 /** AUTOMATION_MOCK_PRICING=simulated makes the mock report made-up close
@@ -14,7 +15,8 @@ export type { ExecutorKind };
 
 function buildExecutor(kind: ExecutorKind): BrokerExecutor {
   if (kind === "tradier") return new TradierExecutor(readTradierConfig());
-  if (kind === "ibkr") return new IbkrExecutor(readIbkrConfig());
+  // The bridge takes some underlyings only (NDX): a bot on another one stays on the internal simulation, labelled as such (see routedExecutor.ts).
+  if (kind === "ibkr") return new RoutedExecutor(new IbkrExecutor(readIbkrConfig()), new MockExecutor({ simulatePricing: MOCK_PRICING_SIMULATED }), bridgeSymbols());
   return new MockExecutor({ simulatePricing: MOCK_PRICING_SIMULATED });
 }
 
@@ -43,6 +45,8 @@ export interface ExecutorStatus {
   sandbox?: boolean;
   /** Where the underlying's price comes from: the public feed, or the broker's own quote. */
   priceSource?: PriceSource;
+  /** A broker only: the underlyings its orders go to. Bots on any other underlying run on the internal simulation. */
+  bridgeSymbols?: string[];
 }
 
 /** Paper money or nothing real at all: the only places a test call or a test alert may run. Real money never. */
@@ -64,7 +68,7 @@ export function executorStatus(): ExecutorStatus {
   try {
     if (kind === "ibkr") {
       const c = readIbkrConfig();
-      return { kind, venue: "ibkr", error: null, baseUrl: c.baseUrl, sandbox: !c.allowLive, priceSource: source };
+      return { kind, venue: "ibkr", error: null, baseUrl: c.baseUrl, sandbox: !c.allowLive, priceSource: source, bridgeSymbols: bridgeSymbols() };
     }
     const c = readTradierConfig();
     return { kind, venue: "tradier", error: null, baseUrl: c.baseUrl, sandbox: c.sandbox, priceSource: source };
@@ -89,6 +93,17 @@ export const sharedExecutor: BrokerExecutor = {
   get getSpreadQuote() {
     const ex = executorStatus().error ? null : getExecutor();
     return ex?.getSpreadQuote ? ex.getSpreadQuote.bind(ex) : undefined;
+  },
+  get limitOnly() {
+    return executorStatus().error ? undefined : getExecutor().limitOnly;
+  },
+  get limitOnlyFor() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.limitOnlyFor ? ex.limitOnlyFor.bind(ex) : undefined;
+  },
+  get venueFor() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.venueFor ? ex.venueFor.bind(ex) : undefined;
   },
   get getUnderlyingQuote() {
     const ex = executorStatus().error ? null : getExecutor();

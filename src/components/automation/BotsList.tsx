@@ -14,6 +14,7 @@ import type { BotSummary } from "@/lib/automation/summary";
 import type { BotTemplate } from "@/lib/automation/types";
 import { cn } from "@/lib/format";
 import { usePolling } from "./usePolling";
+import { liveChipTip, ordersFooter, type ExecutorLike } from "./executorLabels";
 
 const POLL_MS = 5000;
 const usd = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -47,6 +48,7 @@ export function BotsList() {
   const [tags, setTags] = useState<Set<string>>(new Set());
   const [group, setGroup] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [executor, setExecutor] = useState<ExecutorLike | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
   const [newBot, setNewBot] = useState<{ start?: NewBotView | NewBotView[] } | null>(null);
@@ -61,9 +63,10 @@ export function BotsList() {
         if (!r.ok) throw new Error("Failed to load.");
         return r.json();
       })
-      .then((json: { bots: BotSummary[]; templates: BotTemplate[]; accounts: string[] } | null) => {
+      .then((json: { bots: BotSummary[]; templates: BotTemplate[]; accounts: string[]; executor?: ExecutorLike } | null) => {
         if (!json) return;
         setSignedOut(false);
+        setExecutor(json.executor ?? null);
         setBots(json.bots);
         setTemplates(json.templates);
         setAccounts(json.accounts);
@@ -194,7 +197,7 @@ export function BotsList() {
       />
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex divide-x divide-line overflow-hidden rounded-lg border border-line">
-          {chip(modes.has("live"), () => toggleIn(modes, "live", setModes), "Live", "No live broker is connected - Phase 1 uses a mock executor")}
+          {chip(modes.has("live"), () => toggleIn(modes, "live", setModes), "Live", liveChipTip(executor))}
           {chip(modes.has("paper"), () => toggleIn(modes, "paper", setModes), "Paper")}
         </div>
         <div className="inline-flex divide-x divide-line overflow-hidden rounded-lg border border-line">
@@ -351,8 +354,8 @@ export function BotsList() {
 
       <p className="text-center text-sm text-muted">
         {ready
-          ? `Showing ${visible.length} of ${showArchived ? archivedCount : activeCount} ${showArchived ? "archived" : "active"} bots${!showArchived && archivedCount > 0 ? ` • ${archivedCount} archived` : ""} • orders go to a mock executor in Phase 1`
-          : "Orders go to a mock executor in Phase 1"}
+          ? `Showing ${visible.length} of ${showArchived ? archivedCount : activeCount} ${showArchived ? "archived" : "active"} bots${!showArchived && archivedCount > 0 ? ` • ${archivedCount} archived` : ""} • ${ordersFooter(executor)}`
+          : `${ordersFooter(executor)[0].toUpperCase()}${ordersFooter(executor).slice(1)}`}
       </p>
 
       {signedOut && (

@@ -153,7 +153,7 @@ describe("processSignal - active-status counting", () => {
     await emit("bullish");
     const call = botPositions().find((p) => p.type === "short_call_spread")!;
     expect(call.status).toBe("closing"); // no second close was sent
-    expect(botDecisions("close_in_flight")).toHaveLength(1);
+    expect(botDecisions("stuck_position")).toHaveLength(1);
     expect(botPositions().filter((p) => p.type === "short_put_spread")).toHaveLength(0); // and the other side never opened
   });
 });

@@ -1,5 +1,5 @@
 import "server-only";
-import { priceSource } from "@/lib/automation/executorKind";
+import { bridgeSymbols, priceSource } from "@/lib/automation/executorKind";
 import { fetchBrokerPrice } from "./brokerFeed";
 import { fetchGoogleFinancePrice, GOOGLE_FINANCE_CODES } from "./googleFinance";
 import { fetchYahooFinancePrice, YAHOO_CODES } from "./yahooFinance";
@@ -143,7 +143,16 @@ export function fetchPrice(symbol: string): Promise<{ price: number; source: Fee
     console.error(`[marketData] ${err instanceof Error ? err.message : String(err)}`);
     return Promise.resolve(null);
   }
-  return source === "broker" ? fetchBrokerPrice(symbol) : fetchFeedPrice(symbol);
+  if (source !== "broker") return fetchFeedPrice(symbol);
+  // The broker's own quote is only asked for the symbols the bridge takes (NDX). A symbol it doesn't take (SPX) runs on the internal
+  // simulation, and its price comes from the public feed - nothing is sent to the bridge for it, and nothing fails for want of a quote.
+  try {
+    if (!bridgeSymbols().includes(symbol.toUpperCase())) return fetchFeedPrice(symbol);
+  } catch (err) {
+    console.error(`[marketData] ${err instanceof Error ? err.message : String(err)}`);
+    return Promise.resolve(null);
+  }
+  return fetchBrokerPrice(symbol);
 }
 
 export function isLiveSymbol(symbol: string): boolean {

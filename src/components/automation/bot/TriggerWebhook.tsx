@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { TriggerOption } from "@/lib/automation/types";
+import { testLine, watchTestRun } from "../testRun";
 import { SecretUrl } from "../SecretUrl";
 import { WebhookAttachPanel, type AttachedWebhook } from "./WebhookAttachPanel";
 import { Btn } from "./primitives";
@@ -173,8 +174,9 @@ function TestHook({ webhookId }: { webhookId: string }) {
       const j = await res.json().catch(() => ({}));
       if (!res.ok) setResult(`Not sent: ${j.error ?? res.status}`);
       else {
-        const steps = ((j.decisions ?? []) as { outcome: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-        setResult(`Sent at ${Number(j.price).toLocaleString("en-US")} (live quote) → ${steps}${j.finished ? "" : " (still working…)"}`);
+        const head = `Sent at ${Number(j.price).toLocaleString("en-US")} (live quote)`;
+        setResult(testLine(head, j.decisions ?? [], j.finished === true));
+        if (j.finished !== true && typeof j.signalId === "string") watchTestRun(j.signalId, head, (line) => setResult(line));
       }
     } catch {
       setResult("Couldn't reach the server.");

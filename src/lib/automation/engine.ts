@@ -8,7 +8,9 @@ import {
   CLOSE_CONFIRM_TIMEOUT_SECONDS,
   ORDER_FILL_TIMEOUT_SECONDS,
   STRIKE_QUOTE_MAX_AGE_SECONDS,
+  closeMaxAboveMarket,
   getFlipCooldownSeconds,
+  quoteMaxWidth,
   isDryRun,
   isTestMode,
 } from "./config";
@@ -16,10 +18,13 @@ import { logDecision } from "./decisions";
 import { recordError } from "./errors";
 import { expireStalePositions } from "./expiry";
 import { watchOrder } from "./orderWatch";
-import { placeAndWatch } from "./placeAndWatch";
+import { describeBand, placeAndWatch } from "./placeAndWatch";
 import { getLastTick } from "@/lib/marketData/tickStore";
 import { applyTradeOp, contractsToClose, describeFinals, describeClosePricing, describeQuantity, type ClosePricing } from "./closePricing";
 import { resolveQuantity, resolveStrikeInputs } from "./openSettings";
+import { applyFloor, effectiveMinCredit } from "./minCredit";
+import { occSymbol } from "./tradierExecutor";
+import { repriceAfterBand, type PriceBand } from "./priceBand";
 import { DEFAULT_PRICE_TICK, buildLadder, describeLadder, spreadMarket, type Ladder, type SmartPricingMode } from "./smartPricing";
 import {
   activePositionsForBot,
@@ -170,6 +175,9 @@ export const pricingFor = (config: BotStaticConfig, side: "open" | "close", step
   width: config.widthPoints,
 });
 
+/** Whether orders for this underlying must carry a limit price on this executor (see BrokerExecutor.limitOnly). */
+export const needsLimit = (executor: BrokerExecutor, underlying: string): boolean => (executor.limitOnlyFor ? executor.limitOnlyFor(underlying) : executor.limitOnly === true);
+
 /** What the engine knows about an order's price: the ladder it will walk, or why there isn't one. */
 interface PricePlan {
   ladder: Ladder | null;
@@ -190,6 +198,16 @@ async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spr
     return { ladder: null, note: `One price (the quote failed: ${errorMessage(err)})` };
   }
   if (!legs) return { ladder: null, note: "One price (no quote available)" };
+  // A quote far too wide to mean anything is not priced from (real-time data only; exempt while the data is delayed, or every paper trade would be refused).
+  const widest = quoteMaxWidth();
+  const market = spreadMarket(side, legs);
+  if (market && widest > 0 && legs.delayed !== true) {
+    const gap = Math.abs(market.best - market.natural); // the same width whichever side is being priced
+    if (gap > widest + 1e-9) {
+      const reason = `the quote is too wide to price from: its bid/ask gap is $${gap.toFixed(2)} against a limit of $${widest.toFixed(2)} (the limit is off while the data is delayed)`;
+      return { ladder: null, note: `No usable price: ${reason}`, unusable: reason };
+    }
+  }
   const own = pricing.close;
   const finals = own ? { percent: own.percent, slippage: own.slippage, flat: own.flat, ...(own.tradePrice ? { tradePrice: applyTradeOp(openedFor, own.tradePrice) ?? undefined } : {}) } : undefined;
   const built = buildLadder({ side, legs, mode: pricing.mode, finalPercent: pricing.percent, ...(finals ? { finals } : {}), width: pricing.width, tick: DEFAULT_PRICE_TICK });
@@ -225,15 +243,29 @@ export async function closePosition(
   const total = position.filledQuantity || position.requestedQuantity;
   const target = contracts !== undefined ? Math.min(total, Math.max(1, contracts)) : total;
   const partial = target < total;
-  positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
 
-  // Closing is a debit: buy the spread back. With a market to look at, walk from the mid toward the full spread;
-  // with none (or an unusable quote) the executor's own default applies, as it always has.
-  const plan: PricePlan | null = pricing?.market
+  // Closing is a debit: buy the spread back. With a market to look at, walk from the mid toward the full spread.
+  // Priced BEFORE anything changes, so a close that can't be priced leaves the position exactly as it was.
+  // A broker that is limit-only (a combo is never sent as a bare market order) turns "market" into one limit order at the far end of the
+  // spread, and refuses outright when there is no usable quote to price from. Only an executor without that rule (the simulation) falls
+  // back to its own default price when there is no quote.
+  const limitOnly = needsLimit(executor, position.underlying);
+  const effective: Pricing | undefined = limitOnly && pricing?.market ? { ...pricing, market: false, mode: "off", percent: 100, close: undefined } : pricing;
+  const plan: PricePlan | null = effective?.market
     ? { ladder: null, note: "Market order (no limit price)" }
-    : pricing && executor.getSpreadQuote
-      ? await planPrice(executor, "debit", spreadOf(position), pricing, position.credit)
+    : effective && executor.getSpreadQuote
+      ? await planPrice(executor, "debit", spreadOf(position), effective, position.credit)
       : null;
+  if (limitOnly && !plan?.ladder) {
+    const why = plan?.unusable ?? plan?.note ?? "this executor can't quote the spread";
+    return {
+      ok: false,
+      outcome: "close_no_quote",
+      reason: `Close refused: there is no usable quote of the spread to price a limit order from (${why}). The broker is only sent limit orders on a spread, so nothing was sent and the position is left exactly as it was. Try again when quotes are available.`,
+      pricing: plan?.note,
+    };
+  }
+  positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
   const ladder = plan?.ladder ?? null;
   const pricingNote = plan?.note;
 
@@ -245,7 +277,9 @@ export async function closePosition(
     now,
     place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${signal?.id ?? position.id}:close:${position.id}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
     prices: ladder?.prices ?? null,
-    stepMs: pricing?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
+    // The broker refused a price as too far through its market: price again from its own numbers (never past the ladder's final price).
+    ...(ladder ? { reprice: ({ band, refused }: { band: PriceBand; refused: number }) => repriceAfterBand({ side: "debit", band, refused, finalPrice: ladder.final, rungs: ladder.prices.length, maxAboveMarket: closeMaxAboveMarket(), width: effective?.width }) } : {}),
+    stepMs: effective?.stepMs ?? (ladder?.secondsEach ?? 0) * 1000,
     finalMs: timeoutMs,
     pollMs: pollIntervalMs,
     defaultLimit: 0,
@@ -289,13 +323,51 @@ export async function closePosition(
     });
     return { ok: true, outcome: "closed", reason: "Close order filled.", pricing: pricingNote, steps };
   }
-  if (state.status === "rejected") {
-    return { ok: false, outcome: "close_rejected", reason: state.rejectReason ?? "Close order rejected.", pricing: pricingNote, steps };
+  // Nothing filled. The broker confirmed the order is over (a cancel we asked for is confirmed before we get here), but a cancelled order alone is
+  // not proof the spread is still held: the position goes back to "open" only when the account itself shows the whole spread, and stays
+  // "closing" (for Resolve) otherwise.
+  const refused = !timedOut && state.priceBand !== undefined;
+  if (state.status === "rejected" || refused) {
+    const why = refusalText(state, "Close order rejected.");
+    const back = await backToOpenIfStillHeld(position, executor, total);
+    return { ok: false, outcome: "close_rejected", reason: `${why}${back}`, pricing: pricingNote, steps };
   }
   if (state.filledQuantity === 0) {
-    return { ok: false, outcome: "close_timeout", reason: timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling.", pricing: pricingNote, steps };
+    const back = await backToOpenIfStillHeld(position, executor, total);
+    return { ok: false, outcome: "close_timeout", reason: `${timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling."}${back}`, pricing: pricingNote, steps };
   }
   return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled. The rest was canceled; the position stays in closing, keeps its slot in the limits, and needs a person to clear it.", pricing: pricingNote, steps };
+}
+
+/** What the broker said when it refused an order: the price band in numbers when it gave them, and always its own words. */
+function refusalText(state: { rejectReason?: string; priceBand?: PriceBand }, fallback: string): string {
+  const band = state.priceBand ? `The broker refused the price as too far through its market (${describeBand(state.priceBand)}).` : "";
+  const words = state.rejectReason ? `${band ? " Its words: " : ""}${state.rejectReason}` : "";
+  return `${band}${words}`.trim() || fallback;
+}
+
+/**
+ * A close that ended with nothing filled and the broker confirming the order is over. Whether the position can go back to "open" is
+ * decided by the account, not by the order: the broker's own positions must show the WHOLE spread still held. Anything else (the account
+ * can't be asked, it holds less, it holds nothing, it is a simulated position with no account to ask) leaves it "closing" for a person to
+ * resolve. Returns the sentence to add to the reason.
+ */
+async function backToOpenIfStillHeld(position: Position, executor: BrokerExecutor, quantity: number): Promise<string> {
+  if (!executor.listBrokerPositions || position.venue === "mock" || !position.optionRoot) return "";
+  try {
+    const right = position.type === "short_put_spread" ? "put" : "call";
+    const short = occSymbol(position.optionRoot, position.expiry, right, position.shortStrike);
+    const long = occSymbol(position.optionRoot, position.expiry, right, position.longStrike);
+    const held = await executor.listBrokerPositions();
+    const of = (sym: string) => held.filter((h) => h.symbol === sym).reduce((s, h) => s + h.quantity, 0);
+    if (of(short) <= -quantity && of(long) >= quantity) {
+      positionsStore.update(position.id, { status: "open", closeSignalId: null });
+      return " The account still holds the whole spread, so the position is back to open (nothing was closed).";
+    }
+    return " The position stays in closing: the account does not show the whole spread still held, so a person has to resolve it (Resolve on the position).";
+  } catch {
+    return " The position stays in closing: the account could not be asked whether the spread is still held, so a person has to resolve it (Resolve on the position).";
+  }
 }
 
 /** A close that was already in progress when a flip signal arrived: wait for it to be confirmed (the same wait and
@@ -310,7 +382,11 @@ async function awaitCloseInProgress(
   pollIntervalMs: number,
 ): Promise<CloseResult> {
   if (!order) {
-    return { ok: false, outcome: "close_in_flight", reason: "This position is closing, but no close order is working and none confirmed. A second close isn't sent: check the broker, then clear it with Close position." };
+    return {
+      ok: false,
+      outcome: "stuck_position",
+      reason: `The ${describeLegs(position)} position is stuck in "closing": no close order is working and none was confirmed, so no second close was sent and nothing new was opened. Open the position and press Resolve: it asks the broker what is really held and offers only what is safe.`,
+    };
   }
   let watched: Awaited<ReturnType<typeof watchOrder>>;
   try {
@@ -577,7 +653,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
       rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [{ label: "Wait", value: `up to ${Math.round(closeTimeoutMs / 1000)}s for the close in progress to be confirmed` }], outcome: waited.outcome, reason: waited.reason });
       if (!waited.ok) {
         // An unconfirmed close with no order behind it was flagged when it went wrong; waiting on a real one that fails again is a new error.
-        if (waited.outcome !== "close_in_flight") recordError(botId, "close_failed", { positionId: position.id, reason: waited.reason }, now);
+        if (waited.outcome !== "close_in_flight" && waited.outcome !== "stuck_position") recordError(botId, "close_failed", { positionId: position.id, reason: waited.reason }, now);
         botsStore.update(botId, { needsAttention: true, needsAttentionReason: waited.reason });
         log(waited.outcome, waited.reason, { positionId: position.id });
         return; // Never open the new side while the old side might still be held.
@@ -958,6 +1034,29 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     if (priced.unusable) return finish("open_rejected", `No usable price for this spread: ${priced.unusable}`);
   }
 
+  // A broker that is only sent limit orders is never sent one at a guessed price: with no quote to price from, nothing is opened.
+  if (needsLimit(executor, staticConfig.underlying) && !ladderPrices) {
+    rec?.decision("The spread has a quote to price a limit order from", false, priceNote ?? "No quote");
+    return finish("open_no_quote", `Open refused: there is no usable quote of the spread to price a limit order from (${priceNote ?? "no quote"}). Nothing was sent.`);
+  }
+
+  // The minimum credit: a rung under the floor is never sent, and an open with no rung left is skipped. (A ladder falls from the mid to the
+  // final price, so what is dropped is its tail.) With no ladder the one price is the bot's expected credit, which the floor sits below.
+  const floor = effectiveMinCredit(staticConfig);
+  const firstPrice = ladderPrices ? ladderPrices[0] : staticConfig.openingCreditEstimate;
+  rec?.decision(`The price is at least the minimum credit of $${floor.toFixed(2)}`, firstPrice + 1e-9 >= floor, `Best price $${firstPrice.toFixed(2)}`);
+  if (firstPrice + 1e-9 < floor) {
+    return finish("below_min_credit", `Skipped, below minimum credit: the best price for this spread is $${firstPrice.toFixed(2)}, under the bot's minimum of $${floor.toFixed(2)}. Nothing was opened.`, { minCredit: floor, bestPrice: firstPrice, ladder: ladderPrices });
+  }
+  if (ladderPrices) {
+    const { kept, dropped } = applyFloor(ladderPrices, floor);
+    if (dropped.length > 0) {
+      ladderPrices = kept;
+      priceNote = `${priceNote ?? "SmartPricing"}; ${dropped.length === 1 ? "the price" : "the prices"} under the $${floor.toFixed(2)} minimum credit ${dropped.map((p) => p.toFixed(2)).join(", ")} ${dropped.length === 1 ? "was" : "were"} dropped, so the ladder ends at $${kept[kept.length - 1].toFixed(2)}`;
+      pricingDetail = { ...pricingDetail, pricing: { ...(pricingDetail as { pricing?: Record<string, unknown> }).pricing, note: priceNote, prices: kept, final: kept[kept.length - 1], droppedUnderMinCredit: dropped } };
+    }
+  }
+
   if (ctx.dryRun) {
     recordOpenAction("dry_run", "Dry run: nothing sent.", strikes);
     return finish("dry_run", `Dry run: would open ${wanted} at ${strikes.shortStrike}/${strikes.longStrike}.`, { strikes, wanted });
@@ -982,7 +1081,7 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     brokerOrderRef: null,
     underlyingAtOpen: usedPrice,
     manual: ctx.manual,
-    venue: executor.venue ?? "mock",
+    venue: executor.venueFor?.(staticConfig.underlying) ?? executor.venue ?? "mock",
     optionRoot: staticConfig.optionRoot,
     ...(openSettings?.exit && Object.keys(openSettings.exit).length > 0 ? { exitOptions: openSettings.exit } : {}),
     ...((signal?.raw as { test?: unknown } | null)?.test === true ? { test: true } : {}),
@@ -1021,6 +1120,8 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
         expiry,
       }),
     prices: ladderPrices,
+    // The broker refused a price as too far through its market: price again from its own numbers, never under the minimum credit.
+    ...(ladderPrices ? { reprice: ({ band, refused }: { band: PriceBand; refused: number }) => repriceAfterBand({ side: "credit", band, refused, finalPrice: ladderPrices![ladderPrices!.length - 1], rungs: ladderPrices!.length, minCredit: floor, width: staticConfig.widthPoints }) } : {}),
     stepMs: ctx.ladderStepMs ?? ladderStepMs,
     finalMs: ctx.openTimeoutMs,
     pollMs: ctx.pollIntervalMs,
@@ -1037,9 +1138,11 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   // Nothing filled: the broker rejected it, or it ended (our timeout, or canceled elsewhere) with no fill.
   if (state.status === "rejected" || state.filledQuantity === 0) {
     positionsStore.update(position.id, { status: "rejected" });
-    const reason = state.rejectReason ?? (timedOut ? "Open order timed out unfilled." : "Open order ended without filling.");
+    // A refusal by the broker (an order it ended itself, with its reason or a price band) is a rejection, not a timeout.
+    const refused = !timedOut && (state.priceBand !== undefined || state.rejectReason !== undefined);
+    const reason = state.priceBand || state.rejectReason ? refusalText(state, "") : timedOut ? "Open order timed out unfilled." : "Open order ended without filling.";
     recordError(botId, "open_failed", { positionId: position.id, reason }, now);
-    return finish(state.status === "rejected" ? "open_rejected" : "open_timeout_no_fill", reason, { positionId: position.id, rungsTried: result.rungsTried });
+    return finish(state.status === "rejected" || refused ? "open_rejected" : "open_timeout_no_fill", reason, { positionId: position.id, rungsTried: result.rungsTried });
   }
 
   // Full fill, or a partial the timeout settled at - both become `open` at
@@ -1178,7 +1281,8 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       botConfig ? pricingFor(botConfig, "close", options.ladderStepMs) : undefined,
     );
     rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
-    if (!result.ok) {
+    // A close refused for want of a quote changed nothing and is not a failure of the bot: the person who pressed the button sees the message and can press it again.
+    if (!result.ok && result.outcome !== "close_no_quote") {
       recordError(botId, "close_failed", { positionId, reason: result.reason }, now);
       ensureBotRecord(botId);
       botsStore.update(botId, { needsAttention: true, needsAttentionReason: result.reason });

@@ -108,6 +108,7 @@ function ndxConfig(): BotStaticConfig {
     allocationLimit: envNumber("BOT_NDX_EMA_BIAS_ALLOCATION_LIMIT", 2000),
     // Only the fallback price (when there is no live quote to price the spread from, e.g. the mock) and the pre-trade risk check.
     openingCreditEstimate: envNumber("BOT_NDX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", 3.5),
+    ...optionalMinCredit("BOT_NDX_EMA_BIAS"),
     // NDX index options (NDXP) stop trading at 4:15pm ET; the sweep runs ten minutes before that.
     // TODO(verify): the series' final trading time against the broker's own listing.
     eodSweepTime: envString("BOT_NDX_EMA_BIAS_EOD_SWEEP_TIME", "16:05"),
@@ -126,6 +127,13 @@ function strikePriceSource(value: string): StrikePriceSource {
 function sweepMode(value: string): EodSweepMode {
   if (!(EOD_SWEEP_MODES as readonly string[]).includes(value)) throw new Error(`BOT_NDX_EMA_BIAS_EOD_SWEEP_MODE must be one of ${EOD_SWEEP_MODES.join(", ")}, got "${value}".`);
   return value as EodSweepMode;
+}
+
+/** `<PREFIX>_MIN_CREDIT`: the lowest credit an open may be priced at. Unset = a quarter of the expected credit (see minCredit.ts). */
+function optionalMinCredit(prefix: string): Pick<BotStaticConfig, "minCredit"> {
+  const raw = process.env[`${prefix}_MIN_CREDIT`];
+  if (raw === undefined || raw === "") return {};
+  return { minCredit: envNumber(`${prefix}_MIN_CREDIT`, 0) };
 }
 
 /** `<PREFIX>_PRICE_MIN` and `_PRICE_MAX`: both or neither. */
@@ -147,6 +155,9 @@ export function checkBotConfig(c: BotStaticConfig): void {
   }
   if (c.openingCreditEstimate >= c.widthPoints) {
     throw new Error(`invalid_config: the expected credit ${c.openingCreditEstimate} must be less than the spread width ${c.widthPoints}.`);
+  }
+  if (c.minCredit !== undefined && !(Number.isFinite(c.minCredit) && c.minCredit >= 0 && c.minCredit < c.openingCreditEstimate)) {
+    throw new Error(`invalid_config: the minimum credit must be at least 0 and below the expected credit ${c.openingCreditEstimate} (got ${String(c.minCredit)}).`);
   }
   if (c.priceRange && !(c.priceRange.min > 0 && c.priceRange.min < c.priceRange.max)) {
     throw new Error(`invalid_config: the price range must have 0 < min < max (got ${c.priceRange.min} to ${c.priceRange.max}).`);
@@ -199,6 +210,7 @@ const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
     allocationLimit: envNumber("BOT_SPX_EMA_BIAS_ALLOCATION_LIMIT", 20000),
     // The spec's example credit; only the fallback price and the pre-trade risk check (a live quote sets the real price).
     openingCreditEstimate: envNumber("BOT_SPX_EMA_BIAS_OPENING_CREDIT_ESTIMATE", 2.2),
+    ...optionalMinCredit("BOT_SPX_EMA_BIAS"),
   }),
   ndx_ema_bias: ndxConfig,
 };

@@ -5,6 +5,7 @@ import { ensureBotRecord } from "./bots";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { runEntryRetry } from "./entryRetry";
 import { IbkrExecutor, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
+import { assessPosition, resolvePosition } from "./positionResolve";
 import { reconcile } from "./reconcile";
 import { recoverInFlightPositions } from "./recovery";
 import { botsStore, decisionsStore, ordersStore, positionsStore, signalsStore } from "./store";
@@ -53,6 +54,8 @@ class FakeBridge {
   down = new Set<string>();
   /** Fill price used for closes (a debit). */
   closeDebit = 1.2;
+  /** What GET /quote/spread answers (null: no usable quote). Credit market 2.70 to 3.90, mid 3.30; debit market the same numbers. */
+  spreadQuote: { short: { bid: number; ask: number }; long: { bid: number; ask: number } } | null = { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } };
   orders = new Map<string, BridgeOrder>();
   requests: Req[] = [];
   private n = 0;
@@ -69,7 +72,7 @@ class FakeBridge {
 
     if (path === "/health") return reply(200, { connected: this.connected, account: this.account, paper: this.account.startsWith("DU") });
     if (path === "/quote/ndx") return reply(200, { price: this.price, asOf: Date.now() - this.quoteAgeMs });
-    if (path === "/quote/spread") return reply(200, {});
+    if (path === "/quote/spread") return this.spreadQuote ? reply(200, this.spreadQuote) : reply(503, "No bid and ask for an option leg (market closed or no data)");
     if (path === "/positions") return reply(200, { positions: this.heldLegs() });
     if (path === "/open_spread" || path === "/close_spread") {
       const clientOrderId = typeof body?.clientOrderId === "string" ? body.clientOrderId : null;
@@ -125,7 +128,7 @@ class FakeBridge {
 
 let bridge: FakeBridge;
 let executor: IbkrExecutor;
-const fast = { closeConfirmTimeoutMs: 100, orderFillTimeoutMs: 100, pollIntervalMs: 5 };
+const fast = { closeConfirmTimeoutMs: 100, orderFillTimeoutMs: 100, pollIntervalMs: 5, ladderStepMs: 20 };
 const mine = () => positionsStore.all().filter((p) => p.botId === NDX_BOT_ID);
 const held = () => mine().filter((p) => p.status === "open" || p.status === "opening" || p.status === "closing");
 const outcomes = () => decisionsStore.all().filter((d) => d.signalId !== null).map((d) => d.outcome);
@@ -146,10 +149,10 @@ describe("an alert on the IBKR adapter: open", () => {
   it("opens the put spread as one combo order, and the fill becomes the position", async () => {
     await run("bullish", "b1");
     expect(bridge.placed()).toEqual(["open PUT 20970/20960"]);
-    expect(bridge.calls("/open_spread")[0].body).toMatchObject({ underlying: "NDX", root: "NDXP", type: "short_put_spread", quantity: 1, limitCredit: 3.5, tif: "DAY" });
+    expect(bridge.calls("/open_spread")[0].body).toMatchObject({ underlying: "NDX", root: "NDXP", type: "short_put_spread", quantity: 1, limitCredit: 3.3, tif: "DAY" });
     expect(bridge.requests.every((r) => r.secret === SECRET)).toBe(true);
     const [p] = held();
-    expect(p).toMatchObject({ type: "short_put_spread", status: "open", shortStrike: 20_970, longStrike: 20_960, filledQuantity: 1, credit: 3.5, venue: "ibkr", brokerOrderRef: "ib-1" });
+    expect(p).toMatchObject({ type: "short_put_spread", status: "open", shortStrike: 20_970, longStrike: 20_960, filledQuantity: 1, credit: 3.3, venue: "ibkr", brokerOrderRef: "ib-1" });
     expect(ordersStore.all().map((o) => [o.kind, o.status, o.ref])).toEqual([["open", "filled", "ib-1"]]);
     expect(outcomes()).toEqual(["opened"]);
   });
@@ -175,7 +178,8 @@ describe("an alert on the IBKR adapter: flip", () => {
 
     expect(bridge.placed()).toEqual(["open PUT 20970/20960", "close PUT 20970/20960", "open CALL 21035/21045"]);
     const close = bridge.calls("/close_spread")[0].body!;
-    expect(close).toMatchObject({ positionId: mine()[0].id, quantity: 1, orderType: "market", tif: "DAY" });
+    expect(close).toMatchObject({ positionId: mine()[0].id, quantity: 1, orderType: "limit", tif: "DAY" });
+    expect(close.limitDebit).toBeGreaterThan(0); // a combo is never sent without a limit price
     expect(mine().map((p) => [p.type, p.status])).toEqual([["short_put_spread", "closed"], ["short_call_spread", "open"]]);
     expect(outcomes()).toEqual(["opened", "closed", "opened"]);
     // The account ends up holding only the call spread, which is what our records say.
@@ -232,8 +236,11 @@ describe("an alert on the IBKR adapter: the broker says no", () => {
   it("an open that never fills is cancelled at the bridge, and nothing is held", async () => {
     bridge.fill = "never";
     await run("bullish", "b1");
-    const [order] = [...bridge.orders.values()];
-    expect(order.status).toBe("canceled");
+    // Every price of the ladder was tried and every order was cancelled at the bridge: none is left working.
+    const orders = [...bridge.orders.values()];
+    expect(orders).toHaveLength(4);
+    expect(orders.map((o) => o.status)).toEqual(["canceled", "canceled", "canceled", "canceled"]);
+    expect(ordersStore.all().map((o) => o.status)).toEqual(["canceled", "canceled", "canceled", "canceled"]);
     expect(bridge.calls("/order/ib-1").map((r) => r.method)).toContain("DELETE");
     expect(held()).toHaveLength(0);
     expect(outcomes()).toEqual(["open_timeout_no_fill"]);
@@ -294,7 +301,7 @@ describe("after a restart, an order is read back from the bridge", () => {
     positionsStore.update(mine()[0].id, { status: "opening" });
     const results = await recoverInFlightPositions(executor);
     expect(results.map((r) => r.action)).toEqual(["opened"]);
-    expect(positionsStore.get(mine()[0].id)).toMatchObject({ status: "open", filledQuantity: 1, credit: 3.5, brokerOrderRef: filledRef });
+    expect(positionsStore.get(mine()[0].id)).toMatchObject({ status: "open", filledQuantity: 1, credit: 3.3, brokerOrderRef: filledRef });
   });
 
   it("an order the bridge doesn't know is flagged for a person, never guessed", async () => {
@@ -333,6 +340,91 @@ describe("checking our records against the account", () => {
   it("a bridge that can't be reached is an error, not a clean report", async () => {
     bridge.down.add("positions");
     await expect(reconcile(executor)).rejects.toThrow(/HTTP 503/);
+  });
+});
+
+describe("a close that gets stuck, and Resolve, end to end through the bridge", () => {
+  const stuckPut = async () => {
+    await run("bullish", "b1");
+    bridge.down.add("close_spread");
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    bridge.down.clear();
+    return mine()[0];
+  };
+
+  it("the bridge was down for the close: the broker still holds the spread -> a repeat alert sends nothing and says to Resolve; Return to open puts it right and the next alert flips normally", async () => {
+    const p = await stuckPut();
+    expect(p.status).toBe("closing");
+    const sentBefore = bridge.placed().length;
+    await run("bearish", "b3", BASE_NOW + 10 * MIN);
+    expect(bridge.placed().length).toBe(sentBefore); // no second close, no new side
+    expect(outcomes().at(-1)).toBe("stuck_position");
+
+    const a = await assessPosition(p.id, executor);
+    expect(a).toMatchObject({ verdict: "holds_spread", actions: ["return_to_open"], held: { short: -1, long: 1 } });
+    await resolvePosition(p.id, { action: "return_to_open", confirm: true }, executor, BASE_NOW + 11 * MIN);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(false);
+
+    await run("bearish", "b4", BASE_NOW + 15 * MIN);
+    expect(mine().map((x) => [x.type, x.status])).toEqual([["short_put_spread", "closed"], ["short_call_spread", "open"]]);
+    expect(await reconcile(executor)).toMatchObject({ ok: true });
+  });
+
+  it("someone closed it by hand at the broker: the broker holds nothing -> Mark closed, with the price typed since no fill can be read", async () => {
+    const p = await stuckPut();
+    bridge.orders.clear(); // gone at the broker, and the bridge has forgotten its orders
+    const a = await assessPosition(p.id, executor);
+    expect(a).toMatchObject({ verdict: "holds_nothing", actions: ["mark_closed"], needsPrice: true });
+    await expect(resolvePosition(p.id, { action: "mark_closed", confirm: true }, executor)).rejects.toThrow(/Enter the price/);
+    const ordersSent = bridge.placed().length;
+    await resolvePosition(p.id, { action: "mark_closed", confirm: true, price: 1.4 }, executor, BASE_NOW + 12 * MIN);
+    expect(positionsStore.get(p.id)).toMatchObject({ status: "closed", closePrice: 1.4 });
+    expect(bridge.placed().length).toBe(ordersSent); // Resolve itself sent nothing to the bridge
+    expect(await reconcile(executor)).toMatchObject({ ok: true });
+  });
+
+  it("a close that never fills at any price: every rung is cancelled and confirmed, and the account still holding the spread puts the position back to open", async () => {
+    await run("bullish", "b1");
+    bridge.fill = "never";
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    const p = mine()[0];
+    expect(outcomes().at(-1)).toBe("close_timeout");
+    const closes = [...bridge.orders.values()].filter((o) => o.kind === "close");
+    expect(closes.length).toBeGreaterThan(1);
+    expect(closes.every((o) => o.status === "canceled")).toBe(true);
+    expect(ordersStore.all().filter((o) => o.kind === "close").every((o) => o.status === "canceled")).toBe(true);
+    expect(closes.every((o) => typeof o.body.limitDebit === "number")).toBe(true); // every rung a limit order
+
+    // The broker confirmed every order over, and the account still shows the whole spread: so the position is back to open, not stuck.
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+    expect(decisionsStore.all().find((d) => d.outcome === "close_timeout")?.reason).toMatch(/back to open/);
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true); // still flagged: a person should look
+    bridge.fill = "fill";
+    // The Close position button works: a fresh, priced close that fills.
+    const { manualClose } = await import("./engine");
+    expect(await manualClose(p.id, { executor, ...fast })).toMatchObject({ ok: true, outcome: "closed" });
+    expect(positionsStore.get(p.id)?.status).toBe("closed");
+  });
+
+  it("a position stuck in opening: the broker holds the spread -> Mark open at the size and the credit the broker's own order shows", async () => {
+    await run("bullish", "b1");
+    const p = mine()[0];
+    positionsStore.update(p.id, { status: "opening", filledQuantity: 0, credit: null });
+    const a = await assessPosition(p.id, executor);
+    expect(a).toMatchObject({ verdict: "holds_spread", actions: ["mark_open"], fill: { price: 3.3, quantity: 1 } });
+    await resolvePosition(p.id, { action: "mark_open", confirm: true }, executor);
+    expect(positionsStore.get(p.id)).toMatchObject({ status: "open", filledQuantity: 1, credit: 3.3 });
+  });
+
+  it("when no quote is available the close is refused, the position stays open and the bridge is sent nothing", async () => {
+    await run("bullish", "b1");
+    const before = bridge.placed().length;
+    bridge.spreadQuote = null;
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(mine().map((x) => [x.type, x.status])).toEqual([["short_put_spread", "open"]]);
+    expect(bridge.placed().length).toBe(before);
+    expect(outcomes().at(-1)).toBe("close_no_quote");
   });
 });
 

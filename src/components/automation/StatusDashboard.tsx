@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { cn, formatTime } from "@/lib/format";
 import { Card, SectionTitle, Stat } from "@/components/ui";
 import { Pill } from "./bot/primitives";
+import { testLine, watchTestRun } from "./testRun";
 import { usePolling } from "./usePolling";
 
 export interface StatusBot {
@@ -81,6 +82,8 @@ export interface StatusOrder {
   limitPrice: number;
   filledQuantity: number;
   rejectReason?: string;
+  /** The broker refused the price as too far through its market: what it thinks the spread trades at, and the first price it would not take. */
+  priceBand?: { edge?: number; marketPrice?: number };
   createdAt: number;
   positionType: StatusPosition["type"] | null;
   shortStrike: number | null;
@@ -138,6 +141,21 @@ const POLL_MS = 3000;
 const ACTIVE = ["opening", "open", "closing"];
 const fmtNum = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
 const signedUsd = (n: number) => `${n < 0 ? "-" : n > 0 ? "+" : ""}$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** The price an order was sent at: a credit for an open, a debit for a close. "No limit" only when none was sent (an executor with its own default price). */
+export function orderLimitText(o: Pick<StatusOrder, "kind" | "limitPrice">): string {
+  if (o.kind === "open") return `$${o.limitPrice.toFixed(2)} credit`;
+  return o.limitPrice > 0 ? `$${o.limitPrice.toFixed(2)} debit` : "no limit";
+}
+
+/** Why an order ended, when the broker said: its price band in numbers, else its own words (cut). Null when there is nothing to say. */
+export function orderWhy(o: Pick<StatusOrder, "rejectReason" | "priceBand">): string | null {
+  const b = o.priceBand;
+  if (b && (b.edge !== undefined || b.marketPrice !== undefined)) {
+    return `IBKR price band: ${[b.marketPrice !== undefined ? `market ${b.marketPrice.toFixed(2)}` : null, b.edge !== undefined ? `won't take ${b.edge.toFixed(2)} or beyond` : null].filter(Boolean).join(", ")}`;
+  }
+  return o.rejectReason ? (o.rejectReason.length > 90 ? `${o.rejectReason.slice(0, 89)}…` : o.rejectReason) : null;
+}
 
 /** A finished position's result and where it came from; null when it has none (yet). */
 function resultOf(p: StatusPosition): { pl: number; how: "fill" | "estimated" | "manual" } | null {
@@ -594,10 +612,11 @@ export function StatusView({
             <span key="l" className="font-mono text-xs">
               {legsText({ type: o.positionType, shortStrike: o.shortStrike, longStrike: o.longStrike })}
             </span>,
-            o.kind === "open" ? `$${o.limitPrice.toFixed(2)} credit` : "no limit",
+            orderLimitText(o),
             String(o.filledQuantity),
-            <span key="s" title={o.rejectReason}>
+            <span key="s" title={o.rejectReason} className="inline-flex flex-col items-start gap-0.5">
               <Pill tone={STATUS_TONE[o.status] ?? "neutral"}>{o.status}</Pill>
+              {orderWhy(o) && <span className="max-w-[16rem] text-[11px] text-down">{orderWhy(o)}</span>}
             </span>,
           ])}
           empty="None yet."
@@ -709,8 +728,10 @@ export function StatusDashboard() {
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (!r.ok) return setResults((x) => ({ ...x, [bot.id]: `Not sent: ${j.error ?? r.status}` }));
-        const outcomes = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-        setResults((x) => ({ ...x, [bot.id]: `${signal} test alert at ${price.toLocaleString("en-US")} → ${outcomes}${j.finished ? "" : " (still working…)"}` }));
+        const head = `${signal} test alert at ${price.toLocaleString("en-US")}`;
+        setResults((x) => ({ ...x, [bot.id]: testLine(head, j.decisions ?? [], j.finished === true) }));
+        // An order walking a price ladder outlasts this answer: keep the line true until the run really ends.
+        if (j.finished !== true && typeof j.signalId === "string") watchTestRun(j.signalId, head, (line) => setResults((x) => ({ ...x, [bot.id]: line })));
       })
       .catch(() => setResults((x) => ({ ...x, [bot.id]: "Couldn't reach the server." })))
       .then(load)

@@ -33,6 +33,8 @@ export interface Quote {
 export interface LegQuotes {
   short: Quote;
   long: Quote;
+  /** True when the data is delayed (a paper account without a subscription): quotes then run wide and stale. Unset = not known. */
+  delayed?: boolean;
 }
 
 /** Smallest price step. TODO(unconfirmed): SPX/NDX option tick sizes - 0.05 is used until confirmed. */

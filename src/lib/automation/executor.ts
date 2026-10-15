@@ -12,6 +12,8 @@ export type MockScenario =
    * never fills the remainder, so the engine's own timeout has to cancel it. */
   | { kind: "partial"; firstFillRatio: number; delayMs?: number; remainderDelayMs?: number | null; averagePrice?: number }
   | { kind: "reject"; reason: string; delayMs?: number }
+  /** The broker refuses the price as too far through its market, at once: the order ends "canceled" with nothing filled, and says what the market is and which price it won't take. */
+  | { kind: "band"; marketPrice?: number; edge?: number; reason?: string }
   /** Stays "working" forever - only the engine's own timeout ends it. */
   | { kind: "never" }
   /** The place call itself throws, like a dropped connection would. */
@@ -170,6 +172,14 @@ export class MockExecutor implements BrokerExecutor {
         this.schedule(tracked, scenario.delayMs ?? 0, () => {
           tracked.state = { status: "rejected", filledQuantity: 0, rejectReason: scenario.reason };
         });
+        break;
+      case "band":
+        tracked.state = {
+          status: "canceled",
+          filledQuantity: 0,
+          rejectReason: scenario.reason ?? "Order canceled: the price is outside the broker's price band.",
+          priceBand: { ...(scenario.edge !== undefined ? { edge: scenario.edge } : {}), ...(scenario.marketPrice !== undefined ? { marketPrice: scenario.marketPrice } : {}) },
+        };
         break;
       case "never":
         break;

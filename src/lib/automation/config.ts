@@ -34,6 +34,20 @@ export const TOTAL_POSITION_LIMIT = envNumber("TOTAL_POSITION_LIMIT", 1);
 export const DAILY_NEW_POSITION_LIMIT = envNumber("DAILY_NEW_POSITION_LIMIT", 10);
 /** A live quote older than this (seconds) isn't used for strikes: the bot refuses to open instead. */
 export const STRIKE_QUOTE_MAX_AGE_SECONDS = envNumber("STRIKE_QUOTE_MAX_AGE_SECONDS", 60);
+/**
+ * The widest a spread's bid/ask may be (in points: the best price minus the worst) for SmartPricing to price from it. A wider quote is too
+ * loose to mean anything: the mid of 0.05 to 8.65 is 4.35 on a spread worth about 1.10. Only enforced on real-time data; while the bridge
+ * says the data is delayed (a paper account without a subscription) it is exempt, or every paper trade would be refused. 0 turns it off.
+ * Read each time, so a change applies at once.
+ */
+export const DEFAULT_QUOTE_MAX_WIDTH = 3;
+export function quoteMaxWidth(): number {
+  return envNumber("QUOTE_MAX_WIDTH", DEFAULT_QUOTE_MAX_WIDTH);
+}
+/** The most a closing BUY is priced above the broker's own market price, when it has told us one (after refusing a price). */
+export function closeMaxAboveMarket(): number {
+  return envNumber("CLOSE_MAX_ABOVE_MARKET", 1);
+}
 export const ERROR_FAILSAFE_THRESHOLD = envNumber("ERROR_FAILSAFE_THRESHOLD", 10);
 export const ORDER_FILL_TIMEOUT_SECONDS = envNumber("ORDER_FILL_TIMEOUT_SECONDS", 120);
 export const CLOSE_CONFIRM_TIMEOUT_SECONDS = envNumber("CLOSE_CONFIRM_TIMEOUT_SECONDS", 120);

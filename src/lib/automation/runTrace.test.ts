@@ -50,6 +50,7 @@ describe("a flip is recorded step by step with the real values compared", () => 
       "? Strikes pass the checks (order, not equal, on the increment, the right width)",
       "? Opening stays within the $20,000 allocation",
       "? No leg collides with an existing position",
+      "? The price is at least the minimum credit of $0.55",
       "> Open SPX Short Put Spread",
     ]);
     // Every decision passed, and each kept the value behind it.

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/format";
+import { testLine } from "./testRun";
 import { AccountsSection, ArchiveSection, GeneralSection, WebhooksSection, type ArchivedBot, type BrokerView, type SettingsData, type SavePatch, type WebhookView } from "./settings/sections";
 
 const SECTIONS = [
@@ -122,8 +123,8 @@ export function SettingsView() {
                 const res = await fetch(`/api/automation/webhooks/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
                 const j = await res.json().catch(() => ({}));
                 if (!res.ok) return `Not sent: ${j.error ?? res.status}`;
-                const steps = (j.decisions as { outcome: string; reason: string }[]).map((d) => d.outcome).join(" → ") || "no decision yet";
-                return `Sent at ${Number(j.price).toLocaleString("en-US")} (live quote) → ${steps}${j.finished ? "" : " (still working…)"}. See the Automation status page for the order.`;
+                const line = testLine(`Sent at ${Number(j.price).toLocaleString("en-US")} (live quote)`, j.decisions ?? [], j.finished === true);
+                return `${line}. ${j.finished ? "" : "Open the bot's Log to see how it ends. "}See the Automation status page for the order.`;
               }}
             />
           )}

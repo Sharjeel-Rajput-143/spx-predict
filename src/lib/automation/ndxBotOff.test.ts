@@ -166,7 +166,7 @@ describe("bot off: a webhook may still close, and may never open", () => {
     // The next signal does not send a second close for that position.
     await emit("bullish", { now: BASE_NOW + 300_000 });
     expect(closes()).toHaveLength(1);
-    expect(outcomes().at(-1)).toBe("close_in_flight");
+    expect(outcomes().at(-1)).toBe("stuck_position");
     expect(opens()).toHaveLength(0);
   });
 
