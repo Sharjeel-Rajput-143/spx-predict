@@ -157,3 +157,51 @@ describe("the live price lookup", () => {
     expect((await waitForTick("NDX", 2_000))?.price).toBe(100);
   });
 });
+
+describe("PRICE_SOURCE=broker only asks the bridge for the symbols it takes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.doUnmock("./brokerFeed");
+    vi.resetModules();
+  });
+
+  async function setup() {
+    const asked: string[] = [];
+    vi.doMock("./brokerFeed", () => ({
+      fetchBrokerPrice: async (symbol: string) => {
+        asked.push(symbol);
+        return { price: 21_000, source: "broker" as const };
+      },
+    }));
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("query1.finance.yahoo.com")) return new Response(JSON.stringify({ chart: { result: [{ meta: { regularMarketPrice: 5_800 } }] } }), { status: 200 });
+      return new Response("<html></html>", { status: 200 });
+    });
+    vi.stubEnv("BROKER", "ibkr");
+    vi.stubEnv("PRICE_SOURCE", "broker");
+    const { fetchPrice } = await import("./tickStore");
+    return { fetchPrice, asked, urls };
+  }
+
+  it("NDX goes to the bridge; SPX never does and takes the public feed's price", async () => {
+    const { fetchPrice, asked } = await setup();
+    expect(await fetchPrice("NDX")).toEqual({ price: 21_000, source: "broker" });
+    expect(asked).toEqual(["NDX"]);
+    expect(await fetchPrice("SPX")).toMatchObject({ price: 5_800, source: "yahoo" });
+    expect(asked).toEqual(["NDX"]);
+  });
+
+  it("with BRIDGE_SYMBOLS=NDX,SPX both go to the bridge; a bad BRIDGE_SYMBOLS gives no price and asks nobody", async () => {
+    const both = await setup();
+    vi.stubEnv("BRIDGE_SYMBOLS", "NDX,SPX");
+    await both.fetchPrice("SPX");
+    expect(both.asked).toEqual(["SPX"]);
+    vi.stubEnv("BRIDGE_SYMBOLS", "NDX;SPX");
+    expect(await both.fetchPrice("NDX")).toBeNull();
+    expect(both.asked).toEqual(["SPX"]);
+  });
+});

@@ -3,6 +3,8 @@ import { occSymbol } from "./tradierExecutor";
 import type { LegQuotes } from "./smartPricing";
 import { positionsStore } from "./store";
 import type { BrokerExecutor, BrokerPosition, CloseOrderOptions, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position, SpreadQuoteRequest, UnderlyingQuote } from "./types";
+import { BridgeHttpError, OrderNotPlacedError, isRefusalStatus } from "./orderErrors";
+import { readBrokerTrail } from "./orderEnd";
 
 /**
  * Interactive Brokers (paper) behind the BrokerExecutor interface, reached through the BRIDGE: a small always-on server that holds the
@@ -113,6 +115,7 @@ export function mapBridgeOrder(order: Record<string, unknown>): OrderState {
     ...(averagePrice !== undefined ? { averagePrice } : {}),
     ...(status === "rejected" ? { rejectReason: reason ?? "Rejected by the broker." } : reason ? { rejectReason: reason } : {}),
     ...(priceBand ? { priceBand } : {}),
+    ...readBrokerTrail(order),
   };
 }
 
@@ -148,7 +151,7 @@ export class IbkrExecutor implements BrokerExecutor {
     });
     const text = await res.text();
     // The secret is never echoed: only the bridge's own message, shortened.
-    if (!res.ok) throw new Error(`Bridge ${method} ${path} failed (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    if (!res.ok) throw new BridgeHttpError(`Bridge ${method} ${path} failed (HTTP ${res.status}): ${text.slice(0, 300)}`, res.status);
     try {
       const json = JSON.parse(text) as unknown;
       if (json === null || typeof json !== "object" || Array.isArray(json)) throw new Error("not an object");
@@ -218,22 +221,39 @@ export class IbkrExecutor implements BrokerExecutor {
 
   /** Closing: buy back the short, sell the long, as one combo order, always at a limit debit. A close with no price is refused here, as the last lock behind the engine's own check: it is never sent as a market order. */
   async placeCloseOrder(position: Position, options?: CloseOrderOptions): Promise<{ ref: string }> {
-    const legs = this.legs({ root: position.optionRoot, underlying: position.underlying, expiry: position.expiry, type: position.type, shortStrike: position.shortStrike, longStrike: position.longStrike });
-    const quantity = options?.quantity ?? (position.filledQuantity || position.requestedQuantity);
-    if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`Refused: ${quantity} is not a whole number of contracts to close.`);
-    if (options?.limitDebit === undefined) throw new Error("Refused: a close needs a limit price from a quote of the spread. It is never sent as a market order, so nothing was sent.");
-    if (!(options.limitDebit > 0)) throw new Error(`Refused: a limit debit of ${options.limitDebit} is not above 0.`);
-    await this.assertReadyToTrade();
-    await this.assertAccountHolds(legs, quantity);
-    return this.submit("/close_spread", {
-      ...legs,
-      positionId: position.id,
-      ...(options?.clientOrderId ? { clientOrderId: options.clientOrderId } : {}),
-      quantity,
-      orderType: "limit",
-      limitDebit: options.limitDebit,
-      tif: "DAY",
-    });
+    // Everything up to the request is a check made before anything is sent: a failure here means no order exists.
+    let legs: ReturnType<IbkrExecutor["legs"]>;
+    let quantity: number;
+    let limitDebit: number;
+    try {
+      legs = this.legs({ root: position.optionRoot, underlying: position.underlying, expiry: position.expiry, type: position.type, shortStrike: position.shortStrike, longStrike: position.longStrike });
+      quantity = options?.quantity ?? (position.filledQuantity || position.requestedQuantity);
+      if (!Number.isInteger(quantity) || quantity < 1) throw new Error(`Refused: ${quantity} is not a whole number of contracts to close.`);
+      if (options?.limitDebit === undefined) throw new Error("Refused: a close needs a limit price from a quote of the spread. It is never sent as a market order, so nothing was sent.");
+      limitDebit = options.limitDebit;
+      if (!(limitDebit > 0)) throw new Error(`Refused: a limit debit of ${limitDebit} is not above 0.`);
+      await this.assertReadyToTrade();
+      await this.assertAccountHolds(legs, quantity);
+    } catch (err) {
+      if (err instanceof OrderNotPlacedError) throw err;
+      throw new OrderNotPlacedError(err instanceof Error ? err.message : String(err), { cause: err });
+    }
+    try {
+      return await this.submit("/close_spread", {
+        ...legs,
+        positionId: position.id,
+        ...(options?.clientOrderId ? { clientOrderId: options.clientOrderId } : {}),
+        quantity,
+        orderType: "limit",
+        limitDebit,
+        tif: "DAY",
+      });
+    } catch (err) {
+      // The bridge answered with a refusal (409 for an id used before, 422, 503...): it did not place the order. No answer at all, a timeout
+      // or something unreadable is different: the order may exist, and that stays an ordinary error.
+      if (err instanceof BridgeHttpError && isRefusalStatus(err.status)) throw new OrderNotPlacedError(err.message, { cause: err });
+      throw err;
+    }
   }
 
   /**
@@ -250,7 +270,7 @@ export class IbkrExecutor implements BrokerExecutor {
     const longHeld = of(long);
     if (shortHeld <= -quantity && longHeld >= quantity) return;
     const sample = held.slice(0, 6).map((p) => `${p.symbol} ${p.quantity}`).join(", ") || "no positions";
-    throw new Error(`Refused: the account does not hold this spread in the size to close. Needed ${short} at ${-quantity} and ${long} at ${quantity}; it holds ${shortHeld} and ${longHeld} (account: ${sample}). Closing it would open the opposite spread, so no order was sent.`);
+    throw new OrderNotPlacedError(`Refused: the account does not hold this spread in the size to close. Needed ${short} at ${-quantity} and ${long} at ${quantity}; it holds ${shortHeld} and ${longHeld} (account: ${sample}). Closing it would open the opposite spread, so no order was sent.`, { needsResolve: true });
   }
 
   async getOrder(ref: string): Promise<OrderState> {
@@ -272,7 +292,8 @@ export class IbkrExecutor implements BrokerExecutor {
       const o = (v ?? {}) as { bid?: unknown; ask?: unknown };
       const bid = o.bid == null ? NaN : Number(o.bid);
       const ask = o.ask == null ? NaN : Number(o.ask);
-      return Number.isFinite(bid) && Number.isFinite(ask) && bid >= 0 && ask >= bid ? { bid, ask } : null;
+      // A leg with no bid or ask (missing, -1, or an ask of 0) has no quote: it is never filled in with a guess.
+      return Number.isFinite(bid) && Number.isFinite(ask) && bid >= 0 && ask > 0 && ask >= bid ? { bid, ask } : null;
     };
     const short = leg(json.short);
     const long = leg(json.long);

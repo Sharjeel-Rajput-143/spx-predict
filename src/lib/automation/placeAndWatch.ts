@@ -1,5 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
+import { brokerSaid, trailText } from "./orderEnd";
 import { watchOrder } from "./orderWatch";
 import { MAX_REPRICES, type PriceBand, type RepriceResult } from "./priceBand";
 import { ordersStore, positionsStore } from "./store";
@@ -98,29 +99,32 @@ export async function placeAndWatch(opts: PlaceAndWatchOptions): Promise<PlaceAn
       return { ok: false, stage: "watch", ref, error, steps };
     }
     const { state, timedOut } = watched;
-    ordersStore.update(row.id, { status: state.status, filledQuantity: state.filledQuantity, rejectReason: state.rejectReason, ...(state.priceBand ? { priceBand: state.priceBand } : {}), updatedAt: Date.now() });
+    ordersStore.update(row.id, { status: state.status, filledQuantity: state.filledQuantity, rejectReason: state.rejectReason, ...(state.priceBand ? { priceBand: state.priceBand } : {}), ...(state.ibkrStatus ? { ibkrStatus: state.ibkrStatus } : {}), ...(state.permId !== undefined ? { permId: state.permId } : {}), ...(state.events ? { events: state.events } : {}), updatedAt: Date.now() });
 
     // The broker ended the order by itself, at once, refusing the price as too far through its market: ask for new prices from its own numbers.
     const refusedByBand = !timedOut && state.filledQuantity === 0 && (state.status === "canceled" || state.status === "rejected") && state.priceBand !== undefined && price !== null;
     if (refusedByBand) {
       const refusal = describeBand(state.priceBand!);
+      const trail = opts.kind === "close" && trailText(state) ? ` [${trailText(state)}]` : "";
       if (opts.reprice && reprices < MAX_REPRICES) {
         const next = opts.reprice({ band: state.priceBand!, refused: price! });
         if (next.ok) {
           reprices++;
-          steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal}); ${next.note}`);
+          steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal})${trail}; ${next.note}`);
           rungs.splice(i, rungs.length - i, ...next.prices);
           i--; // the loop's own i++ brings it back to this place, now holding the new first price
           continue;
         }
-        steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal}); not re-priced: ${next.reason}`);
+        steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal})${trail}; not re-priced: ${next.reason}`);
       } else {
-        steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal})${reprices >= MAX_REPRICES ? `; already re-priced ${MAX_REPRICES} times, so it stops here` : ""}`);
+        steps.push(`${label}: ${amount} - refused by the broker's price band (${refusal})${trail}${reprices >= MAX_REPRICES ? `; already re-priced ${MAX_REPRICES} times, so it stops here` : ""}`);
       }
       return { ok: true, state, timedOut, ref, rungsTried: i + 1, steps };
     }
 
-    steps.push(`${label}: ${amount}, waited up to ${formatWait(waitMs)} - ${describeResult(state, timedOut, of, formatWait(opts.finalMs))}`);
+    // A close that ends canceled or rejected says what the broker said about it (its reason, status and last events), or that it said nothing.
+    const brokerNote = opts.kind === "close" && state.filledQuantity === 0 && (state.status === "canceled" || state.status === "rejected") ? brokerSaid(state, !timedOut) : "";
+    steps.push(`${label}: ${amount}, waited up to ${formatWait(waitMs)} - ${describeResult(state, timedOut, of, formatWait(opts.finalMs))}${brokerNote ? `. ${brokerNote}` : ""}`);
     // Nothing filled and we canceled it ourselves because the rung's time ran out: try the next price.
     if (!last && timedOut && state.filledQuantity === 0) continue;
     return { ok: true, state, timedOut, ref, rungsTried: i + 1, steps };

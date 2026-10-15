@@ -123,7 +123,7 @@ describe("when there is no usable price", () => {
     executor.setQuotes(() => null);
     await emit("bullish");
     expect(executor.placedOrders.map((o) => o.price)).toEqual([getBotStaticConfig(NDX_BOT_ID).openingCreditEstimate]);
-    expect(decisionsStore.all()[0].detail).toMatchObject({ pricing: { note: "One price (no quote available)" } });
+    expect(decisionsStore.all()[0].detail).toMatchObject({ pricing: { note: "One price (no quote available: the broker gave no usable bid and ask for one or both legs)" } });
   });
 
   it("a quote that throws falls back to one price, with the reason", async () => {

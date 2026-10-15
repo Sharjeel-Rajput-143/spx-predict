@@ -2,13 +2,14 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as hookRoute } from "@/app/api/webhook/hook/[token]/route";
 import { ensureBotRecord } from "./bots";
-import { processSignal, receiveAndSaveSignal } from "./engine";
+import { manualClose, processSignal, receiveAndSaveSignal } from "./engine";
 import { runEntryRetry } from "./entryRetry";
 import { IbkrExecutor, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
+import { OrderNotPlacedError } from "./orderErrors";
 import { assessPosition, resolvePosition } from "./positionResolve";
 import { reconcile } from "./reconcile";
 import { recoverInFlightPositions } from "./recovery";
-import { botsStore, decisionsStore, ordersStore, positionsStore, signalsStore } from "./store";
+import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "./store";
 import { BASE_NOW, NDX_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv } from "./testSupport";
 import { occSymbol } from "./tradierExecutor";
 import { createWebhook } from "./webhooks";
@@ -49,13 +50,19 @@ class FakeBridge {
   /** How old the index quote is, in ms. */
   quoteAgeMs = 1_000;
   /** What a new order does: fill at once, be rejected, or sit working forever. */
-  fill: "fill" | "reject" | "never" = "fill";
+  fill: "fill" | "reject" | "never" | "cancelNow" = "fill";
+  /** What the bridge adds to the answer for an order that ended canceled or rejected: reason, priceBand, ibkrStatus, permId, events. */
+  endExtras: Record<string, unknown> = {};
+  /** Paths (without the leading slash) that never answer at all: the connection fails. */
+  unreachable = new Set<string>();
+  /** Paths (without the leading slash) that answer with this HTTP status and body (a refusal such as 422). */
+  refuse = new Map<string, { status: number; body: unknown }>();
   /** Paths (without the leading slash) that answer 503. */
   down = new Set<string>();
   /** Fill price used for closes (a debit). */
   closeDebit = 1.2;
   /** What GET /quote/spread answers (null: no usable quote). Credit market 2.70 to 3.90, mid 3.30; debit market the same numbers. */
-  spreadQuote: { short: { bid: number; ask: number }; long: { bid: number; ask: number } } | null = { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } };
+  spreadQuote: { short: Record<string, number | null>; long: Record<string, number | null> } | null = { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } };
   orders = new Map<string, BridgeOrder>();
   requests: Req[] = [];
   private n = 0;
@@ -69,6 +76,9 @@ class FakeBridge {
     const reply = (status: number, json: unknown) => ({ ok: status < 300, status, text: async () => (typeof json === "string" ? json : JSON.stringify(json)) });
     if (init.headers["X-Bridge-Secret"] !== SECRET) return reply(401, "bad secret");
     if (this.down.has(path.slice(1))) return reply(503, "bridge unavailable");
+    if (this.unreachable.has(path.slice(1))) throw new TypeError("fetch failed");
+    const refusal = this.refuse.get(path.slice(1));
+    if (refusal) return reply(refusal.status, refusal.body);
 
     if (path === "/health") return reply(200, { connected: this.connected, account: this.account, paper: this.account.startsWith("DU") });
     if (path === "/quote/ndx") return reply(200, { price: this.price, asOf: Date.now() - this.quoteAgeMs });
@@ -77,13 +87,15 @@ class FakeBridge {
     if (path === "/open_spread" || path === "/close_spread") {
       const clientOrderId = typeof body?.clientOrderId === "string" ? body.clientOrderId : null;
       const repeat = clientOrderId ? [...this.orders.values()].find((o) => o.clientOrderId === clientOrderId) : undefined;
-      if (repeat) return reply(200, { ref: repeat.ref });
+      // The real bridge remembers every id: the same id with the same order gives the same reference, with a different order it is refused.
+      if (repeat) return JSON.stringify(repeat.body) === JSON.stringify(body ?? {}) ? reply(200, { ref: repeat.ref }) : reply(409, { detail: "clientOrderId was already used with a different order" });
       const order: BridgeOrder = { ref: `ib-${++this.n}`, clientOrderId, kind: path === "/open_spread" ? "open" : "close", body: body ?? {}, status: "working", filledQuantity: 0 };
       if (this.fill === "fill") {
         order.status = "filled";
         order.filledQuantity = Number(body?.quantity);
         order.averagePrice = order.kind === "open" ? Number(body?.limitCredit) : Number(body?.limitDebit ?? this.closeDebit);
       } else if (this.fill === "reject") order.status = "rejected";
+      else if (this.fill === "cancelNow") order.status = "canceled";
       this.orders.set(order.ref, order);
       return reply(200, { ref: order.ref });
     }
@@ -95,7 +107,7 @@ class FakeBridge {
         if (order.status === "working") order.status = "canceled";
         return reply(200, { ok: true });
       }
-      return reply(200, { status: order.status, filledQuantity: order.filledQuantity, ...(order.averagePrice !== undefined && order.filledQuantity > 0 ? { averagePrice: order.averagePrice } : {}), ...(order.status === "rejected" ? { rejectReason: "Insufficient margin" } : {}) });
+      return reply(200, { status: order.status, filledQuantity: order.filledQuantity, ...(order.averagePrice !== undefined && order.filledQuantity > 0 ? { averagePrice: order.averagePrice } : {}), ...(order.status === "rejected" ? { rejectReason: "Insufficient margin" } : {}) , ...(order.status === "canceled" || order.status === "rejected" ? this.endExtras : {}) });
     }
     return reply(404, "no such endpoint");
   };
@@ -171,6 +183,27 @@ describe("an alert on the IBKR adapter: open", () => {
   });
 });
 
+describe("an alert on the IBKR adapter: a leg has no quote", () => {
+  const cases: Array<[string, { short: Record<string, number | null>; long: Record<string, number | null> }]> = [
+    ["no bid on the short leg", { short: { ask: 12.6 }, long: { bid: 8.7, ask: 9.3 } }],
+    ["no ask on the long leg", { short: { bid: 12, ask: 12.6 }, long: { bid: 8.7, ask: null } }],
+    ["IBKR's -1 for no data", { short: { bid: -1, ask: -1 }, long: { bid: 8.7, ask: 9.3 } }],
+  ];
+  for (const [name, quote] of cases) {
+    it(`${name}: the open is refused with a clear message and a log entry, and nothing is sent`, async () => {
+      bridge.spreadQuote = quote;
+      await run("bullish", "b1");
+      expect(bridge.placed()).toEqual([]);
+      expect(mine()).toHaveLength(0);
+      expect(outcomes()).toEqual(["open_no_quote"]);
+      const d = decisionsStore.all().find((x) => x.outcome === "open_no_quote");
+      expect(d?.reason).toMatch(/Open refused: there is no usable quote of the spread/);
+      expect(d?.reason).toMatch(/bid and ask for one or both legs/);
+      expect(d?.reason).toMatch(/Nothing was sent/);
+    });
+  }
+});
+
 describe("an alert on the IBKR adapter: flip", () => {
   it("closes the put spread first, waits for that fill, then opens the call spread", async () => {
     await run("bullish", "b1");
@@ -195,7 +228,7 @@ describe("an alert on the IBKR adapter: flip", () => {
     expect(new Set(ids).size).toBe(3);
     const [s1, s2] = signalsStore.all().sort((a, b) => a.receivedAt - b.receivedAt);
     expect(ids[0]).toBe(`${s1.id}:open:1`);
-    expect(ids[1]).toBe(`${s2.id}:close:${mine()[0].id}:1`);
+    expect(ids[1]).toBe(`${mine()[0].id}:close:1:1`); // the position's id, the attempt, the rung
     expect(ids[2]).toBe(`${s2.id}:open:1`);
   });
 
@@ -213,7 +246,7 @@ describe("an alert on the IBKR adapter: flip", () => {
 
   it("a close that fails opens nothing on the new side: the old position is left for a person", async () => {
     await run("bullish", "b1");
-    bridge.down.add("close_spread");
+    bridge.unreachable.add("close_spread"); // no answer at all: the order may or may not exist
     await run("bearish", "b2", BASE_NOW + 5 * MIN);
     expect(bridge.calls("/open_spread")).toHaveLength(1); // only the first open
     expect(mine().map((p) => [p.type, p.status])).toEqual([["short_put_spread", "closing"]]);
@@ -346,13 +379,13 @@ describe("checking our records against the account", () => {
 describe("a close that gets stuck, and Resolve, end to end through the bridge", () => {
   const stuckPut = async () => {
     await run("bullish", "b1");
-    bridge.down.add("close_spread");
+    bridge.unreachable.add("close_spread");
     await run("bearish", "b2", BASE_NOW + 5 * MIN);
-    bridge.down.clear();
+    bridge.unreachable.clear();
     return mine()[0];
   };
 
-  it("the bridge was down for the close: the broker still holds the spread -> a repeat alert sends nothing and says to Resolve; Return to open puts it right and the next alert flips normally", async () => {
+  it("the bridge gave no answer to the close: the broker still holds the spread -> a repeat alert sends nothing and says to Resolve; Return to open puts it right and the next alert flips normally", async () => {
     const p = await stuckPut();
     expect(p.status).toBe("closing");
     const sentBefore = bridge.placed().length;
@@ -530,5 +563,215 @@ describe("TradingView alert, through the webhook, on BROKER=ibkr with PRICE_SOUR
     expect(live.calls("/open_spread")).toHaveLength(0);
     expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
     expect(live.heldLegs()).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// A close that failed, and the next one: fresh order ids, failures before an order exists, and what the broker said.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("a failed close, and the next close", () => {
+  const closeRequests = () => bridge.calls("/close_spread");
+  const closeIds = () => closeRequests().map((r) => r.body?.clientOrderId as string);
+  const manual = (id: string, now = BASE_NOW + 8 * MIN) => manualClose(id, { executor, now, ...fast });
+  const openPut = async () => {
+    await run("bullish", "b1");
+    return mine()[0];
+  };
+
+  it("the second manual Close after a failed first one is sent under a new id, so the bridge does not refuse it (the 409 bug)", async () => {
+    const p = await openPut();
+    bridge.fill = "cancelNow"; // the first close is sent at one price and ends canceled
+    await manual(p.id);
+    expect(positionsStore.get(p.id)?.status).toBe("open"); // the account still holds the spread
+    const firstIds = closeIds();
+    expect(firstIds.length).toBeGreaterThan(0);
+
+    bridge.fill = "fill";
+    bridge.spreadQuote = { short: { bid: 11, ask: 11.4 }, long: { bid: 8.7, ask: 9.3 } }; // a different price now: the same id would be refused with 409
+    const second = await manual(p.id, BASE_NOW + 9 * MIN);
+    expect(second.ok).toBe(true);
+    expect(positionsStore.get(p.id)?.status).toBe("closed");
+    expect(bridge.requests.filter((r) => r.path === "/close_spread" && r.body?.clientOrderId === firstIds[0])).toHaveLength(1);
+    const all = closeIds();
+    expect(new Set(all).size).toBe(all.length); // no id was ever sent twice
+    expect(all.at(-1)).toBe(`${p.id}:close:2:1`);
+    expect(firstIds[0]).toBe(`${p.id}:close:1:1`);
+    expect(positionsStore.get(p.id)?.closeAttempts).toBe(2);
+    expect(decisionsStore.all().map((d) => d.reason).join(" ")).not.toMatch(/HTTP 409/);
+  });
+
+  it("the bridge itself refuses an id sent again with a different order (so a reused id would have failed), and that refusal is a 'not placed' one", async () => {
+    const p = await openPut();
+    bridge.fill = "never"; // the first order just sits there, so the account still holds the spread for the second
+    const send = (limitDebit: number) => executor.placeCloseOrder(p, { clientOrderId: "same-id", limitDebit, quantity: 1 });
+    const first = await send(1.2);
+    expect((await send(1.2)).ref).toBe(first.ref); // the identical request again (a network retry) gives the same order back
+    const err = await send(1.3).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OrderNotPlacedError);
+    expect((err as Error).message).toMatch(/HTTP 409.*clientOrderId was already used with a different order/);
+    expect((err as OrderNotPlacedError).needsResolve).toBe(false);
+  });
+
+  it("an automated close (a flip alert) after a failed one also gets a new id", async () => {
+    const p = await openPut();
+    bridge.down.add("close_spread"); // the first flip's close is refused with 503
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+    bridge.down.clear();
+    await run("bearish", "b3", BASE_NOW + 10 * MIN);
+    const ids = closeIds();
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe(`${p.id}:close:1:1`);
+    expect(ids[1]).toBe(`${p.id}:close:2:1`);
+    expect(mine().map((x) => [x.type, x.status])).toEqual([["short_put_spread", "closed"], ["short_call_spread", "open"]]);
+  });
+
+  it("the attempt count is saved on the position, so it survives a restart: a new run of the app does not start over at 1", async () => {
+    const p = await openPut();
+    bridge.fill = "cancelNow";
+    await manual(p.id);
+    const saved = positionsStore.get(p.id)?.closeAttempts;
+    expect(saved).toBe(1);
+    executor = new IbkrExecutor(cfg, bridge.fetch); // a fresh process: no memory of the first attempt
+    bridge.fill = "fill";
+    await manual(p.id, BASE_NOW + 9 * MIN);
+    expect(closeIds().at(-1)).toBe(`${p.id}:close:2:1`);
+  });
+
+  for (const [name, setup, words] of [
+    ["503 (Gateway or bridge unavailable)", (b: FakeBridge) => b.down.add("close_spread"), /HTTP 503.*bridge unavailable/],
+    ["422 (the bridge refuses the order)", (b: FakeBridge) => b.refuse.set("close_spread", { status: 422, body: { detail: "market orders are not accepted" } }), /HTTP 422.*market orders are not accepted/],
+    ["409 (an id used before)", (b: FakeBridge) => b.refuse.set("close_spread", { status: 409, body: { detail: "clientOrderId was already used with a different order" } }), /HTTP 409.*already used with a different order/],
+  ] as const) {
+    it(`a manual close the bridge refuses with ${name} puts the position back to open, with the bridge's words in the Log`, async () => {
+      const p = await openPut();
+      setup(bridge);
+      const res = await manual(p.id);
+      expect(res.ok).toBe(false);
+      expect(positionsStore.get(p.id)?.status).toBe("open"); // never left "closing"
+      expect(closeRequests()).toHaveLength(1);
+      const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome === "executor_error");
+      expect(d?.reason).toMatch(/Close order not placed/);
+      expect(d?.reason).toMatch(words);
+      expect(d?.reason).toMatch(/back to open/);
+      const node = runsStore.all().flatMap((r) => r.nodes).find((n) => n.kind === "action" && n.action === "close");
+      expect(node && node.kind === "action" ? node.reason : "").toMatch(words);
+      expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true); // the person still sees it
+      // and the next press works once the cause is gone
+      bridge.down.clear();
+      bridge.refuse.clear();
+      expect((await manual(p.id, BASE_NOW + 9 * MIN)).ok).toBe(true);
+    });
+  }
+
+  it("a close with no answer at all (a dropped connection) is NOT put back: the order may exist, so it stays 'closing' for Resolve", async () => {
+    const p = await openPut();
+    bridge.unreachable.add("close_spread");
+    await manual(p.id);
+    expect(positionsStore.get(p.id)?.status).toBe("closing");
+  });
+
+  it("a close the account cannot honour (it does not hold the spread) stays 'closing' for Resolve, as before", async () => {
+    const p = await openPut();
+    bridge.orders.clear();
+    await manual(p.id);
+    expect(positionsStore.get(p.id)?.status).toBe("closing");
+    expect(closeRequests()).toHaveLength(0);
+  });
+
+  it("a quote that fails before the close is priced leaves the position open and sends nothing", async () => {
+    const p = await openPut();
+    bridge.spreadQuote = null;
+    await manual(p.id);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+    expect(closeRequests()).toHaveLength(0);
+    expect(decisionsStore.all().at(-1)?.outcome).toBe("close_no_quote");
+  });
+
+  it("a position that was already 'closing' stays 'closing' when a retry is refused (it was stuck before, Resolve is still its way out)", async () => {
+    const p = await openPut();
+    bridge.unreachable.add("close_spread");
+    await manual(p.id);
+    bridge.unreachable.clear();
+    expect(positionsStore.get(p.id)?.status).toBe("closing");
+    bridge.refuse.set("close_spread", { status: 422, body: { detail: "refused" } });
+    await manual(p.id, BASE_NOW + 9 * MIN);
+    expect(positionsStore.get(p.id)?.status).toBe("closing");
+  });
+});
+
+describe("a close that ends canceled says what the broker said", () => {
+  const manual = (id: string) => manualClose(id, { executor, now: BASE_NOW + 8 * MIN, ...fast });
+  const closeNode = () => {
+    const n = runsStore.all().flatMap((r) => r.nodes).find((x) => x.kind === "action" && x.action === "close");
+    return n && n.kind === "action" ? n : null;
+  };
+  const trail = {
+    ibkrStatus: "Cancelled",
+    permId: 98765,
+    events: [
+      { time: "14:02:10", status: "PendingSubmit" },
+      { time: "14:02:11", status: "Submitted" },
+      { time: "14:02:12", status: "Cancelled", code: 202, message: "Order Canceled - reason: price too far from the market" },
+    ],
+  };
+
+  it("the reason, price band and last events are in the Log entry and stored on the order row", async () => {
+    await run("bullish", "b1");
+    const p = mine()[0];
+    bridge.fill = "cancelNow";
+    bridge.endExtras = { rejectReason: "Order Canceled - reason: price too far from the market", priceBand: { marketPrice: 1.1, edge: 1.6 }, ...trail };
+    await manual(p.id);
+
+    const rows = ordersStore.all().filter((o) => o.kind === "close");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const o of rows) {
+      expect(o).toMatchObject({ status: "canceled", rejectReason: "Order Canceled - reason: price too far from the market", priceBand: { marketPrice: 1.1, edge: 1.6 }, ibkrStatus: "Cancelled", permId: 98765 });
+      expect(o.events).toHaveLength(3);
+      expect(o.events?.[2]).toEqual({ time: "14:02:12", status: "Cancelled", code: 202, message: "Order Canceled - reason: price too far from the market" });
+    }
+    const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome.startsWith("close_"));
+    expect(d?.reason).toMatch(/too far through its market \(the market is 1\.10/);
+    expect(d?.reason).toMatch(/price too far from the market/);
+    expect(d?.reason).toMatch(/IBKR status Cancelled \(permId 98765\)/);
+    expect(d?.reason).toMatch(/last events: 14:02:10 PendingSubmit; 14:02:11 Submitted; 14:02:12 Cancelled \[202\] "Order Canceled/);
+    const steps = (closeNode()?.steps ?? []).join(" | ");
+    expect(steps).toMatch(/refused by the broker's price band/);
+    expect(steps).toMatch(/IBKR status Cancelled \(permId 98765\)/);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+  });
+
+  it("a cancel with a reason and a trail but no price band is worded the same way, in the steps and in the entry", async () => {
+    await run("bullish", "b1");
+    const p = mine()[0];
+    bridge.fill = "cancelNow";
+    bridge.endExtras = { rejectReason: "Order Canceled - reason: Gateway cancelled it", ...trail };
+    await manual(p.id);
+    const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome === "close_timeout");
+    expect(d?.reason).toMatch(/Close order ended without filling\. The broker's words: Order Canceled - reason: Gateway cancelled it IBKR status Cancelled \(permId 98765\); last events: .*Cancelled \[202\]/);
+    expect((closeNode()?.steps ?? []).join(" ")).toMatch(/ended without a fill\. The broker's words: .*IBKR status Cancelled/);
+  });
+
+  it("a cancel the broker explains nothing about is said plainly, never left blank", async () => {
+    await run("bullish", "b1");
+    const p = mine()[0];
+    bridge.fill = "cancelNow";
+    await manual(p.id);
+    const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome === "close_timeout");
+    expect(d?.reason).toMatch(/The broker gave no reason, price band or events\./);
+    expect((closeNode()?.steps ?? []).join(" ")).toMatch(/The broker gave no reason, price band or events\./);
+  });
+
+  it("a rejected close shows the rejection and the trail", async () => {
+    await run("bullish", "b1");
+    const p = mine()[0];
+    bridge.fill = "reject";
+    bridge.endExtras = trail;
+    await manual(p.id);
+    const d = decisionsStore.all().find((x) => x.signalId === null && x.outcome === "close_rejected");
+    expect(d?.reason).toMatch(/Insufficient/);
+    expect(d?.reason).toMatch(/IBKR status Cancelled \(permId 98765\)/);
+    expect(ordersStore.all().find((o) => o.kind === "close")).toMatchObject({ status: "rejected", permId: 98765 });
   });
 });

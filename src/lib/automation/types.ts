@@ -283,6 +283,8 @@ export interface Position {
   closedAt: number | null;
   openSignalId: string | null;
   closeSignalId: string | null;
+  /** How many times a close of this position has been started. Each attempt's order ids carry it, so a new attempt never reuses an id the bridge has already seen. */
+  closeAttempts?: number;
   /** Most recent order ref placed against this position (open or close). */
   brokerOrderRef: string | null;
   /** Debit per spread the closing order filled at; unset when the executor
@@ -334,6 +336,10 @@ export interface Order {
   rejectReason?: string;
   /** When the broker refused the price as too far through its market: its market price and the first price it would not take. */
   priceBand?: { edge?: number; marketPrice?: number };
+  /** What the broker reported about the order (see OrderState). */
+  ibkrStatus?: string;
+  permId?: number | string;
+  events?: OrderEvent[];
   /** The executor's own order reference, used to poll getOrder(). */
   ref: string;
   createdAt: number;
@@ -366,6 +372,14 @@ export interface ErrorRecord {
 
 // --- Executor interface (spec's exact shape) ---
 
+/** One entry of the broker's own record of an order (the bridge's GET /order `events`). */
+export interface OrderEvent {
+  time: string;
+  status: string;
+  code?: number;
+  message?: string;
+}
+
 export interface OrderState {
   status: OrderStatus;
   filledQuantity: number;
@@ -374,6 +388,10 @@ export interface OrderState {
   rejectReason?: string;
   /** Set when the broker refused the price as too far through its market (see priceBand.ts): what it thinks the spread trades at, and the first price it won't take. */
   priceBand?: { edge?: number; marketPrice?: number };
+  /** The broker's own words for the order's status, its permanent id, and the last events it reported (time, status, code, message). */
+  ibkrStatus?: string;
+  permId?: number | string;
+  events?: OrderEvent[];
 }
 
 export type ExecutorVenue = "mock" | "tradier" | "ibkr";

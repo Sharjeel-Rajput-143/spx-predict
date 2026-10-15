@@ -19,6 +19,8 @@ import { recordError } from "./errors";
 import { expireStalePositions } from "./expiry";
 import { watchOrder } from "./orderWatch";
 import { describeBand, placeAndWatch } from "./placeAndWatch";
+import { brokerSaid, trailText } from "./orderEnd";
+import { OrderNotPlacedError } from "./orderErrors";
 import { getLastTick } from "@/lib/marketData/tickStore";
 import { applyTradeOp, contractsToClose, describeFinals, describeClosePricing, describeQuantity, type ClosePricing } from "./closePricing";
 import { resolveQuantity, resolveStrikeInputs } from "./openSettings";
@@ -197,7 +199,7 @@ async function planPrice(executor: BrokerExecutor, side: "credit" | "debit", spr
   } catch (err) {
     return { ladder: null, note: `One price (the quote failed: ${errorMessage(err)})` };
   }
-  if (!legs) return { ladder: null, note: "One price (no quote available)" };
+  if (!legs) return { ladder: null, note: "One price (no quote available: the broker gave no usable bid and ask for one or both legs)" };
   // A quote far too wide to mean anything is not priced from (real-time data only; exempt while the data is delayed, or every paper trade would be refused).
   const widest = quoteMaxWidth();
   const market = spreadMarket(side, legs);
@@ -265,7 +267,11 @@ export async function closePosition(
       pricing: plan?.note,
     };
   }
-  positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null });
+  // Every attempt to close has its own order ids: the bridge remembers every id it has seen (across restarts) and refuses one sent again with
+  // a different price. The count is saved on the position before anything is sent, so a failed attempt is never repeated under its id.
+  const attempt = (positionsStore.get(position.id)?.closeAttempts ?? position.closeAttempts ?? 0) + 1;
+  const statusBefore = positionsStore.get(position.id)?.status ?? position.status;
+  positionsStore.update(position.id, { status: "closing", closeSignalId: signal?.id ?? null, closeAttempts: attempt });
   const ladder = plan?.ladder ?? null;
   const pricingNote = plan?.note;
 
@@ -275,7 +281,7 @@ export async function closePosition(
     kind: "close",
     positionId: position.id,
     now,
-    place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${signal?.id ?? position.id}:close:${position.id}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
+    place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${position.id}:close:${attempt}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
     prices: ladder?.prices ?? null,
     // The broker refused a price as too far through its market: price again from its own numbers (never past the ladder's final price).
     ...(ladder ? { reprice: ({ band, refused }: { band: PriceBand; refused: number }) => repriceAfterBand({ side: "debit", band, refused, finalPrice: ladder.final, rungs: ladder.prices.length, maxAboveMarket: closeMaxAboveMarket(), width: effective?.width }) } : {}),
@@ -288,6 +294,13 @@ export async function closePosition(
   if (!result.ok) {
     // Left "closing": we can't know the broker didn't take the order, so the
     // position keeps counting as live until an operator resolves it.
+    // The order was never taken (a check of ours failed, or the bridge answered with a refusal such as 409, 422 or 503): nothing is working at
+    // the broker, so a position that was open goes back to open, with the bridge's own words in the Log. Anything unclear (no answer, a
+    // timeout) stays "closing" below, and so does a refusal because the account does not hold the spread (Resolve looks at that).
+    if (result.stage === "place" && result.error instanceof OrderNotPlacedError && !result.error.needsResolve && statusBefore === "open") {
+      positionsStore.update(position.id, { status: "open", closeSignalId: null });
+      return { ok: false, outcome: "executor_error", reason: `Close order not placed: ${errorMessage(result.error)} Nothing was sent to the broker, so the position is back to open.`, pricing: pricingNote, steps: result.steps };
+    }
     return result.stage === "place"
       ? { ok: false, outcome: "executor_error", reason: `Close order failed: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps }
       : { ok: false, outcome: "executor_error", reason: `Lost track of close order ${result.ref}: ${errorMessage(result.error)}`, pricing: pricingNote, steps: result.steps };
@@ -329,12 +342,14 @@ export async function closePosition(
   const refused = !timedOut && state.priceBand !== undefined;
   if (state.status === "rejected" || refused) {
     const why = refusalText(state, "Close order rejected.");
+    const trail = trailText(state);
     const back = await backToOpenIfStillHeld(position, executor, total);
-    return { ok: false, outcome: "close_rejected", reason: `${why}${back}`, pricing: pricingNote, steps };
+    return { ok: false, outcome: "close_rejected", reason: `${why}${trail ? ` ${trail}.` : ""}${back}`, pricing: pricingNote, steps };
   }
   if (state.filledQuantity === 0) {
     const back = await backToOpenIfStillHeld(position, executor, total);
-    return { ok: false, outcome: "close_timeout", reason: `${timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling."}${back}`, pricing: pricingNote, steps };
+    const said = brokerSaid(state, !timedOut);
+    return { ok: false, outcome: "close_timeout", reason: `${timedOut ? "Close order never filled before the confirm timeout." : "Close order ended without filling."}${said ? ` ${said}` : ""}${back}`, pricing: pricingNote, steps };
   }
   return { ok: false, outcome: "close_partial_fill", reason: "Close order only partially filled. The rest was canceled; the position stays in closing, keeps its slot in the limits, and needs a person to clear it.", pricing: pricingNote, steps };
 }

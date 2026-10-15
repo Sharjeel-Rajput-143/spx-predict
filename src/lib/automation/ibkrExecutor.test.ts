@@ -3,6 +3,7 @@ import { MockExecutor } from "./executor";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { executorKind, isBrokerKind, priceSource } from "./executorKind";
 import { IbkrConfigError, IbkrExecutor, mapBridgeOrder, readIbkrConfig, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
+import { OrderNotPlacedError } from "./orderErrors";
 import { RoutedExecutor } from "./routedExecutor";
 import { executorStatus, getExecutor, isPaperStatus, sharedExecutor } from "./sharedExecutor";
 import { positionsStore } from "./store";
@@ -220,6 +221,91 @@ describe("opening a spread", () => {
   });
 });
 
+describe("a close that is refused before an order exists, and one that may exist", () => {
+  const HOLDS = { body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -1 }, { symbol: "NDXP261006P20960000", quantity: 1 }] } };
+  const held = () => ({ ...heldPut(), expiry: "2026-10-06", requestedQuantity: 1, filledQuantity: 1 });
+  const send = (replies: Parameters<typeof fakeBridge>[0]) => new IbkrExecutor(cfg, fakeBridge(replies).impl).placeCloseOrder(held(), { limitDebit: 1.2, clientOrderId: "pos-1:close:1:1" }).catch((e: unknown) => e);
+
+  for (const status of [400, 401, 404, 409, 422, 429, 503]) {
+    it(`the bridge answering HTTP ${status} to the order is a refusal: no order exists`, async () => {
+      const err = await send([{ body: PAPER }, HOLDS, { status, body: { detail: "refused" } }]);
+      expect(err).toBeInstanceOf(OrderNotPlacedError);
+      expect((err as Error).message).toMatch(new RegExp(`Bridge POST /close_spread failed \\(HTTP ${status}\\): .*refused`));
+      expect((err as OrderNotPlacedError).needsResolve).toBe(false);
+    });
+  }
+
+  for (const status of [408, 500, 502, 504]) {
+    it(`HTTP ${status} to the order is NOT a clear refusal: the order may exist, so it is an ordinary error`, async () => {
+      const err = await send([{ body: PAPER }, HOLDS, { status, body: "x" }]);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(OrderNotPlacedError);
+    });
+  }
+
+  it("no answer at all (a dropped connection or a timeout) is an ordinary error too", async () => {
+    let n = 0;
+    const impl: BridgeFetch = async () => {
+      n++;
+      if (n === 1) return { ok: true, status: 200, text: async () => JSON.stringify(PAPER) };
+      if (n === 2) return { ok: true, status: 200, text: async () => JSON.stringify(HOLDS.body) };
+      throw new TypeError("fetch failed");
+    };
+    const err = await new IbkrExecutor(cfg, impl).placeCloseOrder(held(), { limitDebit: 1.2 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TypeError);
+  });
+
+  it("an answer without an order reference is an ordinary error (the bridge may have taken it)", async () => {
+    const err = await send([{ body: PAPER }, HOLDS, { body: {} }]);
+    expect(err).not.toBeInstanceOf(OrderNotPlacedError);
+    expect((err as Error).message).toMatch(/no order reference/);
+  });
+
+  it("our own checks before sending are 'not placed': no price, a bad size, the Gateway down", async () => {
+    const noPrice = await new IbkrExecutor(cfg, fakeBridge([]).impl).placeCloseOrder(held()).catch((e: unknown) => e);
+    expect(noPrice).toBeInstanceOf(OrderNotPlacedError);
+    const down = await send([{ body: { connected: false, account: null } }]);
+    expect(down).toBeInstanceOf(OrderNotPlacedError);
+    expect((down as Error).message).toMatch(/not connected/);
+  });
+
+  it("the account not holding the spread is 'not placed' but flagged for Resolve: it is a fact about the account, not a failed attempt", async () => {
+    const err = await send([{ body: PAPER }, { body: { positions: [] } }]);
+    expect(err).toBeInstanceOf(OrderNotPlacedError);
+    expect((err as OrderNotPlacedError).needsResolve).toBe(true);
+  });
+
+  it("the bridge failing to give the account's positions is a plain 'not placed' refusal (nothing was sent)", async () => {
+    const err = await send([{ body: PAPER }, { status: 503, body: "bridge unavailable" }]);
+    expect(err).toBeInstanceOf(OrderNotPlacedError);
+    expect((err as OrderNotPlacedError).needsResolve).toBe(false);
+  });
+
+  it("an open that the bridge refuses stays an ordinary error: opens are unchanged", async () => {
+    const err = await new IbkrExecutor(cfg, fakeBridge([{ body: PAPER }, { status: 409, body: { detail: "clientOrderId was already used with a different order" } }]).impl).placeOpenOrder(open()).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(OrderNotPlacedError);
+    expect((err as Error).message).toMatch(/HTTP 409/);
+  });
+});
+
+describe("what the bridge says about an order's life (ibkrStatus, permId, events)", () => {
+  it("is read onto the order state, last events kept, anything malformed dropped", () => {
+    const events = Array.from({ length: 25 }, (_, i) => ({ time: `10:00:${String(i).padStart(2, "0")}`, status: i === 24 ? "Cancelled" : "Submitted", ...(i === 24 ? { code: 202, message: "Order Canceled - reason: x".repeat(40) } : {}) }));
+    const state = mapBridgeOrder({ status: "canceled", filledQuantity: 0, ibkrStatus: "Cancelled", permId: 1234, events: [null, "junk", { nothing: true }, ...events] });
+    expect(state).toMatchObject({ status: "canceled", ibkrStatus: "Cancelled", permId: 1234 });
+    expect(state.events).toHaveLength(20);
+    expect(state.events?.at(-1)).toMatchObject({ time: "10:00:24", status: "Cancelled", code: 202 });
+    expect(state.events?.at(-1)?.message?.length).toBeLessThanOrEqual(300);
+    expect(state.events?.every((e) => typeof e.time === "string" && typeof e.status === "string")).toBe(true);
+  });
+
+  it("is simply absent when the bridge sends none, and a wrong shape is ignored", () => {
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0 })).toEqual({ status: "canceled", filledQuantity: 0 });
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, ibkrStatus: 5, permId: {}, events: "no" })).toEqual({ status: "canceled", filledQuantity: 0 });
+    expect(mapBridgeOrder({ status: "canceled", filledQuantity: 0, permId: "98765" })).toMatchObject({ permId: "98765" });
+  });
+});
+
 describe("closing a spread", () => {
   /** What the account holds when it holds our put spread: short 20970, long 20960, `n` of each. */
   const HOLDS = (n = 1) => ({ body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -n }, { symbol: "NDXP261006P20960000", quantity: n }] } });
@@ -366,6 +452,19 @@ describe("quotes", () => {
     expect(await ex.getSpreadQuote(spread)).toBeNull(); // one leg missing
     expect(await ex.getSpreadQuote(spread)).toBeNull(); // bid above ask
     expect(await ex.getSpreadQuote(spread)).toBeNull(); // not a number
+  });
+
+  it("a leg with no bid or no ask is no quote at all (missing, null, -1, or an ask of 0), never filled in", async () => {
+    const ok = { bid: 8.7, ask: 9.3 };
+    const { impl } = fakeBridge([
+      { body: { short: { ask: 12.6 }, long: ok } }, // no bid
+      { body: { short: { bid: 12, ask: null }, long: ok } }, // no ask
+      { body: { short: { bid: -1, ask: -1 }, long: ok } }, // IBKR's "no data"
+      { body: { short: ok, long: { bid: 0, ask: 0 } } }, // nothing to trade at
+      { body: {} },
+    ]);
+    const ex = new IbkrExecutor(cfg, impl);
+    for (let i = 0; i < 5; i++) expect(await ex.getSpreadQuote(spread)).toBeNull();
   });
 
   it("the index quote carries its own time: a stale or incomplete one is no price at all", async () => {
@@ -543,7 +642,7 @@ describe("the engine gives every order an id the bridge can recognise", () => {
   const signal = (direction: "bullish" | "bearish", barTime: string, now: number) =>
     receiveAndSaveSignal({ botId: NDX_BOT_ID, signal: direction, price: 21_003.7, barTime, interval: "5", raw: { symbol: "NDX" }, now });
 
-  it("an open and then a flip: the open carries the alert's id, the close carries the alert's id and the position's, and none repeat", async () => {
+  it("an open and then a flip: the open carries the alert's id, the close carries the position's id and its attempt, and none repeat", async () => {
     const spy = new Spy();
     const first = signal("bullish", "t1", BASE_NOW);
     await processSignal(first, { executor: spy, now: BASE_NOW, ...fast });
@@ -553,7 +652,7 @@ describe("the engine gives every order an id the bridge can recognise", () => {
     const ids = [...spy.opens.map((o) => o.clientOrderId), ...spy.closes.map((c) => c.options?.clientOrderId)];
     expect(spy.opens.map((o) => o.clientOrderId)).toEqual([`${first.id}:open:1`, `${second.id}:open:1`]);
     expect(spy.closes).toHaveLength(1);
-    expect(spy.closes[0].options?.clientOrderId).toBe(`${second.id}:close:${spy.closes[0].id}:1`);
+    expect(spy.closes[0].options?.clientOrderId).toBe(`${spy.closes[0].id}:close:1:1`);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
   });
