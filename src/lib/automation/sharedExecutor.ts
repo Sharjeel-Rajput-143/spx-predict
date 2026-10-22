@@ -125,4 +125,8 @@ export const sharedExecutor: BrokerExecutor = {
     const ex = executorStatus().error ? null : getExecutor();
     return ex?.isPaperAccount ? ex.isPaperAccount.bind(ex) : undefined;
   },
+  get getSpreadMark() {
+    const ex = executorStatus().error ? null : getExecutor();
+    return ex?.getSpreadMark ? ex.getSpreadMark.bind(ex) : undefined;
+  },
 };

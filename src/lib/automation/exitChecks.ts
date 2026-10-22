@@ -148,7 +148,7 @@ export function runExitChecks(botId: string, now: number = Date.now(), options: 
         // The expiration exit is the last chance before the close: it goes at market, whatever the bot's usual close pricing is.
         const ownPricing: ClosePricing | undefined = met.kind === "expiration" ? { speed: "market" } : bot.closeSettings?.[position.type === "short_put_spread" ? "bearish" : "bullish"]?.pricing;
         const pricing = applyClosePricing(pricingFor(config, "close", options.ladderStepMs), ownPricing);
-        const closed = await closePosition(position, { id: null, price: reading.underlying }, executor, closeTimeoutMs, options.pollIntervalMs ?? 1000, now, pricing, undefined, { chase: true });
+        const closed = await closePosition(position, { id: null, price: reading.underlying }, executor, closeTimeoutMs, options.pollIntervalMs ?? 1000, now, pricing, undefined, { chase: true, marks: true });
         rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [{ label: "Why", value: met.text }], steps: closed.steps, outcome: closed.outcome, reason: closed.reason });
         if (closed.ok) {
           result.closed++;

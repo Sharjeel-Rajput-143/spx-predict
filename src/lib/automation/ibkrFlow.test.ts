@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { POST as hookRoute } from "@/app/api/webhook/hook/[token]/route";
 import { ensureBotRecord } from "./bots";
 import { MockExecutor } from "./executor";
-import { manualClose, processSignal, receiveAndSaveSignal } from "./engine";
+import { manualClose, manualOpen, processSignal, receiveAndSaveSignal } from "./engine";
 import { runEntryRetry } from "./entryRetry";
 import { IbkrExecutor, type BridgeFetch, type IbkrConfig } from "./ibkrExecutor";
 import { OrderNotPlacedError } from "./orderErrors";
@@ -55,6 +55,8 @@ class FakeBridge {
   fill: "fill" | "reject" | "never" | "cancelNow" = "fill";
   /** What the bridge adds to the answer for an order that ended canceled or rejected: reason, priceBand, ibkrStatus, permId, events. */
   endExtras: Record<string, unknown> = {};
+  /** The broker's mark for each held leg, as /positions reports it (null: not reported). */
+  legMarks: { short: number | null; long: number | null } = { short: null, long: null };
   /** What /health says about `paper` (default: true for a DU account). */
   paperOverride: boolean | undefined = undefined;
   /** A close is filled only at this limit debit or higher; below it the order just sits working. null = the usual `fill` rule. */
@@ -91,7 +93,14 @@ class FakeBridge {
     if (path === "/health") return reply(200, { connected: this.connected, account: this.account, paper: this.paperOverride ?? this.account.startsWith("DU") });
     if (path === "/quote/ndx") return reply(200, { price: this.price, asOf: Date.now() - this.quoteAgeMs });
     if (path === "/quote/spread") return this.spreadQuote ? reply(200, this.spreadQuote) : reply(503, "No bid and ask for an option leg (market closed or no data)");
-    if (path === "/positions") return reply(200, { positions: this.heldLegs() });
+    if (path === "/positions") {
+      // each held leg carries the bridge's mark for it when one is set (the short leg is the negative one)
+      const positions = this.heldLegs().map((l) => {
+        const mark = l.quantity < 0 ? this.legMarks.short : this.legMarks.long;
+        return mark === null ? l : { ...l, marketPrice: mark };
+      });
+      return reply(200, { positions });
+    }
     if (path === "/open_spread" || path === "/close_spread") {
       const clientOrderId = typeof body?.clientOrderId === "string" ? body.clientOrderId : null;
       const repeat = clientOrderId ? [...this.orders.values()].find((o) => o.clientOrderId === clientOrderId) : undefined;
@@ -1150,4 +1159,370 @@ describe("the flip, over long random runs of alerts", () => {
       }
     });
   }
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// REHEARSAL CLOSE_USE_MARKS: the broker's own marks as a ceiling on a close. The fake quote makes the close ladder 3.30, 3.50, 3.70, 3.90
+// (mid 3.30, worst 3.90) on a spread 10 wide. A mark is the short leg's market price less the long leg's.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("CLOSE_USE_MARKS: the broker's marks as a ceiling for closes", () => {
+  const LADDER = [3.3, 3.5, 3.7, 3.9];
+  const closePrices = () => bridge.calls("/close_spread").map((r) => Number(r.body?.limitDebit));
+  const manual = (id: string) => manualClose(id, { executor, now: BASE_NOW + 8 * MIN, ...fast });
+  const closeNode = () => {
+    const n = runsStore.all().flatMap((r) => r.nodes).filter((x) => x.kind === "action" && x.action === "close").at(-1);
+    return n && n.kind === "action" ? n : null;
+  };
+  const steps = () => (closeNode()?.steps ?? []).join("\n");
+  const priceParam = () => String(closeNode()?.params?.find((p) => p.label === "Price")?.value ?? "");
+  /** Sets the marks so the spread's mark is `mark` (short leg mark minus long leg mark). */
+  const markIs = (mark: number) => {
+    bridge.legMarks = { short: Math.round((mark + 2) * 100) / 100, long: 2 };
+  };
+  const openPut = async () => {
+    await run("bullish", "b1");
+    bridge.closeFillAtOrAbove = 99; // nothing fills, so every price of the ladder is tried
+    return mine()[0];
+  };
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is off by default: the marks are ignored, the ladder is the quote's", async () => {
+    markIs(1.2);
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(steps()).not.toMatch(/mark/i);
+  });
+
+  it("is off for anything but 1 or true", async () => {
+    for (const v of ["0", "yes", ""]) {
+      vi.stubEnv("CLOSE_USE_MARKS", v);
+      resetAutomationStores();
+      setNdxTestEnv();
+      bridge = new FakeBridge();
+      executor = new IbkrExecutor(cfg, bridge.fetch);
+      ensureBotRecord(NDX_BOT_ID);
+      markIs(1.2);
+      const p = await openPut();
+      await manual(p.id);
+      expect(closePrices()).toEqual(LADDER);
+    }
+  });
+
+  it("on, paper, marks known, quote far above them: the ladder is rebuilt from the mark, and nothing goes above mark + 1.00", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    markIs(1.2); // ceiling 1.20 + 1.00 = 2.20, the quote's mid is 3.30
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    expect(prices).toEqual([1.2, 1.55, 1.85, 2.2]);
+    expect(Math.max(...prices)).toBeLessThanOrEqual(2.2);
+    expect(steps()).toMatch(/The quote's mid 3\.30 is above the broker's mark: the broker's mark is 1\.20, so the ceiling is 1\.20 \+ 1\.00 = 2\.20\. Priced from the marks instead: 1\.20, 1\.55, 1\.85, 2\.20\./);
+    expect(priceParam()).toMatch(/^Broker marks: 1\.20, 1\.55, 1\.85, 2\.20 \(mark 1\.20, ceiling 2\.20; the quote said SmartPricing Normal: 3\.30, 3\.50, 3\.70, 3\.90/);
+    expect(positionsStore.get(p.id)?.status).toBe("open");
+  });
+
+  it("a ladder with some prices above the ceiling but a mid below it is capped, not rebuilt", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    markIs(2.5); // ceiling 3.50: the mid 3.30 fits, 3.70 and 3.90 do not
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual([3.3, 3.5]);
+    expect(steps()).toMatch(/Ladder prices above the ceiling were capped: the broker's mark is 2\.50, so the ceiling is 2\.50 \+ 1\.00 = 3\.50\. The ladder is now 3\.30, 3\.50\./);
+  });
+
+  it("a quote already within the ceiling is left alone, and the Log says the marks were checked", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    markIs(3.5); // ceiling 4.50
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(steps()).toMatch(/Broker marks checked: the broker's mark is 3\.50, so the ceiling is 3\.50 \+ 1\.00 = 4\.50; the ladder is within it\./);
+  });
+
+  it("CLOSE_MAX_ABOVE_MARKET sets the ceiling", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_MAX_ABOVE_MARKET", "0.25");
+    markIs(1.2);
+    const p = await openPut();
+    await manual(p.id);
+    expect(Math.max(...closePrices())).toBeLessThanOrEqual(1.45);
+    expect(steps()).toMatch(/ceiling is 1\.20 \+ 0\.25 = 1\.45/);
+  });
+
+  it("never at or above the spread's width", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_MAX_ABOVE_MARKET", "50");
+    markIs(1.2);
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices().every((x) => x < 10)).toBe(true); // the spread is 10 wide
+    expect(Math.max(...closePrices())).toBeLessThanOrEqual(9.95);
+  });
+
+  it("a mark missing on one leg: not used, the quote's ladder stands, and the Log says why", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    bridge.legMarks = { short: 3.2, long: null };
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(steps()).toMatch(/Broker marks: not used \(the account does not show both legs of the spread with a mark\)\. The close is priced from the quote as usual\./);
+  });
+
+  it("a mark that comes out at zero or below is not used", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    bridge.legMarks = { short: 2, long: 3 };
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(steps()).toMatch(/Broker marks: not used/);
+  });
+
+  it("not a paper account (the bridge's /health says paper is false): ignored, and the Log says so", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    bridge.paperOverride = false;
+    markIs(1.2);
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual(LADDER);
+    expect(steps()).toMatch(/CLOSE_USE_MARKS is on but it is ignored, because the bridge does not say this is a paper account/);
+  });
+
+  it("the chase never goes above the ceiling: with the ceiling at the ladder's top, there is nothing to add", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    markIs(1.2);
+    const p = await openPut();
+    await manual(p.id);
+    expect(Math.max(...closePrices())).toBeLessThanOrEqual(2.2);
+    expect(closePrices()).toEqual([1.2, 1.55, 1.85, 2.2]);
+    expect(steps()).toMatch(/Rehearsal chase: not used/);
+  });
+
+  it("the chase goes on only as far as the ceiling allows", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    markIs(3.5); // ceiling 4.50; the ladder ends at 3.90, the chase would run to 6.90 without the marks
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual([...LADDER, 4.1, 4.3, 4.5]);
+    expect(Math.max(...closePrices())).toBeLessThanOrEqual(4.5);
+    expect(steps()).toMatch(/Price 5 of 7 \(rehearsal chase\): \$4\.10/);
+  });
+
+  it("without marks the chase is as before (the marks setting changes nothing else)", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_CHASE_MAX", "1");
+    bridge.legMarks = { short: null, long: null };
+    const p = await openPut();
+    await manual(p.id);
+    expect(closePrices()).toEqual([...LADDER, 4.1, 4.3, 4.5, 4.7, 4.9]);
+  });
+
+  it("a price band refusal still re-prices inside the band, and never above the ceiling", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    vi.stubEnv("CLOSE_CHASE_MAX", "3");
+    markIs(3.5); // ceiling 4.50
+    bridge.band = { edge: 4.1, marketPrice: 3.8 }; // IBKR refuses 4.10 and above
+    const p = await openPut();
+    await manual(p.id);
+    const prices = closePrices();
+    const at = prices.indexOf(4.1);
+    expect(at).toBeGreaterThan(3);
+    const after = prices.slice(at + 1);
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.every((x) => x < 4.1)).toBe(true);
+    expect(Math.max(...prices)).toBeLessThanOrEqual(4.5);
+    expect(steps()).toMatch(/refused by the broker's price band/);
+  });
+
+  it("an open is never priced from the marks, and neither is the close inside a flip", async () => {
+    vi.stubEnv("CLOSE_USE_MARKS", "1");
+    markIs(1.2);
+    bridge.fill = "never";
+    await run("bullish", "b1"); // the open ladder: the quote's, untouched
+    const opens = bridge.calls("/open_spread").map((r) => Number(r.body?.limitCredit));
+    expect(opens).toEqual([3.3, 3.1, 2.9, 2.7]);
+
+    resetAutomationStores();
+    setNdxTestEnv();
+    bridge = new FakeBridge();
+    executor = new IbkrExecutor(cfg, bridge.fetch);
+    ensureBotRecord(NDX_BOT_ID);
+    await run("bullish", "b1");
+    markIs(1.2);
+    bridge.closeFillAtOrAbove = 99;
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(closePrices()).toEqual(LADDER); // a flip's close is the quote's ladder
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// The daily loss limit: today's realized result plus the open loss. It blocks new opens only.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe("the daily loss limit", () => {
+  const setSafeguards = (sg: Record<string, number>) => botsStore.update(NDX_BOT_ID, { safeguards: { dailyNewPositionLimit: 1000, ...sg } });
+  /** A position that closed earlier today with this result in dollars (negative = a loss), one contract. */
+  const seedResult = (pl: number, closedAt = BASE_NOW - 3_600_000) =>
+    positionsStore.insert(
+      buildPosition({ botId: NDX_BOT_ID, underlying: "NDX", optionRoot: "NDXP", type: "short_put_spread", status: "closed", shortStrike: 20_970, longStrike: 20_960, requestedQuantity: 1, filledQuantity: 1, credit: 3, closePrice: 3 - pl / 100, openedAt: closedAt - 600_000, closedAt }),
+    );
+  const lossLines = () =>
+    runsStore
+      .all()
+      .flatMap((r) => r.nodes)
+      .filter((n) => n.kind === "decision" && /daily loss limit/.test(n.text))
+      .map((n) => (n.kind === "decision" ? { text: n.text, result: n.result, measured: n.measured ?? "" } : null));
+  const outcomeList = () => decisionsStore.all().filter((d) => d.signalId !== null).map((d) => d.outcome);
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is off by default: nothing is evaluated, nothing is written, an open goes through", async () => {
+    seedResult(-5000);
+    await run("bullish", "b1");
+    expect(bridge.placed()).toEqual(["open PUT 20970/20960"]);
+    expect(lossLines()).toEqual([]);
+    expect(botsStore.get(NDX_BOT_ID)?.lossCheck).toBeUndefined();
+  });
+
+  it("a limit that is not reached: the open goes through, and one Log line shows the numbers", async () => {
+    setSafeguards({ dailyLossLimit: 300 });
+    seedResult(-120);
+    await run("bullish", "b1");
+    expect(bridge.placed()).toEqual(["open PUT 20970/20960"]);
+    expect(outcomeList()).toEqual(["opened"]);
+    const lines = lossLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ text: "The day's loss is under the daily loss limit of $300.00", result: true });
+    expect(lines[0]?.measured).toBe("Day's result: realized -$120.00 (1 closed or expired today), open loss $0.00 (no position held), total -$120.00, daily loss limit $300.00 - within the limit");
+    expect(botsStore.get(NDX_BOT_ID)?.lossCheck).toMatchObject({ limit: 300, realized: -120, openLoss: 0, hit: false });
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(false);
+  });
+
+  it("realized loss at or over the limit: the open is refused, nothing is sent, Needs attention is set, and the bot stays on", async () => {
+    setSafeguards({ dailyLossLimit: 200 });
+    seedResult(-200); // exactly at the limit counts
+    await run("bullish", "b1");
+    expect(bridge.placed()).toEqual([]);
+    expect(mine().filter((p) => ["open", "opening", "closing"].includes(p.status))).toHaveLength(0);
+    expect(outcomeList()).toEqual(["daily_loss_limit_reached"]);
+    const d = decisionsStore.all().find((x) => x.outcome === "daily_loss_limit_reached");
+    expect(d?.reason).toMatch(/Daily loss limit reached\. Day's result: realized -\$200\.00.*LIMIT REACHED\. Nothing was opened\. Closing is not blocked and the bot stays on/);
+    const bot = botsStore.get(NDX_BOT_ID);
+    expect(bot?.needsAttention).toBe(true);
+    expect(bot?.needsAttentionReason).toMatch(/^daily_loss_limit_reached: Day's result: realized -\$200\.00/);
+    expect(bot?.enabled).toBe(true); // not switched off
+    expect(bot?.lossCheck).toMatchObject({ hit: true, total: -200 });
+    expect(lossLines()[0]).toMatchObject({ result: false });
+  });
+
+  it("just under the limit still opens", async () => {
+    setSafeguards({ dailyLossLimit: 200 });
+    seedResult(-199.99);
+    await run("bullish", "b1");
+    expect(bridge.placed()).toEqual(["open PUT 20970/20960"]);
+  });
+
+  it("a flip's close still goes out when the limit is reached; only the new open is refused", async () => {
+    await run("bullish", "b1"); // holds the put spread, credit 3.30
+    bridge.requests.length = 0;
+    setSafeguards({ dailyLossLimit: 100 });
+    seedResult(-150);
+    await run("bearish", "b2", BASE_NOW + 5 * MIN);
+    expect(bridge.placed()).toEqual(["close PUT 20970/20960"]); // the close was sent, no open after it
+    expect(outcomeList()).toEqual(["opened", "closed", "daily_loss_limit_reached"]);
+    expect(mine().find((p) => p.type === "short_put_spread" && p.status === "closed" && p.closePrice !== null)).toBeTruthy();
+    expect(mine().filter((p) => ["open", "opening", "closing"].includes(p.status))).toHaveLength(0);
+    expect(botsStore.get(NDX_BOT_ID)).toMatchObject({ enabled: true, needsAttention: true });
+  });
+
+  it("a manual Close is never blocked by the limit", async () => {
+    await run("bullish", "b1");
+    setSafeguards({ dailyLossLimit: 1 });
+    seedResult(-500);
+    const p = mine().find((x) => x.status === "open")!;
+    const res = await manualClose(p.id, { executor, now: BASE_NOW + 5 * MIN, ...fast });
+    expect(res.ok).toBe(true);
+    expect(positionsStore.get(p.id)?.status).toBe("closed");
+  });
+
+  it("the open loss counts: a held position that has lost money plus today's realized loss reaches the limit", async () => {
+    await run("bullish", "b1"); // holds the put spread, credit 3.30
+    setSafeguards({ dailyLossLimit: 400, totalPositionLimit: 2 });
+    seedResult(-100);
+    bridge.legMarks = { short: 9, long: 2 }; // the broker's mark is 7.00: (3.30 - 7.00) x 100 = -370
+    const res = await manualOpen(NDX_BOT_ID, { type: "short_call_spread", shortStrike: 21_035, underlyingPrice: 21_003.7 }, { executor, now: BASE_NOW + 5 * MIN, ...fast });
+    expect(res.outcome).toBe("daily_loss_limit_reached");
+    expect(bridge.calls("/open_spread")).toHaveLength(1); // only the first open
+    const line = lossLines().at(-1)?.measured ?? "";
+    expect(line).toMatch(/realized -\$100\.00 .*open loss -\$370\.00 \(broker mark\), total -\$470\.00, daily loss limit \$400\.00 - LIMIT REACHED/);
+  });
+
+  it("an open profit is not counted and does not offset a realized loss", async () => {
+    await run("bullish", "b1");
+    setSafeguards({ dailyLossLimit: 150, totalPositionLimit: 2 });
+    seedResult(-160);
+    bridge.legMarks = { short: 3, long: 2.5 }; // the mark is 0.50: the held spread is up 280
+    const res = await manualOpen(NDX_BOT_ID, { type: "short_call_spread", shortStrike: 21_035, underlyingPrice: 21_003.7 }, { executor, now: BASE_NOW + 5 * MIN, ...fast });
+    expect(res.outcome).toBe("daily_loss_limit_reached");
+    expect(lossLines().at(-1)?.measured).toMatch(/open loss \$0\.00 \(broker mark\), total -\$160\.00/);
+  });
+
+  it("an open loss that cannot be worked out is said to be UNKNOWN in the Log, not counted and not guessed", async () => {
+    await run("bullish", "b1");
+    setSafeguards({ dailyLossLimit: 400, totalPositionLimit: 2 });
+    seedResult(-100);
+    bridge.spreadQuote = null; // no quote
+    bridge.legMarks = { short: null, long: null }; // and no mark
+    const res = await manualOpen(NDX_BOT_ID, { type: "short_call_spread", shortStrike: 21_035, underlyingPrice: 21_003.7 }, { executor, now: BASE_NOW + 5 * MIN, ...fast });
+    expect(res.outcome).not.toBe("daily_loss_limit_reached"); // -100 alone is under 400
+    const line = lossLines().at(-1)?.measured ?? "";
+    expect(line).toMatch(/open loss UNKNOWN \(there is no broker mark and no spread quote for the position held\) - not counted, not guessed, total -\$100\.00/);
+    expect(botsStore.get(NDX_BOT_ID)?.lossCheck).toMatchObject({ openLoss: null, hit: false });
+    expect(botsStore.get(NDX_BOT_ID)?.lossCheck?.openLossWhy).toMatch(/no broker mark/);
+  });
+
+  it("it starts again at zero on the next New York trading day: yesterday's loss is not counted", async () => {
+    setSafeguards({ dailyLossLimit: 200 });
+    seedResult(-500, BASE_NOW - 24 * 3_600_000);
+    await run("bullish", "b1");
+    expect(bridge.placed()).toEqual(["open PUT 20970/20960"]);
+    expect(lossLines()[0]?.measured).toMatch(/realized \$0\.00 \(0 closed or expired today\)/);
+    // and a loss from the day before leaves the same day open for business tomorrow
+    const lateToday = BASE_NOW + 2 * 3_600_000;
+    seedResult(-500, lateToday);
+    await run("bearish", "b2", lateToday + 60_000);
+    expect(outcomeList().at(-1)).toBe("daily_loss_limit_reached");
+  });
+
+  it("the daily positions limit is checked first and keeps its own behaviour (it switches the bot off); the loss limit never does", async () => {
+    setSafeguards({ dailyLossLimit: 100, dailyNewPositionLimit: 1 });
+    seedResult(-500); // a position opened today
+    await run("bullish", "b1");
+    expect(outcomeList()).toEqual(["daily_limit_reached"]);
+    expect(botsStore.get(NDX_BOT_ID)?.enabled).toBe(false);
+    expect(lossLines()).toEqual([]); // not evaluated: the daily positions limit stopped it first
+  });
+
+  it("a dry run judges the open as it would be after the close: the position it would close is not counted as an open loss", async () => {
+    await run("bullish", "b1"); // held, credit 3.30
+    setSafeguards({ dailyLossLimit: 300 });
+    bridge.legMarks = { short: 9, long: 2 }; // open loss -370 - over the limit if the position were still held
+    bridge.requests.length = 0;
+    await processSignal(alert("bearish", "d1", BASE_NOW + 5 * MIN), { executor, now: BASE_NOW + 5 * MIN, ...fast, dryRun: true });
+    expect(outcomeList().at(-1)).toBe("dry_run");
+    expect(bridge.placed()).toEqual([]);
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(false);
+  });
+
+  it("a refused open is not retried by the automatic retry: nothing is sent", async () => {
+    setSafeguards({ dailyLossLimit: 50 });
+    seedResult(-80);
+    await run("bullish", "b1");
+    expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
+    const r = await runEntryRetry(NDX_BOT_ID, BASE_NOW + 2 * MIN, { executor, ...fast });
+    expect(bridge.placed()).toEqual([]);
+    expect(r.retried).toBe(false);
+  });
 });

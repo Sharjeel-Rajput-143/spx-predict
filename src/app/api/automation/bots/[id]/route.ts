@@ -12,10 +12,12 @@ import {
   isDryRun,
 } from "@/lib/automation/config";
 import { countTodayErrors } from "@/lib/automation/errors";
+import { realizedToday } from "@/lib/automation/lossLimit";
 import { computeStats } from "@/lib/automation/pnl";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { activePositionsForBot, countTodayNewPositions, sumActiveAllocationRisk } from "@/lib/automation/safeguards";
 import { MOCK_PRICING_SIMULATED } from "@/lib/automation/sharedExecutor";
+import { easternDateKey } from "@/lib/automation/tradingHours";
 import { botsStore, decisionsStore, ordersStore, positionsStore, runsStore, signalsStore } from "@/lib/automation/store";
 import { DEFAULT_ALERTS, type BotStaticConfig } from "@/lib/automation/types";
 import { deferWork, withStorage } from "@/lib/automation/withStorage";
@@ -104,6 +106,7 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       dayTradingAllowed: limits.dayTradingAllowed,
       totalPositionLimit: limits.totalPositionLimit,
       dailyNewPositionLimit: limits.dailyNewPositionLimit,
+      dailyLossLimit: limits.dailyLossLimit,
       errorFailsafeThreshold: ERROR_FAILSAFE_THRESHOLD,
       dedupeWindowSeconds: DEDUPE_WINDOW_SECONDS,
       flipCooldownSeconds: getFlipCooldownSeconds(),
@@ -112,6 +115,11 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       hours: { start: clock(getGlobalWindow().startMinutes), end: clock(getGlobalWindow().endMinutes), timezone: TRADING_HOURS.timezone },
       dryRun: isDryRun(),
     },
+    dayLoss: (() => {
+      const today = realizedToday(id, now);
+      const last = record.lossCheck && easternDateKey(record.lossCheck.at) === easternDateKey(now) ? record.lossCheck : null;
+      return { limit: limits.dailyLossLimit, realized: today.realized, closedToday: today.closedToday, unpriced: today.unpriced, lastCheck: last };
+    })(),
     counts: {
       errorsToday: countTodayErrors(id, now),
       newPositionsToday: countTodayNewPositions(id, now, record.dailyResetAt),

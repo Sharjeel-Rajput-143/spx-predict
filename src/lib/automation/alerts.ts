@@ -39,6 +39,7 @@ const KIND_BY_OUTCOME: Partial<Record<DecisionOutcome, AlertKind>> = {
   allocation_limit_reached: "warning",
   total_position_limit_reached: "warning",
   daily_limit_reached: "warning",
+  daily_loss_limit_reached: "warning",
   overlapping_strikes: "warning",
   size_too_small: "warning",
   day_trading_blocked: "warning",

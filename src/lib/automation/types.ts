@@ -43,6 +43,7 @@ export type DecisionOutcome =
   | "already_in_position"
   | "total_position_limit_reached"
   | "daily_limit_reached"
+  | "daily_loss_limit_reached"
   | "allocation_limit_reached"
   | "invalid_strikes"
   | "symbol_mismatch"
@@ -171,6 +172,22 @@ export interface BotSafeguards {
   maxPositionsPerType?: number;
   /** False = a signal never closes a position that was opened the same day. Unset = allowed. */
   dayTrading?: boolean;
+  /** Dollars: new opens are refused once today's realized loss plus the open loss reaches this. 0 = off for this bot; unset = the DAILY_LOSS_LIMIT default. Closes are never blocked. */
+  dailyLossLimit?: number;
+}
+
+/** One evaluation of the daily loss limit, kept on the bot so its Settings tab can show it. */
+export interface LossCheckSnapshot {
+  at: number;
+  limit: number;
+  realized: number;
+  /** The open loss (0 or below), or null when it could not be worked out. */
+  openLoss: number | null;
+  openLossWhy?: string;
+  total: number;
+  hit: boolean;
+  closedToday: number;
+  unpriced: number;
 }
 
 /** Which kinds of events raise an in-app alert for this bot. */
@@ -197,6 +214,8 @@ export interface Bot {
   killSwitch?: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
+  /** The last evaluation of the daily loss limit (see lossLimit.ts), for the Settings tab. */
+  lossCheck?: LossCheckSnapshot;
   createdAt: number;
   name?: string;
   /** Free-form grouping label ("Bot Group"). */
@@ -455,6 +474,8 @@ export interface BrokerPosition {
   symbol: string;
   /** Contracts: negative = short. */
   quantity: number;
+  /** The broker's own mark for the option (per contract unit), when the bridge gives one. */
+  marketPrice?: number;
 }
 
 /** The legs of a spread, to ask for a quote on. */
@@ -494,6 +515,8 @@ export interface BrokerExecutor {
   getBalances?(): Promise<BrokerBalances>;
   /** Whether the broker's own answer says this is a paper account (the bridge's /health `paper`). Absent on executors that are not a real broker. */
   isPaperAccount?(): Promise<boolean>;
+  /** The broker's mark for a held spread (the short leg's market price less the long leg's), or null when it is not known. Never a guess. */
+  getSpreadMark?(position: Position, quantity: number): Promise<number | null>;
 }
 
 export interface BrokerBalances {

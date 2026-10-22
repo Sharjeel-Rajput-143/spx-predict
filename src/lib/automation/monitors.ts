@@ -136,7 +136,7 @@ export function runCloseMonitor(botId: string, key: MonitorKey, now: number = Da
           continue;
         }
 
-        const closed = await closePosition(position, { id: confirmed.id, price: null }, executor, closeTimeoutMs, options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS, now, pricingFor(config, "close", options.ladderStepMs), undefined, { chase: true });
+        const closed = await closePosition(position, { id: confirmed.id, price: null }, executor, closeTimeoutMs, options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS, now, pricingFor(config, "close", options.ladderStepMs), undefined, { chase: true, marks: true });
         const tags = settings.tags?.length ? [...new Set([...(fresh(position).tags ?? []), ...settings.tags])] : undefined;
         if (settings.memo || tags) {
           positionsStore.update(position.id, {

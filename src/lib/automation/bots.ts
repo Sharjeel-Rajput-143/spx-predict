@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import { ownerUserId } from "@/lib/auth/users";
 import { currentUserId } from "./userContext";
 import { SMART_PRICING_MODES, type SmartPricingMode } from "./smartPricing";
-import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, envNumber, envString, parseClockMinutes } from "./config";
+import { DAILY_NEW_POSITION_LIMIT, MAX_POSITIONS_PER_TYPE, TOTAL_POSITION_LIMIT, dailyLossLimitDefault, envNumber, envString, parseClockMinutes } from "./config";
 import {
   alertsStore,
   botsStore,
@@ -271,6 +271,8 @@ export function getBotStaticConfig(botId: string): BotStaticConfig {
 
 export interface BotLimits {
   dailyNewPositionLimit: number;
+  /** Dollars; 0 = off. */
+  dailyLossLimit: number;
   totalPositionLimit: number;
   maxPositionsPerType: number;
   dayTradingAllowed: boolean;
@@ -288,6 +290,7 @@ export function getBotLimits(botId: string): BotLimits {
   }
   return {
     dailyNewPositionLimit: sg.dailyNewPositionLimit ?? DAILY_NEW_POSITION_LIMIT,
+    dailyLossLimit: sg.dailyLossLimit ?? dailyLossLimitDefault(),
     totalPositionLimit: sg.totalPositionLimit ?? own ?? TOTAL_POSITION_LIMIT,
     maxPositionsPerType: sg.maxPositionsPerType ?? MAX_POSITIONS_PER_TYPE,
     dayTradingAllowed: sg.dayTrading ?? true,
@@ -375,6 +378,7 @@ export function validateSafeguards(s: BotSafeguards): string | null {
     if (v === undefined) continue;
     if (!isNum(v) || v <= 0 || (key !== "allocationLimit" && !Number.isInteger(v))) return `${label} must be a positive ${key === "allocationLimit" ? "number" : "whole number"}.`;
   }
+  if (s.dailyLossLimit !== undefined && (!isNum(s.dailyLossLimit) || s.dailyLossLimit < 0)) return "Daily loss limit must be a number of dollars, 0 or more (0 turns it off).";
   return null;
 }
 

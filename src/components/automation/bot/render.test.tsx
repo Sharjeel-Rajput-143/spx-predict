@@ -91,6 +91,7 @@ function fixture(over: Partial<BotDetailData> = {}): BotDetailData {
       dayTradingAllowed: true,
       totalPositionLimit: 1,
       dailyNewPositionLimit: 10,
+      dailyLossLimit: 0,
       errorFailsafeThreshold: 10,
       dedupeWindowSeconds: 120,
       flipCooldownSeconds: 0,
@@ -100,6 +101,7 @@ function fixture(over: Partial<BotDetailData> = {}): BotDetailData {
       dryRun: false,
     },
     counts: { errorsToday: 0, newPositionsToday: 2, activePositions: 1 },
+    dayLoss: { limit: 0, realized: 0, closedToday: 0, unpriced: 0, lastCheck: null },
     capital: { allocation: 20000, atRisk: 840, available: 19160, netLiquid: 20150 },
     stats: computeStats(positions),
     mockPricing: false,
@@ -238,6 +240,57 @@ describe("Settings", () => {
     const out = html(<SettingsTab ctx={ctxFor({ ...d, config: null, bot: { ...d.bot, configError: "BOT_X_PUT_SHORT_OFFSET is required" } })} />);
     expect(out).toContain("BOT_X_PUT_SHORT_OFFSET is required");
     expect(out).toContain("Set the inputs");
+  });
+});
+
+describe("Settings: the daily loss limit and today's result", () => {
+  const withLoss = (limit: number, over: Partial<ReturnType<typeof fixture>["dayLoss"]> = {}) => {
+    const d = fixture();
+    return { ...d, limits: { ...d.limits, dailyLossLimit: limit }, dayLoss: { limit, realized: -200, closedToday: 2, unpriced: 0, lastCheck: null, ...over } };
+  };
+
+  it("off: says Off, and still shows what today's realized result is", () => {
+    const out = html(<SettingsTab ctx={ctxFor(withLoss(0))} />);
+    expect(out).toContain("Daily loss limit");
+    expect(out).toMatch(/Daily loss limit<[^>]*>[\s\S]*?Off/);
+    expect(out).toContain("Today: realized -$200.00 (2 closed or expired)");
+    expect(out).not.toContain("Last check");
+  });
+
+  it("on: shows the limit, today's realized result and the last evaluation with its open loss", () => {
+    const at = Date.UTC(2026, 9, 6, 14, 40);
+    const out = html(<SettingsTab ctx={ctxFor(withLoss(300, { lastCheck: { at, limit: 300, realized: -200, openLoss: -45, total: -245, hit: false } }))} />);
+    expect(out).toContain("$300.00");
+    expect(out).toContain("Today: realized -$200.00 (2 closed or expired)");
+    expect(out).toContain("Last check 10:40 AM ET: open loss -$45.00, total -$245.00 against the $300.00 limit");
+    expect(out).not.toContain("LIMIT REACHED");
+  });
+
+  it("an open loss that could not be worked out says so", () => {
+    const at = Date.UTC(2026, 9, 6, 14, 40);
+    const out = html(<SettingsTab ctx={ctxFor(withLoss(300, { lastCheck: { at, limit: 300, realized: -200, openLoss: null, openLossWhy: "no mark", total: -200, hit: false } }))} />);
+    expect(out).toContain("open loss unknown (not counted)");
+  });
+
+  it("when the limit is reached it says new opens are refused", () => {
+    const at = Date.UTC(2026, 9, 6, 14, 40);
+    const out = html(<SettingsTab ctx={ctxFor(withLoss(100, { lastCheck: { at, limit: 100, realized: -200, openLoss: 0, total: -200, hit: true } }))} />);
+    expect(out).toContain("LIMIT REACHED: new opens are refused");
+  });
+
+  it("unpriced closes are named, not hidden", () => {
+    const out = html(<SettingsTab ctx={ctxFor(withLoss(100, { unpriced: 1 }))} />);
+    expect(out).toContain("1 with no price counted as 0");
+  });
+
+  it("the Safeguards panel has a Daily loss limit field: blank by default, with the saved value shown when there is one", () => {
+    const blank = html(<SafeguardsDrawer ctx={ctxFor(fixture())} onClose={() => undefined} />);
+    expect(blank).toContain("Daily loss limit ($)");
+    expect(blank).toContain('aria-label="Daily loss limit"');
+    expect(blank).toContain("blank = default");
+    const d = fixture();
+    const saved = html(<SafeguardsDrawer ctx={ctxFor({ ...d, bot: { ...d.bot, safeguards: { dailyLossLimit: 25 } } })} onClose={() => undefined} />);
+    expect(saved).toMatch(/aria-label="Daily loss limit"[^>]*value="25"|value="25"[^>]*aria-label="Daily loss limit"/);
   });
 });
 

@@ -61,6 +61,26 @@ export function closeChaseMax(): number {
     return 0; // an unreadable value turns the chase off; it never stops a close
   }
 }
+/**
+ * REHEARSAL ONLY: with CLOSE_USE_MARKS=1 a close on a paper account is never sent above the broker's own mark + CLOSE_MAX_ABOVE_MARKET
+ * (see closeMarks.ts). Off unless it is exactly "1" or "true". The engine ignores it unless the bridge says the account is paper.
+ */
+export function closeUseMarks(): boolean {
+  const raw = (process.env.CLOSE_USE_MARKS ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+/**
+ * The default daily loss limit in dollars (DAILY_LOSS_LIMIT): new opens are refused once today's realized loss plus the open loss reaches it
+ * (see lossLimit.ts). 0 or unset = off. A bot's own Safeguards value overrides it. A value that is not a number is off, never an error.
+ */
+export function dailyLossLimitDefault(): number {
+  try {
+    const n = envNumber("DAILY_LOSS_LIMIT", 0);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 export const ERROR_FAILSAFE_THRESHOLD = envNumber("ERROR_FAILSAFE_THRESHOLD", 10);
 export const ORDER_FILL_TIMEOUT_SECONDS = envNumber("ORDER_FILL_TIMEOUT_SECONDS", 120);
 export const CLOSE_CONFIRM_TIMEOUT_SECONDS = envNumber("CLOSE_CONFIRM_TIMEOUT_SECONDS", 120);

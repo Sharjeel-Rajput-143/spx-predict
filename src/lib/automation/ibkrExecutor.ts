@@ -5,6 +5,7 @@ import { positionsStore } from "./store";
 import type { BrokerExecutor, BrokerPosition, CloseOrderOptions, ExecutorVenue, OpenSpreadRequest, OrderState, OrderStatus, Position, SpreadQuoteRequest, UnderlyingQuote } from "./types";
 import { BridgeHttpError, OrderNotPlacedError, isRefusalStatus } from "./orderErrors";
 import { readBrokerTrail } from "./orderEnd";
+import { spreadMarkOf } from "./closeMarks";
 
 /**
  * Interactive Brokers (paper) behind the BrokerExecutor interface, reached through the BRIDGE: a small always-on server that holds the
@@ -350,11 +351,20 @@ export class IbkrExecutor implements BrokerExecutor {
     const json = await this.call("GET", "/positions", { timeoutMs: ORDER_TIMEOUT_MS });
     if (!Array.isArray(json.positions)) throw new Error("The bridge's positions answer has no list of positions.");
     return json.positions.map((p: unknown) => {
-      const o = p as { symbol?: unknown; quantity?: unknown };
+      const o = p as { symbol?: unknown; quantity?: unknown; marketPrice?: unknown };
       const quantity = Number(o?.quantity);
       if (typeof o?.symbol !== "string" || !o.symbol || !Number.isFinite(quantity)) throw new Error("The bridge returned a position this engine can't read.");
-      return { symbol: o.symbol, quantity };
+      const mark = typeof o.marketPrice === "number" && Number.isFinite(o.marketPrice) && o.marketPrice > 0 ? o.marketPrice : undefined;
+      return { symbol: o.symbol, quantity, ...(mark !== undefined ? { marketPrice: mark } : {}) };
     });
+  }
+
+  /** The broker's mark for a held spread, from the account's own positions (see closeMarks.ts). Null when the account does not show the whole spread with a mark on each leg. */
+  async getSpreadMark(position: Position, quantity: number): Promise<number | null> {
+    if (!position.optionRoot) return null;
+    const right = position.type === "short_put_spread" ? "put" : "call";
+    const legs = { short: occSymbol(position.optionRoot, position.expiry, right, position.shortStrike), long: occSymbol(position.optionRoot, position.expiry, right, position.longStrike) };
+    return spreadMarkOf(await this.listBrokerPositions(), legs, quantity);
   }
 
   /** Our own rows for this bot; the broker's account positions are checked against them by reconcile. */

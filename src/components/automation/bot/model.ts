@@ -39,6 +39,8 @@ export interface BotDetailData {
     dayTradingAllowed: boolean;
     totalPositionLimit: number;
     dailyNewPositionLimit: number;
+    /** Dollars; 0 = off. */
+    dailyLossLimit: number;
     errorFailsafeThreshold: number;
     dedupeWindowSeconds: number;
     flipCooldownSeconds: number;
@@ -48,6 +50,14 @@ export interface BotDetailData {
     dryRun: boolean;
   };
   counts: { errorsToday: number; newPositionsToday: number; activePositions: number };
+  /** Today's result against the daily loss limit: the realized part, worked out live, and the last evaluation (which includes the open loss). */
+  dayLoss: {
+    limit: number;
+    realized: number;
+    closedToday: number;
+    unpriced: number;
+    lastCheck: { at: number; limit: number; realized: number; openLoss: number | null; openLossWhy?: string; total: number; hit: boolean } | null;
+  };
   capital: { allocation: number; atRisk: number; available: number; netLiquid: number | null } | null;
   stats: PositionStats;
   /** True when the mock executor is making up close prices (never real). */
@@ -90,6 +100,7 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   day_trading_blocked: { label: "Day trading off", tone: "warn" },
   total_position_limit_reached: { label: "Position limit", tone: "warn" },
   daily_limit_reached: { label: "Daily limit", tone: "warn" },
+  daily_loss_limit_reached: { label: "Daily loss limit", tone: "warn" },
   allocation_limit_reached: { label: "Allocation limit", tone: "warn" },
   overlapping_strikes: { label: "Strikes overlap", tone: "warn" },
   webhook_text_mismatch: { label: "Alert text doesn't match", tone: "error" },

@@ -575,9 +575,12 @@ function NotesCard({ ctx }: { ctx: BotContext }) {
 // Safeguards, timing, alerts
 // ---------------------------------------------------------------------------
 
+const signedUsd = (n: number) => `${n < 0 ? "-" : n > 0 ? "+" : ""}${usd2(Math.abs(n))}`;
+const checkTime = (ms: number) => `${new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET`;
+
 function SafeguardsCard({ ctx }: { ctx: BotContext }) {
   const { data, notify, reload } = ctx;
-  const { limits, config, counts } = data;
+  const { limits, config, counts, dayLoss } = data;
   const [editing, setEditing] = useState(false);
 
   const resetDaily = async () => {
@@ -599,6 +602,18 @@ function SafeguardsCard({ ctx }: { ctx: BotContext }) {
               reset
             </button>
           </span>
+        </Stat>
+        <Stat label="Daily loss limit" tip="New opens are refused once today's realized loss plus the open position's loss reaches this. Closing is never blocked, the bot stays on, and it starts again at zero each New York trading day.">
+          {limits.dailyLossLimit > 0 ? usd2(limits.dailyLossLimit) : "Off"}
+          <span className="block text-xs font-normal text-faint" data-testid="day-result">
+            Today: realized {signedUsd(dayLoss.realized)} ({dayLoss.closedToday} closed or expired{dayLoss.unpriced > 0 ? `, ${dayLoss.unpriced} with no price counted as 0` : ""})
+          </span>
+          {dayLoss.lastCheck && (
+            <span className="block text-xs font-normal text-faint" data-testid="last-check">
+              Last check {checkTime(dayLoss.lastCheck.at)}: open loss {dayLoss.lastCheck.openLoss === null ? "unknown (not counted)" : signedUsd(dayLoss.lastCheck.openLoss)}, total {signedUsd(dayLoss.lastCheck.total)} against the {usd2(dayLoss.lastCheck.limit)} limit
+              {dayLoss.lastCheck.hit ? " - LIMIT REACHED: new opens are refused" : ""}
+            </span>
+          )}
         </Stat>
         <Stat label="Position limit" tip="Positions the bot may hold at once, closing ones included.">{limits.totalPositionLimit} at once</Stat>
         <Stat label="Day trading" tip="Not allowed: a signal never closes a position opened the same day. 0DTE positions are always same-day, so flips are skipped and the position is held to expiry.">
@@ -623,9 +638,10 @@ export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: (
   const [total, setTotal] = useState(limits.totalPositionLimit);
   const [perType, setPerType] = useState(limits.maxPositionsPerType);
   const [dayTrading, setDayTrading] = useState(limits.dayTradingAllowed);
+  const [lossLimit, setLossLimit] = useState(data.bot.safeguards?.dailyLossLimit !== undefined ? String(data.bot.safeguards.dailyLossLimit) : "");
 
   const save = async (reset: boolean) => {
-    const body: BotSafeguards = reset ? {} : { allocationLimit: Number(allocation), dailyNewPositionLimit: daily, totalPositionLimit: total, maxPositionsPerType: perType, dayTrading };
+    const body: BotSafeguards = reset ? {} : { allocationLimit: Number(allocation), dailyNewPositionLimit: daily, totalPositionLimit: total, maxPositionsPerType: perType, dayTrading, ...(lossLimit.trim() !== "" ? { dailyLossLimit: Number(lossLimit) } : {}) };
     if (await patch({ safeguards: body }, reset ? "Safeguards reset to defaults." : "Safeguards saved.")) onClose();
   };
 
@@ -652,6 +668,9 @@ export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: (
       <div className="space-y-5">
         <Field label="Allocation" hint="Total capital to open positions.">
           <input className={inputClass} inputMode="decimal" value={allocation} onChange={(e) => setAllocation(e.target.value)} />
+        </Field>
+        <Field label="Daily loss limit ($)" hint="New opens stop for the day once today's realized loss plus the open loss reaches this. Closes are never blocked. Blank uses the DAILY_LOSS_LIMIT setting (off if unset); 0 turns it off for this bot.">
+          <input className={inputClass} inputMode="decimal" value={lossLimit} onChange={(e) => setLossLimit(e.target.value)} aria-label="Daily loss limit" placeholder="blank = default" />
         </Field>
         <Field label="Daily positions" hint="Max positions opened in one day.">
           {select(daily, setDaily, [1, 2, 3, 4, 5, 10, 15, 20, 25, 50, 100], (n) => `${n} per day`)}

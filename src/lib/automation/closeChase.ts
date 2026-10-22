@@ -25,6 +25,8 @@ export interface ChaseInput {
   max: number;
   /** The spread's width in points: a close is never priced at or above it. */
   width?: number;
+  /** A price the chase never goes above (the broker's mark + CLOSE_MAX_ABOVE_MARKET, when CLOSE_USE_MARKS is in force). */
+  ceiling?: number;
 }
 
 export type ChaseResult = { ok: true; prices: number[]; limit: number; step: number } | { ok: false; reason: string };
@@ -38,7 +40,7 @@ export function chaseRungs(input: ChaseInput): ChaseResult {
   if (top < worst - 1e-9) return { ok: false, reason: `the ladder's top price ${top.toFixed(2)} is below the quote's worst price ${worst.toFixed(2)}` };
   const step = prices.length >= 2 ? cents(top - prices[prices.length - 2]) : CHASE_FALLBACK_STEP;
   if (!(step > 0)) return { ok: false, reason: "the ladder has no step to continue with" };
-  const limit = Math.min(cents(worst + max), width !== undefined ? cents(width - DEFAULT_PRICE_TICK) : Infinity);
+  const limit = Math.min(cents(worst + max), width !== undefined ? cents(width - DEFAULT_PRICE_TICK) : Infinity, input.ceiling ?? Infinity);
   const out: number[] = [];
   for (let k = 1; k < 1000; k++) {
     const p = toTick(top + k * step);

@@ -20,6 +20,7 @@ export class RoutedExecutor implements BrokerExecutor {
   getSpreadQuote?: (req: SpreadQuoteRequest) => Promise<LegQuotes | null>;
   getUnderlyingQuote?: (symbol: string) => Promise<UnderlyingQuote | null>;
   isPaperAccount?: () => Promise<boolean>;
+  getSpreadMark?: (position: Position, quantity: number) => Promise<number | null>;
   listBrokerPositions?: () => Promise<BrokerPosition[]>;
   getBalances?: () => Promise<BrokerBalances>;
 
@@ -37,6 +38,7 @@ export class RoutedExecutor implements BrokerExecutor {
     if (p.listBrokerPositions) this.listBrokerPositions = () => p.listBrokerPositions!();
     if (p.getBalances) this.getBalances = () => p.getBalances!();
     if (p.isPaperAccount) this.isPaperAccount = () => p.isPaperAccount!();
+    if (p.getSpreadMark) this.getSpreadMark = (position, quantity) => (this.takes(position.underlying) ? p.getSpreadMark!(position, quantity) : Promise.resolve(null));
   }
 
   /** Whether the primary (the real broker) takes this underlying. Unknown counts as yes: nothing is rerouted on a guess. */

@@ -288,6 +288,44 @@ describe("a close that is refused before an order exists, and one that may exist
   });
 });
 
+describe("the broker's marks, from the account's positions", () => {
+  const held = () => ({ ...heldPut(), expiry: "2026-10-06", requestedQuantity: 1, filledQuantity: 1 });
+  const rows = (short: unknown, long: unknown) => ({ body: { positions: [{ symbol: "NDXP261006P20970000", quantity: -1, marketPrice: short }, { symbol: "NDXP261006P20960000", quantity: 1, marketPrice: long }] } });
+
+  it("listBrokerPositions reads each leg's marketPrice, and ignores one that is missing, zero, negative or not a number", async () => {
+    const { impl } = fakeBridge([rows(11.65, 7.87), rows(0, "x"), { body: { positions: [{ symbol: "A", quantity: 1 }] } }]);
+    const ex = new IbkrExecutor(cfg, impl);
+    expect(await ex.listBrokerPositions()).toEqual([
+      { symbol: "NDXP261006P20970000", quantity: -1, marketPrice: 11.65 },
+      { symbol: "NDXP261006P20960000", quantity: 1, marketPrice: 7.87 },
+    ]);
+    expect(await ex.listBrokerPositions()).toEqual([{ symbol: "NDXP261006P20970000", quantity: -1 }, { symbol: "NDXP261006P20960000", quantity: 1 }]);
+    expect(await ex.listBrokerPositions()).toEqual([{ symbol: "A", quantity: 1 }]);
+  });
+
+  it("getSpreadMark gives the short leg's mark less the long leg's, and null when it is not known", async () => {
+    const { impl } = fakeBridge([rows(11.65, 7.87), rows(11.65, undefined), { body: { positions: [] } }]);
+    const ex = new IbkrExecutor(cfg, impl);
+    expect(await ex.getSpreadMark(held(), 1)).toBe(3.78);
+    expect(await ex.getSpreadMark(held(), 1)).toBeNull();
+    expect(await ex.getSpreadMark(held(), 1)).toBeNull();
+  });
+
+  it("a position with no option root has no mark", async () => {
+    const ex = new IbkrExecutor(cfg, fakeBridge([]).impl);
+    expect(await ex.getSpreadMark({ ...held(), optionRoot: undefined }, 1)).toBeNull();
+  });
+
+  it("the routed executor asks the bridge for an NDX mark and never for any other underlying", async () => {
+    const { calls, impl } = fakeBridge([rows(11.65, 7.87)]);
+    const routed = new RoutedExecutor(new IbkrExecutor(cfg, impl), new MockExecutor(), ["NDX"]);
+    expect(await routed.getSpreadMark!({ ...held(), underlying: "SPX" }, 1)).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(await routed.getSpreadMark!(held(), 1)).toBe(3.78);
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("what the bridge says about an order's life (ibkrStatus, permId, events)", () => {
   it("is read onto the order state, last events kept, anything malformed dropped", () => {
     const events = Array.from({ length: 25 }, (_, i) => ({ time: `10:00:${String(i).padStart(2, "0")}`, status: i === 24 ? "Cancelled" : "Submitted", ...(i === 24 ? { code: 202, message: "Order Canceled - reason: x".repeat(40) } : {}) }));
