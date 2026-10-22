@@ -1337,24 +1337,167 @@ describe("CLOSE_USE_MARKS: the broker's marks as a ceiling for closes", () => {
     expect(steps()).toMatch(/refused by the broker's price band/);
   });
 
-  it("an open is never priced from the marks, and neither is the close inside a flip", async () => {
+  it("an open is never priced from the marks", async () => {
     vi.stubEnv("CLOSE_USE_MARKS", "1");
     markIs(1.2);
     bridge.fill = "never";
     await run("bullish", "b1"); // the open ladder: the quote's, untouched
     const opens = bridge.calls("/open_spread").map((r) => Number(r.body?.limitCredit));
     expect(opens).toEqual([3.3, 3.1, 2.9, 2.7]);
+  });
 
-    resetAutomationStores();
-    setNdxTestEnv();
-    bridge = new FakeBridge();
-    executor = new IbkrExecutor(cfg, bridge.fetch);
-    ensureBotRecord(NDX_BOT_ID);
-    await run("bullish", "b1");
-    markIs(1.2);
-    bridge.closeFillAtOrAbove = 99;
-    await run("bearish", "b2", BASE_NOW + 5 * MIN);
-    expect(closePrices()).toEqual(LADDER); // a flip's close is the quote's ladder
+  describe("the close inside a flip", () => {
+    const heldPut = async () => {
+      await run("bullish", "b1");
+      bridge.requests.length = 0; // only what the flip sends from here
+      return mine()[0];
+    };
+    const flip = (n = 2) => run("bearish", `b${n}`, BASE_NOW + 5 * MIN);
+    const flipSteps = () =>
+      runsStore
+        .all()
+        .flatMap((r) => r.nodes)
+        .filter((x) => x.kind === "action" && x.action === "close")
+        .flatMap((x) => (x.kind === "action" ? (x.steps ?? []) : []))
+        .join("\n");
+
+    it("is capped by the broker's marks: rebuilt from the mark, nothing above mark + 1.00", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(1.2); // ceiling 2.20; the quote's ladder would run 3.30 to 3.90
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual([1.2, 1.55, 1.85, 2.2]);
+      expect(Math.max(...closePrices())).toBeLessThanOrEqual(2.2);
+      expect(flipSteps()).toMatch(/The quote's mid 3\.30 is above the broker's mark: the broker's mark is 1\.20, so the ceiling is 1\.20 \+ 1\.00 = 2\.20\. Priced from the marks instead/);
+    });
+
+    it("when a capped price fills, the flip completes: the old side closes, then the new side opens (an open is never capped)", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(1.2);
+      bridge.closeFillAtOrAbove = 1.55;
+      await flip();
+      expect(closePrices()).toEqual([1.2, 1.55]);
+      expect(bridge.placed()).toEqual(["close PUT 20970/20960", "close PUT 20970/20960", "open CALL 21035/21045"]); // the first capped price did not fill, the second did
+      expect(mine().map((p) => `${p.type}:${p.status}`)).toEqual(["short_put_spread:closed", "short_call_spread:open"]);
+      expect(bridge.calls("/open_spread").map((r) => Number(r.body?.limitCredit))[0]).toBe(3.3); // the open's price is the quote's
+    });
+
+    it("a ladder already within the ceiling is left alone, and the Log says the marks were checked", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(3.5); // ceiling 4.50
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual(LADDER);
+      expect(flipSteps()).toMatch(/Broker marks checked: the broker's mark is 3\.50, so the ceiling is 3\.50 \+ 1\.00 = 4\.50; the ladder is within it\./);
+    });
+
+    it("is off by default: without CLOSE_USE_MARKS the flip's close is the quote's ladder", async () => {
+      await heldPut();
+      markIs(1.2);
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual(LADDER);
+      expect(flipSteps()).not.toMatch(/mark/i);
+    });
+
+    it("on a non-paper account the setting is ignored, and the Log says so", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(1.2);
+      bridge.paperOverride = false;
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual(LADDER);
+      expect(flipSteps()).toMatch(/CLOSE_USE_MARKS is on but it is ignored, because the bridge does not say this is a paper account/);
+    });
+
+    it("with no mark the quote's ladder stands, and the Log says why", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      bridge.legMarks = { short: 3.2, long: null };
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual(LADDER);
+      expect(flipSteps()).toMatch(/Broker marks: not used \(the account does not show both legs of the spread with a mark\)/);
+    });
+
+    it("never chases, even with CLOSE_CHASE_MAX set: the ladder ends at its top price", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      vi.stubEnv("CLOSE_CHASE_MAX", "3");
+      await heldPut();
+      markIs(3.5); // ceiling 4.50: a manual close would go on 4.10, 4.30, 4.50
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      expect(closePrices()).toEqual(LADDER);
+      expect(flipSteps()).not.toMatch(/chase/i);
+    });
+
+    it("a price band refusal still re-prices inside the band, and never above the ceiling", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(1.2); // ceiling 2.20
+      bridge.band = { edge: 1.85, marketPrice: 1.6 };
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      const prices = closePrices();
+      const at = prices.indexOf(1.85);
+      expect(at).toBeGreaterThan(0);
+      const after = prices.slice(at + 1);
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.every((x) => x < 1.85)).toBe(true);
+      expect(Math.max(...prices)).toBeLessThanOrEqual(2.2);
+      expect(flipSteps()).toMatch(/refused by the broker's price band/);
+    });
+
+    it("a close that does not fill leaves the flip with no new side: the old position stays open, nothing is opened, the bot is flagged", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      const put = await heldPut();
+      markIs(1.2);
+      bridge.closeFillAtOrAbove = 99; // nothing fills at the capped prices
+      await flip();
+      expect(bridge.calls("/open_spread")).toHaveLength(0);
+      expect(bridge.calls("/close_spread").length).toBeGreaterThan(0);
+      expect(positionsStore.get(put.id)?.status).toBe("open");
+      expect(mine().filter((p) => ["open", "opening", "closing"].includes(p.status))).toHaveLength(1);
+      expect(outcomes().at(-1)).toMatch(/^close_/);
+      expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
+      expect(bridge.heldLegs()).toHaveLength(2); // the account still holds only the put spread
+    });
+
+    it("a refused close order (no order exists) also opens nothing new", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      const put = await heldPut();
+      markIs(1.2);
+      bridge.down.add("close_spread");
+      await flip();
+      expect(bridge.calls("/open_spread")).toHaveLength(0);
+      expect(positionsStore.get(put.id)?.status).toBe("open");
+    });
+
+    it("a dry run changes nothing and sends nothing", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      await heldPut();
+      markIs(1.2);
+      await processSignal(alert("bearish", "d1", BASE_NOW + 5 * MIN), { executor, now: BASE_NOW + 5 * MIN, ...fast, dryRun: true });
+      expect(bridge.placed()).toEqual([]);
+    });
+
+    it("a partial close in a flip (a trigger that closes 1 of 2 contracts) is capped the same way", async () => {
+      vi.stubEnv("CLOSE_USE_MARKS", "1");
+      vi.stubEnv("BOT_NDX_EMA_BIAS_QUANTITY", "2");
+      await heldPut();
+      botsStore.update(NDX_BOT_ID, { closeSettings: { bearish: { quantity: { mode: "contracts", value: 1 } } } });
+      markIs(1.2);
+      bridge.closeFillAtOrAbove = 99;
+      await flip();
+      const closes = bridge.calls("/close_spread");
+      expect(closes.length).toBeGreaterThan(0);
+      expect(closes.every((r) => r.body?.quantity === 1)).toBe(true);
+      expect(Math.max(...closePrices())).toBeLessThanOrEqual(2.2);
+    });
   });
 });
 

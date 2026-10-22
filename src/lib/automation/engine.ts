@@ -775,7 +775,9 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
       continue;
     }
 
-    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, applyClosePricing(pricingFor(staticConfig, "close", options.ladderStepMs), ownClose), contracts < total ? contracts : undefined);
+    // REHEARSAL (CLOSE_USE_MARKS, paper only): the flip's close is capped by the broker's marks like a manual close is. Never the chase, and
+    // nothing here touches the open that follows. If this close fails, the flip stops below and nothing new is opened, as before.
+    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, applyClosePricing(pricingFor(staticConfig, "close", options.ladderStepMs), ownClose), contracts < total ? contracts : undefined, { marks: true });
     // The Memo and Tags set on this trigger's Close Position step go on the position it closed.
     const stepNote = bot.closeSettings?.[direction];
     if (stepNote?.memo || stepNote?.tags?.length) {
