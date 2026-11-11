@@ -2,14 +2,15 @@
  * Which broker the app talks to, and where its prices come from. Plain functions of the environment (no server-only, no imports),
  * so config.ts, store.ts and the executors all read the setting the same way.
  *
- *   BROKER=internal | ibkr | tradier   (EXECUTOR=mock | ibkr | tradier is the older spelling of the same switch)
+ *   BROKER=internal | deriv | bybit | tradier  (EXECUTOR=mock | tradier | deriv | bybit is the older spelling of the same switch)
+ *   The Interactive Brokers (ibkr) backend is still built and still selectable, but it is hidden: it is not advertised while Deriv is the broker.
  *   PRICE_SOURCE=feed | broker         (feed: Google/Yahoo, the default; broker: the broker's own index quote)
  *
  * "internal" is the app's own simulation (the mock executor): nothing reaches a broker. Anything unrecognised is an error,
  * never a silent fallback to something else.
  */
 
-export type ExecutorKind = "mock" | "tradier" | "ibkr";
+export type ExecutorKind = "mock" | "tradier" | "ibkr" | "deriv" | "bybit";
 export type PriceSource = "feed" | "broker";
 
 type Env = Record<string, string | undefined>;
@@ -18,8 +19,8 @@ const clean = (v: string | undefined) => (v ?? "").trim().toLowerCase();
 
 function parseKind(name: "BROKER" | "EXECUTOR", raw: string): ExecutorKind {
   if (raw === "mock" || raw === "internal") return "mock";
-  if (raw === "tradier" || raw === "ibkr") return raw;
-  throw new Error(`${name} must be ${name === "BROKER" ? '"internal" or "ibkr" (or "tradier")' : '"mock" or "tradier" (or "ibkr")'}, got "${raw}".`);
+  if (raw === "tradier" || raw === "ibkr" || raw === "deriv" || raw === "bybit") return raw;
+  throw new Error(`${name} must be ${name === "BROKER" ? '"internal", "deriv" or "bybit" (or "tradier")' : '"mock" or "tradier" (or "deriv" or "bybit")'}, got "${raw}".`);
 }
 
 /** The broker setting. Both spellings set and disagreeing is an error: it is never guessed which one was meant. */
@@ -53,3 +54,6 @@ export function priceSource(env: Env = process.env): PriceSource {
   if (raw !== "feed" && raw !== "broker") throw new Error(`PRICE_SOURCE must be "feed" or "broker", got "${raw}".`);
   return raw;
 }
+
+/** The underlying the Bybit demo executor serves, and the only one: the BTC Bybit Bot's. Every other bot (the NDX Bias Bot included) stays on the internal simulation when BROKER=bybit. */
+export const BYBIT_UNDERLYING = "BTC";

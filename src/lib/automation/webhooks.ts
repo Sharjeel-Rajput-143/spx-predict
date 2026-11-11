@@ -105,6 +105,21 @@ export function attachWebhook(webhookId: string, botId: string, direction: Signa
   return { webhook: attached, replaced: previous, changed: true };
 }
 
+/**
+ * Moves an attached webhook to the SAME trigger (bullish or bearish) of another bot, keeping its token, name and URL, so the alert that calls it needs no change.
+ * Both steps are logged (detached from the old bot, attached to the new one). Nothing happens when it is already on that bot. If the new trigger already holds another
+ * webhook, that one is replaced (and left unattached), as attaching always does. Callers hold the bots' locks.
+ */
+export function repointWebhook(webhookId: string, botId: string, now: number = Date.now()): AttachResult {
+  const hook = webhooksStore.get(webhookId);
+  if (!hook) throw new Error("Webhook not found.");
+  if (!isAttached(hook)) throw new Error(`"${hook.name}" is not attached to a trigger, so there is nothing to move.`);
+  checkTrigger(botId, hook.direction);
+  if (hook.botId === botId) return { webhook: hook, replaced: null, changed: false };
+  detachTrigger(hook.botId, hook.direction, now, `moved to ${botDisplayName(botId)}`);
+  return attachWebhook(hook.id, botId, hook.direction, now);
+}
+
 /** Detaches whatever webhook is on a trigger. Its URL stops working until it is attached again. Logged. Returns it, or null if there was none. */
 export function detachTrigger(botId: string, direction: SignalDirection, now: number = Date.now(), why = "detached"): Webhook | null {
   checkTrigger(botId, direction);

@@ -203,3 +203,27 @@ describe("the Trades list shows what the broker said about a refused price", () 
     expect(out).not.toContain("price band");
   });
 });
+
+describe("a Deriv position's result", () => {
+  const deriv = (over: Partial<Position> = {}): Position => buildPosition({ id: "pd", type: "short_put_spread", status: "expired", shortStrike: 29250, longStrike: 29200, credit: 0.1, venue: "deriv", closedAt: NOW - 1000, requestedQuantity: 1, filledQuantity: 1, ...over });
+
+  it("says 'unknown, check Deriv' when the real result is not known, and shows no estimate and no spread payoff chart", () => {
+    const out = render(deriv({ resultUnknown: "unknown, check Deriv" }));
+    expect(out).toContain("unknown, check Deriv");
+    expect(out).not.toContain(">estimated<"); // no "estimated" label on the result
+    expect(out).toContain("A Deriv contract has no strikes: there is no spread payoff to draw.");
+  });
+
+  it("shows Deriv's own figure, labelled as from Deriv", () => {
+    const out = render(deriv({ settlement: { kind: "broker", pl: -10, at: NOW } }));
+    expect(out).toContain("-$10");
+    expect(out).toContain("from Deriv");
+    expect(out).toContain("reported by Deriv for the contract");
+    expect(out).not.toContain(">estimated<");
+  });
+
+  it("an ordinary position still draws its payoff", () => {
+    expect(render(open)).not.toContain("A Deriv contract has no strikes");
+  });
+});
+

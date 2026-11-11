@@ -1,3 +1,5 @@
+import { BYBIT_UNDERLYING } from "./executorKind";
+import { LIVE_BOT_ID, LIVE_LIMITS } from "./bybitLiveLimits";
 import "server-only";
 import { validateOpenSettings, type OpenSettings } from "./openSettings";
 import { validateCloseQuantity, validateClosePricing, type CloseQuantity, type ClosePricing } from "./closePricing";
@@ -77,7 +79,13 @@ export const missingSettingsOf = (err: unknown): { key: string; why: string }[] 
 const BUILT_IN_NAMES: Record<string, string> = {
   spx_ema_bias: "SPX EMA 9/20 Bias",
   ndx_ema_bias: "NDX Bias Bot",
+  btc_bybit: "BTC Bybit Bot",
+  [LIVE_BOT_ID]: "BTC Bybit LIVE Bot",
 };
+
+/** The dedicated bot for the Bybit demo account (BTCUSDT). It is the only bot whose orders go to Bybit (see BYBIT_UNDERLYING); the NDX Bias Bot has no link to it. */
+export const BTC_BOT_ID = "btc_bybit";
+
 
 export const botDisplayName = (botId: string): string => botsStore.get(botId)?.name ?? BUILT_IN_NAMES[botId] ?? botId;
 
@@ -116,6 +124,47 @@ function ndxConfig(): BotStaticConfig {
     // A sanity range for the signal's price is optional: set both ends to turn it on.
     ...optionalPriceRange("BOT_NDX_EMA_BIAS"),
     ...(hoursStart && hoursEnd ? { hours: { start: hoursStart, end: hoursEnd } } : {}),
+  };
+}
+
+/**
+ * The BTC Bybit Bot: the same signal engine as the other bots (a bullish signal goes long, a bearish one short, a flip closes the other side first), on the Bybit demo
+ * account only. Its "underlying" is BTC; the price it works from is Bybit's own (see tickStore). The strike and credit fields are the engine's bookkeeping units, not options:
+ * no option spread is ever created for it (the Bybit executor turns a position type into a long or a short).
+ */
+function btcConfig(): BotStaticConfig {
+  return {
+    id: BTC_BOT_ID,
+    name: BUILT_IN_NAMES.btc_bybit,
+    accountId: envString("BOT_BTC_BYBIT_ACCOUNT_ID", "bybit-demo"),
+    underlying: BYBIT_UNDERLYING,
+    optionRoot: "BTC",
+    quantity: 1,
+    widthPoints: 10,
+    strikeIncrement: 5,
+    putShortOffset: -0.01,
+    callShortOffset: 0.01,
+    ...pricingAndLimits("BOT_BTC_BYBIT", 1),
+    strikePriceSource: "alert",
+    allocationLimit: envNumber("BOT_BTC_BYBIT_ALLOCATION_LIMIT", 2000),
+    openingCreditEstimate: 3.5,
+    eodSweepTime: "16:05",
+    eodSweepMode: "estimate",
+  };
+}
+
+/**
+ * The LIVE bot: the same signal engine and the same BTC perpetual, on the real Bybit account (see bybitLive.ts). It starts OFF, and it is switched on and off only together with
+ * the live switch (liveSettings.ts). Its limits are written here and cannot be raised: one position at a time, five new positions a day.
+ */
+function liveConfig(): BotStaticConfig {
+  return {
+    ...btcConfig(),
+    id: LIVE_BOT_ID,
+    name: BUILT_IN_NAMES[LIVE_BOT_ID],
+    accountId: "bybit-live",
+    ...pricingAndLimits("BOT_BTC_BYBIT_LIVE", 1),
+    totalPositionLimit: LIVE_LIMITS.maxOpenPositions,
   };
 }
 
@@ -213,6 +262,8 @@ const STATIC_CONFIGS: Record<string, () => BotStaticConfig> = {
     ...optionalMinCredit("BOT_SPX_EMA_BIAS"),
   }),
   ndx_ema_bias: ndxConfig,
+  btc_bybit: btcConfig,
+  [LIVE_BOT_ID]: liveConfig,
 };
 
 export function isBuiltInBot(botId: string): boolean {
@@ -288,13 +339,20 @@ export function getBotLimits(botId: string): BotLimits {
   } catch {
     /* a bot still waiting for its inputs has no limit of its own */
   }
-  return {
+  const limits = {
     dailyNewPositionLimit: sg.dailyNewPositionLimit ?? DAILY_NEW_POSITION_LIMIT,
     dailyLossLimit: sg.dailyLossLimit ?? dailyLossLimitDefault(),
     totalPositionLimit: sg.totalPositionLimit ?? own ?? TOTAL_POSITION_LIMIT,
     maxPositionsPerType: sg.maxPositionsPerType ?? MAX_POSITIONS_PER_TYPE,
     dayTradingAllowed: sg.dayTrading ?? true,
   };
+  // The live bot's ceilings are in the code: no safeguard setting or environment default can raise them.
+  if (botId === LIVE_BOT_ID) {
+    limits.dailyNewPositionLimit = Math.min(limits.dailyNewPositionLimit, LIVE_LIMITS.maxTradesPerDay);
+    limits.totalPositionLimit = Math.min(limits.totalPositionLimit, LIVE_LIMITS.maxOpenPositions);
+    limits.maxPositionsPerType = Math.min(limits.maxPositionsPerType, LIVE_LIMITS.maxOpenPositions);
+  }
+  return limits;
 }
 
 /** Test-only escape hatch: registers an extra bot (e.g. a second bot sharing
@@ -332,7 +390,8 @@ export function ensureBotRecord(botId: string): Bot {
     }
   }
   const hidden = hiddenByDefault(botId);
-  const record: Bot = { id: botId, enabled: ready && !hidden, needsAttention: false, needsAttentionReason: null, createdAt: Date.now(), ...(hidden ? { archived: true } : {}) };
+  // The live bot is born OFF, whatever its settings: only the live switch turns it on.
+  const record: Bot = { id: botId, enabled: ready && !hidden && botId !== LIVE_BOT_ID, needsAttention: false, needsAttentionReason: null, createdAt: Date.now(), ...(hidden ? { archived: true } : {}) };
   return botsStore.insert(record);
 }
 
@@ -497,6 +556,8 @@ export interface BotPatch {
   monitors?: Partial<Record<MonitorKey, Partial<CloseMonitorSettings>>>;
   alerts?: Partial<Bot["alerts"]>;
   accountId?: string;
+  /** Pullback exit and chain settings (the two Bybit bots, each its own; ignored for every other bot). */
+  pullback?: NonNullable<Bot["pullback"]>;
 }
 
 export function updateBot(botId: string, patch: BotPatch): Bot {
@@ -614,6 +675,24 @@ export function updateBot(botId: string, patch: BotPatch): Bot {
   }
   if (patch.alwaysOn !== undefined) next.alwaysOn = { bullish: patch.alwaysOn.bullish !== false, bearish: patch.alwaysOn.bearish !== false };
   if (patch.alerts !== undefined) next.alerts = { ...DEFAULT_ALERTS, ...record.alerts, ...patch.alerts };
+  if (patch.pullback !== undefined) {
+    // The pullback exit and the chain mode exist for the two Bybit bots (the demo bot and the live bot), each with its own saved values. Any other bot refuses them.
+    if (botId !== BTC_BOT_ID && botId !== LIVE_BOT_ID) throw new Error("The pullback exit and the chain mode are for the two Bybit bots only.");
+    const p = patch.pullback;
+    const num = (name: string, v: unknown, min: number, max: number, whole = false): number => {
+      if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max || (whole && !Number.isInteger(v))) throw new Error(`${name} must be ${whole ? "a whole number" : "a number"} from ${min} to ${max}.`);
+      return v;
+    };
+    const clean: NonNullable<Bot["pullback"]> = {};
+    if (p.enabled !== undefined) clean.enabled = p.enabled === true;
+    if (p.chainEnabled !== undefined) clean.chainEnabled = p.chainEnabled === true;
+    if (p.fallUsd !== undefined) clean.fallUsd = num("The fall", p.fallUsd, 0.001, 5);
+    if (p.minPeakUsd !== undefined) clean.minPeakUsd = num("The minimum peak", p.minPeakUsd, 0, 10);
+    if (p.chainStopUsd !== undefined) clean.chainStopUsd = num("The chain stop", p.chainStopUsd, 0.001, 5);
+    if (p.chainMax !== undefined) clean.chainMax = num("The chain cap", p.chainMax, 1, 50, true);
+    next.pullback = { ...record.pullback, ...clean };
+    if (next.pullback.chainEnabled !== true) next.chainState = undefined; // switching the chain off ends the running one
+  }
   if (patch.archived !== undefined) {
     next.archived = patch.archived;
     // Archiving also switches the bot off, so it can never act while hidden.

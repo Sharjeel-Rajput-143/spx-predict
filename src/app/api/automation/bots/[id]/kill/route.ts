@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ensureBotRecord, isKnownBot } from "@/lib/automation/bots";
+import { LIVE_BOT_ID } from "@/lib/automation/bybitLiveLimits";
+import { liveAutoOff } from "@/lib/automation/liveGuard";
 import { SESSION_COOKIE_NAME, isValidSession } from "@/lib/automation/session";
 import { botsStore } from "@/lib/automation/store";
 import { withStorage } from "@/lib/automation/withStorage";
@@ -15,6 +17,8 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const bot = ensureBotRecord(id);
   const updated = botsStore.update(id, { killSwitch: !bot.killSwitch });
+  // The live switch goes OFF the moment the live bot's kill switch goes ON (it does not wait for the next risk check).
+  if (id === LIVE_BOT_ID && updated?.killSwitch) liveAutoOff("the live bot's kill switch was turned on");
   return NextResponse.json({ bot: updated });
 }
 

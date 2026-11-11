@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { StatusView, legsText, orderLimitText, orderWhy, type StatusResponse } from "./StatusDashboard";
+import { ResultCell, StatusView, legsText, orderLimitText, orderWhy, type StatusResponse } from "./StatusDashboard";
 
 const noop = () => undefined;
 
@@ -190,5 +190,73 @@ describe("the Orders table shows the price that was really sent, and why the bro
     expect(orderWhy({ priceBand: {} })).toBeNull();
     const out = render(data({ orders: [{ ...closeOrder, priceBand: { edge: 1.6, marketPrice: 1.1 }, rejectReason: "Order canceled - price band" }] }));
     expect(out).toContain("IBKR price band: market 1.10, won&#x27;t take 1.60 or beyond");
+  });
+});
+
+describe("a Deriv position's result in the table", () => {
+  const base = { id: "p", botId: "ndx_ema_bias", type: "short_put_spread" as const, status: "expired", shortStrike: 29250, longStrike: 29200, requestedQuantity: 1, filledQuantity: 1, expiry: "2026-10-06", credit: 0.1, openedAt: 1, closedAt: 2, venue: "deriv" as const };
+  it("says 'unknown, check Deriv' while the real result is unknown, never 'to enter' or an estimate", () => {
+    const out = renderToStaticMarkup(<ResultCell p={{ ...base, resultUnknown: "unknown, check Deriv" } as never} />);
+    expect(out).toContain("unknown, check Deriv");
+    expect(out).not.toContain("est.");
+    expect(out).not.toContain("to enter");
+  });
+  it("shows Deriv's own figure, labelled Deriv", () => {
+    const out = renderToStaticMarkup(<ResultCell p={{ ...base, settlement: { kind: "broker", pl: 8.15 } } as never} />);
+    expect(out).toContain("+$8.15");
+    expect(out).toContain("Deriv");
+    expect(out).toContain("The result Deriv itself reports for the contract");
+  });
+});
+
+describe("the Overview calls a BTC trade a BTC trade, not an option spread", () => {
+  const btc = (over: Record<string, unknown>) => ({ botId: "btc_bybit", underlying: "BTC", status: "open", shortStrike: 74_995, longStrike: 74_985, requestedQuantity: 1, filledQuantity: 1, expiry: "2026-10-06", credit: 0.75, closePrice: null, openedAt: 5, closedAt: null, venue: "bybit", ...over });
+  const withBtc = () =>
+    data({
+      positions: [
+        btc({ id: "b1", type: "short_put_spread" }),
+        btc({ id: "b2", type: "short_call_spread", status: "closed", closePrice: 0.76, closedAt: 6 }),
+        ...data().positions,
+      ] as StatusResponse["positions"],
+      orders: [
+        { id: "ob1", botId: "btc_bybit", kind: "open", status: "filled", limitPrice: 0, filledQuantity: 1, createdAt: 5, positionType: "short_put_spread", shortStrike: 74_995, longStrike: 74_985, underlying: "BTC", venue: "bybit" },
+        { id: "ob2", botId: "btc_bybit", kind: "close", status: "filled", limitPrice: 0, filledQuantity: 1, createdAt: 6, positionType: "short_call_spread", shortStrike: 74_995, longStrike: 74_985, underlying: "BTC", venue: "bybit" },
+        ...data().orders,
+      ] as StatusResponse["orders"],
+      bots: [...data().bots, { ...data().bots[0], id: "btc_bybit", name: "BTC Bybit Bot", underlying: "BTC" }],
+    });
+
+  it("positions are Long BTC / Short BTC on BTCUSDT, with no strikes, credit or expiry", () => {
+    const html = render(withBtc());
+    expect(html).toContain("Long BTC");
+    expect(html).toContain("Short BTC");
+    expect(html).toContain("BTCUSDT perpetual");
+    expect(html).not.toContain("-74,995");
+    expect(html).not.toContain("+74,985");
+    expect(html).not.toContain("$0.75");
+    expect(html).not.toContain("$0.76");
+  });
+
+  it("orders say Open long / Close short, not 'sell the spread'", () => {
+    const html = render(withBtc());
+    expect(html).toContain("Open long");
+    expect(html).toContain("Close short");
+    expect((html.match(/Open \(sell the spread\)/g) ?? []).length).toBe(1); // only the NDX order
+    expect((html.match(/Close \(buy it back\)/g) ?? []).length).toBe(1);
+  });
+
+  it("the option bots' rows are exactly as before", () => {
+    const html = render(withBtc());
+    expect(html).toContain("Short call spread");
+    expect(html).toContain("Short put spread");
+    expect(html).toContain("-21,035 call / +21,045 call");
+    expect(html).toContain("$3.50");
+    expect(html).toContain("2026-10-06");
+  });
+
+  it("a page with no BTC trade does not mention BTC wording at all", () => {
+    const html = render(data());
+    expect(html).not.toContain("Long BTC");
+    expect(html).not.toContain("BTCUSDT perpetual");
   });
 });

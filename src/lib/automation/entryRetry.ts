@@ -8,7 +8,8 @@ import { resolveHookPrice } from "./hookPrice";
 import { activePositionsForBot } from "./safeguards";
 import { sharedExecutor } from "./sharedExecutor";
 import { botsStore, decisionsStore, positionsStore, signalsStore } from "./store";
-import { easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
+import { easternDateKey, isWithinTradingHours } from "./tradingHours";
+import { hoursFor } from "./tradingWindow";
 import type { BrokerExecutor, Signal, SignalDirection } from "./types";
 
 /**
@@ -39,6 +40,10 @@ const MIN_GAP_MS = 60_000;
 
 const isRetry = (s: Pick<Signal, "raw">) => (s.raw as { origin?: unknown } | null)?.origin === "retry";
 const retryOf = (s: Pick<Signal, "raw">) => (s.raw as { retryOf?: unknown } | null)?.retryOf;
+/** A signal the chain mode made (pullbackExit.ts): never an alert, so never something to retry. */
+const isChain = (s: Pick<Signal, "raw">) => (s.raw as { origin?: unknown } | null)?.origin === "chain";
+/** A signal made by the Open UP / Open DOWN buttons (manualOpen.ts): the person asked for it once, on the spot. Never an alert, so never retried. */
+export const isManualOpen = (s: Pick<Signal, "raw">) => (s.raw as { manualOpen?: unknown } | null)?.manualOpen === true;
 
 export interface EntryRetryOptions extends Partial<Omit<ProcessSignalOptions, "executor" | "now">> {
   executor?: BrokerExecutor;
@@ -61,12 +66,12 @@ type Plan =
   | { root: Signal; direction: SignalDirection; ended: string; attempt: number; underlying: string };
 
 /** Everything that decides whether to retry, except the price. Reads only, so it is cheap to run twice. */
-function plan(botId: string, now: number): Plan {
+function plan(botId: string, now: number, executor: BrokerExecutor = sharedExecutor): Plan {
   const skip = (why: string): Plan => ({ skipped: why });
 
   // The bot's latest real alert: an accepted one, or one the webhook could not price at the time. Its own retries don't count.
   const real = signalsStore
-    .query((s) => s.botId === botId && !isRetry(s) && (s.status === "accepted" || (s.status === "rejected" && s.rejectReason === "no_price")))
+    .query((s) => s.botId === botId && !isRetry(s) && !isChain(s) && !isManualOpen(s) && (s.status === "accepted" || (s.status === "rejected" && s.rejectReason === "no_price")))
     .sort((a, b) => a.receivedAt - b.receivedAt);
   const root = real.at(-1);
   if (!root) return skip(HIDDEN);
@@ -101,7 +106,7 @@ function plan(botId: string, now: number): Plan {
   } catch {
     return skip("not_set_up");
   }
-  if (!isWithinTradingHours(now, hoursConfigFor(config.hours))) return skip("outside_hours");
+  if (!isWithinTradingHours(now, hoursFor(executor, config.underlying, config.hours))) return skip("outside_hours");
 
   // At most one try a minute.
   const lastTry = Math.max(root.receivedAt, ...retries.map((s) => s.receivedAt));
@@ -116,7 +121,7 @@ function plan(botId: string, now: number): Plan {
  * the retry only goes ahead if nothing changed in between.
  */
 export async function runEntryRetry(botId: string, now: number = Date.now(), options: EntryRetryOptions = {}): Promise<EntryRetryResult> {
-  const first = await withBotLock(botId, async () => plan(botId, now));
+  const first = await withBotLock(botId, async () => plan(botId, now, options.executor));
   if ("skipped" in first) return { botId, skipped: first.skipped, retried: false };
 
   // A fresh live price is what the strikes are built from; none yet, and it waits for the next minute.
@@ -124,7 +129,7 @@ export async function runEntryRetry(botId: string, now: number = Date.now(), opt
   if (price === null || !Number.isFinite(price) || price <= 0) return { botId, skipped: "no_price_yet", retried: false };
 
   return withBotLock(botId, async (): Promise<EntryRetryResult> => {
-    const again = plan(botId, now);
+    const again = plan(botId, now, options.executor);
     if ("skipped" in again) return { botId, skipped: again.skipped, retried: false };
     if (again.root.id !== first.root.id || again.attempt !== first.attempt) return { botId, skipped: "changed", retried: false };
     const { root, direction, ended, attempt } = again;

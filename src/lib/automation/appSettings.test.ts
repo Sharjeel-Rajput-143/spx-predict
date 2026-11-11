@@ -20,8 +20,8 @@ afterEach(() => {
 });
 
 describe("defaults", () => {
-  it("email off, the environment's window, a one hour session", () => {
-    expect(getAppSettings()).toEqual({ tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, notifications: { trades: false, warnings: true }, sessionTimeoutMinutes: 60 });
+  it("email off, the environment's window, a one day session", () => {
+    expect(getAppSettings()).toEqual({ tradingWindow: null, emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true }, notifications: { trades: false, warnings: true }, sessionTimeoutMinutes: 1440 });
     expect(getGlobalWindow()).toMatchObject({ startMinutes: 9 * 60 + 35, endMinutes: 15 * 60 + 55, source: "environment" });
     expect(getAlertEmail().enabled).toBe(false);
   });
@@ -49,7 +49,7 @@ describe("updateAppSettings", () => {
   });
 
   it("only the listed session timeouts are allowed", () => {
-    expect(() => updateAppSettings({ sessionTimeoutMinutes: 45 })).toThrow(/30, 60, 120, 240, 480/);
+    expect(() => updateAppSettings({ sessionTimeoutMinutes: 45 })).toThrow(/30, 60, 120, 240, 480, 1440/);
     updateAppSettings({ sessionTimeoutMinutes: 240 });
     expect(getAppSettings().sessionTimeoutMinutes).toBe(240);
   });

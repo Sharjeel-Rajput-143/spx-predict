@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBotStaticConfig, isKnownBot } from "@/lib/automation/bots";
 import { withBotLock } from "@/lib/automation/botLock";
 import { processSignal, receiveAndSaveSignal } from "@/lib/automation/engine";
+import { LIVE_RUN_REFUSAL, canRunByHand } from "@/lib/automation/liveRunRule";
 import { badRequest, guarded, readJson, unauthorized } from "@/lib/automation/routeAuth";
 import { sharedExecutor } from "@/lib/automation/sharedExecutor";
 import { decisionsStore, signalsStore } from "@/lib/automation/store";
@@ -16,6 +17,8 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ id: 
   if (denied) return denied;
   const { id } = await params;
   if (!isKnownBot(id)) return badRequest("Unknown bot.", 404);
+  // The live bot is opened only by real signals and by the Open UP / Open DOWN buttons on the Live page: never by this generic Run, whoever asks. Nothing is saved or sent.
+  if (!canRunByHand(id)) return badRequest(LIVE_RUN_REFUSAL, 409);
 
   return guarded(async () => {
     const body = await readJson(req);

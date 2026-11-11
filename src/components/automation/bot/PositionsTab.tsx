@@ -4,6 +4,8 @@ import { planStrikes } from "@/lib/automation/strikes";
 import { useEffect, useMemo, useState } from "react";
 import { IconChevronDown, IconMore, IconPlus } from "@/components/icons";
 import { Card } from "@/components/ui";
+import { BtcTrades } from "@/components/automation/BtcTrades";
+import { LIVE_BOT_ID } from "@/lib/automation/bybitLiveLimits";
 import { cn } from "@/lib/format";
 import { positionPL, positionPremium, positionQuantity, positionRisk } from "@/lib/automation/pnl";
 import { ACTIVE_POSITION_STATUSES, type BotStaticConfig, type Order, type Position, type PositionType, type Signal } from "@/lib/automation/types";
@@ -37,6 +39,10 @@ export interface PositionsViewProps {
   botName?: (botId: string) => string;
   /** Name and account of a position's bot, for its details panel. Falls back to botName. */
   botInfo?: (botId: string) => PositionBot;
+  /** The BTC Bybit Bot's own page: shows its Bybit trades (BtcTrades) even before there is one. */
+  showBtc?: boolean;
+  /** The LIVE bot's page: its BTC trades are read from the live account (or "no live trades yet"), never from the demo one. */
+  live?: boolean;
   /** Single-bot mode only: enables "+ New Position". */
   newPosition?: { botId: string; config: BotStaticConfig };
   onChanged: () => void;
@@ -58,7 +64,9 @@ export function PositionsTab({ ctx }: { ctx: BotContext }) {
       now={data.now}
       estimateFor={() => data.config?.openingCreditEstimate}
       botInfo={() => ({ id: data.bot.id, name: data.bot.name, accountId: data.bot.accountId })}
-      newPosition={data.config ? { botId: data.bot.id, config: data.config } : undefined}
+      newPosition={data.config && data.config.underlying !== "BTC" ? { botId: data.bot.id, config: data.config } : undefined}
+      showBtc={data.config?.underlying === "BTC"}
+      live={data.bot.id === LIVE_BOT_ID}
       onChanged={ctx.reload}
       notify={ctx.notify}
       focusPositionId={ctx.focusPositionId}
@@ -96,7 +104,10 @@ const dayDiff = (fromKey: string, toKey: string) => Math.round((Date.parse(toKey
 const weekday = (label: string) => label.split(",")[0].toUpperCase();
 
 export function PositionsView(props: PositionsViewProps) {
-  const { positions, orders, signals, now, estimateFor, botName, botInfo, newPosition, onChanged, notify } = props;
+  const { orders, signals, now, estimateFor, botName, botInfo, newPosition, onChanged, notify } = props;
+  // A Bybit trade is a BTC trade, not an option spread: it is shown by BtcTrades (BTC prices, result after fees, how it closed), never in the option tables below.
+  const positions = useMemo(() => props.positions.filter((p) => p.venue !== "bybit"), [props.positions]);
+  const hasBtc = props.showBtc === true || props.positions.some((p) => p.venue === "bybit");
   const [selected, setSelected] = useState<Position | null>(null);
   const [adding, setAdding] = useState(false);
   const [closedOpen, setClosedOpen] = useState(props.initialClosedOpen ?? true);
@@ -134,6 +145,9 @@ export function PositionsView(props: PositionsViewProps) {
 
   return (
     <div className="space-y-4">
+      {hasBtc && <BtcTrades live={props.live === true} />}
+      {(!hasBtc || positions.length > 0) && (
+      <>
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 className="text-sm font-semibold">Open positions</h2>
@@ -215,6 +229,9 @@ export function PositionsView(props: PositionsViewProps) {
             ))
           ))}
       </Card>
+
+      </>
+      )}
 
       {selected && (
         <PositionDetails

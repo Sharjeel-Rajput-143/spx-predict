@@ -170,7 +170,7 @@ describe("the price", () => {
   it("a quote more than a minute old is not traded on: the alert is refused and logged, nothing is sent", async () => {
     feed.ageMs = 90_000;
     const res = await alert(bull);
-    expect(res.status).toBe(202); // answered at once: "waiting for a live price"
+    expect(res.status).toBe(200); // answered at once (the price is looked for behind the answer)
     // ...and when none arrives the call is logged as rejected (the wait for a quote is real time, so give it a moment)
     for (let i = 0; i < 300 && !signalsStore.all().some((s) => s.rejectReason === "no_price"); i++) await new Promise((r) => setTimeout(r, 50));
     expect(sent()).toEqual([]);

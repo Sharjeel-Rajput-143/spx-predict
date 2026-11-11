@@ -116,7 +116,7 @@ describe("a user sees only their own", () => {
   it("settings are one row per user", () => {
     runAs(OWNER, () => updateAppSettings({ sessionTimeoutMinutes: 30 }));
     runAs(B, () => {
-      expect(getAppSettings().sessionTimeoutMinutes).toBe(60); // B starts from the defaults
+      expect(getAppSettings().sessionTimeoutMinutes).toBe(1440); // B starts from the defaults
       updateAppSettings({ sessionTimeoutMinutes: 480 });
     });
     runAs(OWNER, () => expect(getAppSettings().sessionTimeoutMinutes).toBe(30));

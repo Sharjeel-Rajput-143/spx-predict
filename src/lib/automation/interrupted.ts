@@ -58,7 +58,8 @@ export async function checkInterruptedRuns(now: number = Date.now()): Promise<nu
       for (const hook of webhooksStore.query((w) => w.botId === botId && w.lastTriggeredAt !== null)) {
         const claimedAt = hook.lastTriggeredAt!;
         if (now - claimedAt < INTERRUPTED_AFTER_MS || now - claimedAt > LOOKBACK_MS) continue;
-        const followed = signalsStore.query((s) => s.botId === botId && s.signal === hook.direction && s.receivedAt >= claimedAt - 1000 && (s.raw as { webhook?: string } | null)?.webhook === hook.name).length > 0;
+        // Any bot's signal counts: a webhook that was moved to another bot answered its earlier calls under the bot it was on then, and those calls did reach an engine.
+        const followed = signalsStore.query((s) => s.signal === hook.direction && s.receivedAt >= claimedAt - 1000 && (s.raw as { webhook?: string } | null)?.webhook === hook.name).length > 0;
         if (followed) continue;
         if (decisionsStore.query((d) => d.outcome === "run_interrupted" && d.detail?.webhookId === hook.id && d.detail?.claimedAt === claimedAt).length > 0) continue;
         const reason = `The ${hook.direction} webhook "${hook.name}" was called at ${timeOf(claimedAt)} and answered, but the call never reached the bot (the server may have stopped just after answering). Nothing was opened or closed for it. Check your positions; the next signal will run as usual.`;

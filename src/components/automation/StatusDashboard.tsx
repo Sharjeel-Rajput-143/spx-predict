@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { cn, formatTime } from "@/lib/format";
+import { brokerNameOf } from "@/lib/automation/brokerVenue";
 import { Card, SectionTitle, Stat } from "@/components/ui";
+import { BybitPanel } from "./BybitPanel";
 import { Pill } from "./bot/primitives";
+import { BTC_LEGS_LABEL, btcOrderLabel, btcTypeLabel } from "./bot/btcWording";
 import { testLine, watchTestRun } from "./testRun";
 import { usePolling } from "./usePolling";
 
@@ -68,10 +71,12 @@ export interface StatusPosition {
   closePrice?: number | null;
   openedAt: number | null;
   closedAt: number | null;
-  venue?: "mock" | "tradier" | "ibkr";
+  venue?: "mock" | "tradier" | "ibkr" | "deriv" | "bybit";
   test?: boolean;
-  /** How an expired position's result was settled (estimated from the underlying, or typed in). */
-  settlement?: { kind: "estimated" | "manual"; pl: number; underlyingPrice?: number };
+  /** How an expired position's result was settled (estimated from the underlying, typed in, or Deriv's own report of the contract). */
+  settlement?: { kind: "estimated" | "manual" | "broker"; pl: number; underlyingPrice?: number };
+  /** A Deriv position whose real result is not known yet: "unknown, check Deriv". */
+  resultUnknown?: string;
 }
 
 export interface StatusOrder {
@@ -89,7 +94,7 @@ export interface StatusOrder {
   shortStrike: number | null;
   longStrike: number | null;
   underlying: string | null;
-  venue: "mock" | "tradier" | "ibkr";
+  venue: "mock" | "tradier" | "ibkr" | "deriv" | "bybit";
 }
 
 export interface StatusSignal {
@@ -106,8 +111,8 @@ export interface StatusSignal {
 }
 
 export interface StatusExecutor {
-  kind: "mock" | "tradier" | "ibkr" | null;
-  venue: "mock" | "tradier" | "ibkr" | null;
+  kind: "mock" | "tradier" | "ibkr" | "deriv" | "bybit" | null;
+  venue: "mock" | "tradier" | "ibkr" | "deriv" | "bybit" | null;
   error: string | null;
   baseUrl?: string;
   sandbox?: boolean;
@@ -158,8 +163,8 @@ export function orderWhy(o: Pick<StatusOrder, "rejectReason" | "priceBand">): st
 }
 
 /** A finished position's result and where it came from; null when it has none (yet). */
-function resultOf(p: StatusPosition): { pl: number; how: "fill" | "estimated" | "manual" } | null {
-  if (p.status === "expired") return p.settlement ? { pl: p.settlement.pl, how: p.settlement.kind } : null;
+function resultOf(p: StatusPosition): { pl: number; how: "fill" | "estimated" | "manual" | "broker" } | null {
+  if (p.status === "expired" || ((p.venue === "deriv" || p.venue === "bybit") && p.settlement?.kind === "broker")) return p.settlement ? { pl: p.settlement.pl, how: p.settlement.kind } : null;
   if (p.status === "closed" && p.closePrice != null && p.credit != null) return { pl: (p.credit - p.closePrice) * 100 * (p.filledQuantity || p.requestedQuantity), how: "fill" };
   return null;
 }
@@ -236,13 +241,13 @@ function Table({ headers, rows, empty }: { headers: string[]; rows: ReactNode[][
   );
 }
 
-function ResultCell({ p }: { p: StatusPosition }) {
+export function ResultCell({ p }: { p: StatusPosition }) {
   const r = resultOf(p);
-  if (!r) return <span className="text-faint">{p.status === "expired" ? "to enter" : "—"}</span>;
+  if (!r) return <span className="text-faint">{p.resultUnknown ?? (p.status === "expired" ? "to enter" : "—")}</span>;
   return (
-    <span className={cn("tabular", r.pl > 0 && "text-up", r.pl < 0 && "text-down")} title={r.how === "estimated" ? "Estimated from the underlying's price at the end-of-day sweep" : r.how === "manual" ? "Entered by hand" : "From the close order's fill"}>
+    <span className={cn("tabular", r.pl > 0 && "text-up", r.pl < 0 && "text-down")} title={r.how === "estimated" ? "Estimated from the underlying's price at the end-of-day sweep" : r.how === "manual" ? "Entered by hand" : r.how === "broker" ? `The result ${brokerNameOf(p.venue) ?? "the broker"} itself reports for the ${p.venue === "deriv" ? "contract" : "trade"}` : "From the close order's fill"}>
       {signedUsd(r.pl)}
-      {r.how !== "fill" && <span className="ml-1 text-[10px] font-medium text-faint">{r.how === "estimated" ? "est." : "by hand"}</span>}
+      {r.how !== "fill" && <span className="ml-1 text-[10px] font-medium text-faint">{r.how === "estimated" ? "est." : r.how === "broker" ? (brokerNameOf(p.venue) ?? "broker") : "by hand"}</span>}
     </span>
   );
 }
@@ -304,7 +309,7 @@ function ExecutorBanner({ executor }: { executor: StatusExecutor }) {
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm", mock ? "bg-amber-500/10 text-amber-500" : live ? "bg-down-soft text-down" : "bg-accent/10 text-accent")}>
       <span className="font-semibold">
-        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : executor.venue === "ibkr" ? (live ? "LIVE — Interactive Brokers: real money" : "Interactive Brokers PAPER (paper money)") : live ? "LIVE — Tradier PRODUCTION: real money" : "Tradier SANDBOX (paper money)"}
+        {mock ? "Mock executor — test trades only. Nothing reaches a broker." : executor.venue === "bybit" ? "Bybit DEMO (paper money)" : executor.venue === "deriv" ? (live ? "LIVE — Deriv REAL account: real money" : "Deriv DEMO (paper money)") : executor.venue === "ibkr" ? (live ? "LIVE — Interactive Brokers: real money" : "Interactive Brokers PAPER (paper money)") : live ? "LIVE — Tradier PRODUCTION: real money" : "Tradier SANDBOX (paper money)"}
       </span>
       {!mock && executor.baseUrl && <span className="font-mono text-xs">{executor.baseUrl}</span>}
       {executor.dryRun && <Pill tone="warn">Dry run: decisions only, no orders</Pill>}
@@ -341,7 +346,7 @@ function BotCard({
   const parsed = Number(price.replace(/,/g, ""));
   const priceOk = price.trim() !== "" && Number.isFinite(parsed) && parsed > 0;
   // Test alerts run on the mock and on the Tradier sandbox (paper money) - never against a production account.
-  const safeVenue = executor.venue === "mock" || ((executor.venue === "tradier" || executor.venue === "ibkr") && executor.sandbox === true);
+  const safeVenue = executor.venue === "mock" || ((executor.venue === "tradier" || executor.venue === "ibkr" || executor.venue === "deriv" || executor.venue === "bybit") && executor.sandbox === true);
   const canTest = safeVenue && !executor.error && !bot.configError;
   const why = !canTest ? (!safeVenue ? "Test alerts never run against real money: they need the mock executor or a paper broker account." : executor.error ? "The executor isn't usable." : "Finish this bot's setup first.") : !priceOk ? "Enter a test price." : "";
 
@@ -500,18 +505,19 @@ export function StatusView({
     <span key="bot">
       {botName(p.botId)} {isTest(p.venue, p.test) && <TestTag />}
     </span>,
-    typeName(p.type),
+    p.venue === "bybit" ? btcTypeLabel(p.type) : typeName(p.type),
     <span key="legs" className="font-mono text-xs">
-      {legsText(p)}
+      {p.venue === "bybit" ? BTC_LEGS_LABEL : legsText(p)}
     </span>,
     `${p.filledQuantity}/${p.requestedQuantity}`,
-    p.credit != null ? `$${p.credit.toFixed(2)}` : "—",
-    p.closePrice != null ? `$${p.closePrice.toFixed(2)}` : "—",
+    // A BTC trade has no credit; its prices and result are on the Positions page, as Bybit filled them.
+    p.venue === "bybit" ? <span key="c" title="BTC prices are on the Positions page">—</span> : p.credit != null ? `$${p.credit.toFixed(2)}` : "—",
+    p.venue === "bybit" ? <span key="x" title="BTC prices are on the Positions page">—</span> : p.closePrice != null ? `$${p.closePrice.toFixed(2)}` : "—",
     <ResultCell key="pl" p={p} />,
     <Pill key="s" tone={STATUS_TONE[p.status] ?? "neutral"}>
       {p.status}
     </Pill>,
-    p.expiry,
+    p.venue === "bybit" ? "—" : p.expiry,
   ];
   const posHeaders = ["Opened", "Bot", "Type", "Legs (short / long)", "Qty", "Credit", "Closed at", "P/L", "Status", "Expiry"];
 
@@ -523,6 +529,7 @@ export function StatusView({
         </div>
       )}
       <ExecutorBanner executor={data.executor} />
+      {data.executor.venue === "bybit" && <BybitPanel />}
 
       {reconcile && (data.executor.venue === "tradier" || data.executor.venue === "ibkr") && (
         <Card className="space-y-2 p-4">
@@ -608,9 +615,9 @@ export function StatusView({
             <span key="b">
               {botName(o.botId)} {o.venue === "mock" && <TestTag />}
             </span>,
-            o.kind === "open" ? "Open (sell the spread)" : "Close (buy it back)",
+            o.venue === "bybit" ? btcOrderLabel(o.kind, o.positionType) : o.kind === "open" ? "Open (sell the spread)" : "Close (buy it back)",
             <span key="l" className="font-mono text-xs">
-              {legsText({ type: o.positionType, shortStrike: o.shortStrike, longStrike: o.longStrike })}
+              {o.venue === "bybit" ? BTC_LEGS_LABEL : legsText({ type: o.positionType, shortStrike: o.shortStrike, longStrike: o.longStrike })}
             </span>,
             orderLimitText(o),
             String(o.filledQuantity),

@@ -99,6 +99,14 @@ export const IconVolumeOff = (p: P) => (
 export const IconAutomation = (p: P) => (
   <svg {...base} {...p}><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" /></svg>
 );
+/** A candlestick chart: the Bybit tab. */
+export const IconBybit = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M7 3v3M7 14v4M7 6h0M17 6v3M17 17v4" />
+    <rect x="5" y="6" width="4" height="8" rx="1" />
+    <rect x="15" y="9" width="4" height="8" rx="1" />
+  </svg>
+);
 export const IconHelp = (p: P) => (
   <svg {...base} {...p}>
     <circle cx="12" cy="12" r="9" />

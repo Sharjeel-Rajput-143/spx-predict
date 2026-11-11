@@ -1,5 +1,6 @@
 import "server-only";
-import { bridgeSymbols, priceSource } from "@/lib/automation/executorKind";
+import { BYBIT_UNDERLYING, bridgeSymbols, priceSource } from "@/lib/automation/executorKind";
+import { fetchBybitPrice } from "./bybitFeed";
 import { fetchBrokerPrice } from "./brokerFeed";
 import { fetchGoogleFinancePrice, GOOGLE_FINANCE_CODES } from "./googleFinance";
 import { fetchYahooFinancePrice, YAHOO_CODES } from "./yahooFinance";
@@ -21,7 +22,7 @@ export interface Tick {
   price: number;
 }
 
-export type FeedSource = "google" | "yahoo" | "broker";
+export type FeedSource = "google" | "yahoo" | "broker" | "bybit";
 
 const BASE_POLL_MS = 2000;
 const MAX_BACKOFF_MS = 30_000;
@@ -136,6 +137,8 @@ function startPolling(symbol: string) {
 
 /** The live price of a symbol from the source the settings choose (PRICE_SOURCE: the public feed by default, or the broker's own quote). A bad setting gives no price, never a different source. */
 export function fetchPrice(symbol: string): Promise<{ price: number; source: FeedSource } | null> {
+  // The BTC bot's price is Bybit's own (the demo host's mark price), whatever PRICE_SOURCE says for the index bots.
+  if (symbol.toUpperCase() === BYBIT_UNDERLYING) return fetchBybitPrice(FEED_TIMEOUT_MS).then((price) => (price === null ? null : { price, source: "bybit" as const }));
   let source;
   try {
     source = priceSource();
@@ -156,7 +159,7 @@ export function fetchPrice(symbol: string): Promise<{ price: number; source: Fee
 }
 
 export function isLiveSymbol(symbol: string): boolean {
-  return symbol in GOOGLE_FINANCE_CODES || symbol in YAHOO_CODES;
+  return symbol === BYBIT_UNDERLYING || symbol in GOOGLE_FINANCE_CODES || symbol in YAHOO_CODES;
 }
 
 export function getTicks(symbol: string, fromMs: number, toMs: number): Tick[] {

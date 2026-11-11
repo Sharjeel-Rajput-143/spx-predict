@@ -1,3 +1,4 @@
+import { LIVE_BOT_ID } from "./bybitLiveLimits";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as status } from "@/app/api/automation/status/route";
@@ -5,7 +6,7 @@ import { GET as settings } from "@/app/api/automation/settings/route";
 import { ensureBotRecord, updateBot } from "./bots";
 import { botsStore } from "./store";
 import { summarizeAllBots } from "./summary";
-import { NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
+import { BTC_BOT_ID, NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 
 setTestBotEnv();
 setNdxTestEnv();
@@ -34,9 +35,9 @@ describe("the SPX bot is hidden by default", () => {
 
   it("is left off the Testing page and off the webhook bot choices", async () => {
     const s = await (await status(new NextRequest("http://localhost/api/automation/status"))).json();
-    expect(s.bots.map((b: { id: string }) => b.id)).toEqual([NDX_BOT_ID]);
+    expect(s.bots.map((b: { id: string }) => b.id)).toEqual([NDX_BOT_ID, BTC_BOT_ID, LIVE_BOT_ID]); // the live bot is listed (off), but never offered as a webhook choice
     const set = await (await settings(new NextRequest("http://localhost/api/automation/settings"))).json();
-    expect(set.webhook.bots.map((b: { id: string }) => b.id)).toEqual([NDX_BOT_ID]);
+    expect(set.webhook.bots.map((b: { id: string }) => b.id)).toEqual([NDX_BOT_ID, BTC_BOT_ID]);
   });
 
   it("a record from before it was hidden is archived once", () => {

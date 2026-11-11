@@ -9,6 +9,7 @@ import type { BotContext } from "./BotDetail";
 import { Btn, DirectionTag, Drawer, KeyValue, Modal, Pill } from "./primitives";
 import { ORIGIN_LABEL, originLabel, signalOrigin } from "@/lib/automation/origin";
 import { RunTrace } from "./RunTrace";
+import { systemEntryLabel } from "./btcWording";
 import { etDateTime, etDayKey, etTime, groupByDay, num, outcomeInfo, type Tone } from "./model";
 
 type DateFilter = "all" | "today" | "yesterday" | "7d";
@@ -50,11 +51,13 @@ const SYSTEM_ENTRY: Record<string, string> = {
   run_interrupted: "Run interrupted",
   monitor_closed: "Close Monitor",
 };
-const isSystemEntry = (e: Entry): boolean => !e.signal && e.decisions[0] !== undefined && e.decisions[0].outcome in SYSTEM_ENTRY;
+/** What an entry with no signal and no person behind it is called: the fixed names above, or how a BTC trade ended (Take profit, Stop loss, Breakeven stop, ...). */
+const systemName = (e: Entry): string | null => (e.signal || !e.decisions[0] ? null : (SYSTEM_ENTRY[e.decisions[0].outcome] ?? systemEntryLabel(e.decisions[0])));
+const isSystemEntry = (e: Entry): boolean => systemName(e) !== null;
 
 const automationName = (e: Entry): string => {
   if (!e.signal) {
-    const system = e.decisions[0] && SYSTEM_ENTRY[e.decisions[0].outcome];
+    const system = systemName(e);
     if (system) return system;
     return e.decisions[0]?.outcome === "closed" || e.decisions[0]?.reason.toLowerCase().includes("close") ? "Manual close" : "Manual position";
   }
@@ -349,12 +352,12 @@ function TraceDrawer({ entry, onClose }: { entry: Entry; onClose: () => void }) 
                   ["Interval", signal.interval || "—"],
                   ["Triggered by", originLabel(signal)],
                 ] as [string, React.ReactNode][])
-              : ([["Triggered by", "Manual action"]] as [string, string][])),
+              : ([["Triggered by", isSystemEntry(entry) ? "Automatic: no signal, no one pressed a button" : "Manual action"]] as [string, string][])),
           ]}
         />
 
         <ol className="relative space-y-3 border-l border-line pl-5">
-          <TraceNode tone="info" title={signal ? "Signal received" : "Manual action"} body={signal?.status === "rejected" ? `Rejected: ${rejectWords(signal.rejectReason)}` : signal ? "Saved, then queued behind this bot's lock." : undefined} />
+          <TraceNode tone="info" title={signal ? "Signal received" : isSystemEntry(entry) ? "Automatic" : "Manual action"} body={signal?.status === "rejected" ? `Rejected: ${rejectWords(signal.rejectReason)}` : signal ? "Saved, then queued behind this bot's lock." : undefined} />
           {decisions.map((d) => {
             const info = outcomeInfo(d.outcome);
             return (

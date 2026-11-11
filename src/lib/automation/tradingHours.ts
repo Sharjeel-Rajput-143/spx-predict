@@ -11,6 +11,8 @@ export interface TradingHoursConfig {
   isHoliday?: (ms: number) => boolean;
   /** Minutes-of-day the market closes on an early-close day, if `ms` is one. */
   earlyCloseMinutes?: (ms: number) => number | undefined;
+  /** Open at every moment, weekends and holidays included (a market that never closes, such as crypto). There is then no end of day. */
+  alwaysOn?: boolean;
 }
 
 const REGULAR_CLOSE_MINUTES = 16 * 60;
@@ -49,14 +51,21 @@ function easternParts(ms: number, timezone: string) {
   return { weekday: get("weekday"), hour: Number(get("hour")) % 24, minute: Number(get("minute")) };
 }
 
+/** The last minute (minutes after midnight New York time) the window is open on the day of `ms`: its own end, or earlier on an early-close day. */
+export function windowEndMinutes(ms: number, config: TradingHoursConfig): number {
+  if (config.alwaysOn) return 24 * 60 - 1;
+  const earlyClose = config.earlyCloseMinutes?.(ms);
+  const endMinutes = earlyClose === undefined ? config.endMinutes : earlyClose - (REGULAR_CLOSE_MINUTES - config.endMinutes);
+  return Math.min(config.endMinutes, endMinutes);
+}
+
 export function isWithinTradingHours(ms: number, config: TradingHoursConfig = hoursConfigFor()): boolean {
+  if (config.alwaysOn) return true;
   if (config.isHoliday?.(ms)) return false;
   const { weekday, hour, minute } = easternParts(ms, config.timezone);
   if (weekday === "Sat" || weekday === "Sun") return false;
   const minutesOfDay = hour * 60 + minute;
-  const earlyClose = config.earlyCloseMinutes?.(ms);
-  const endMinutes = earlyClose === undefined ? config.endMinutes : earlyClose - (REGULAR_CLOSE_MINUTES - config.endMinutes);
-  return minutesOfDay >= config.startMinutes && minutesOfDay <= Math.min(config.endMinutes, endMinutes);
+  return minutesOfDay >= config.startMinutes && minutesOfDay <= windowEndMinutes(ms, config);
 }
 
 /** "YYYY-MM-DD" for the America/New_York calendar date `ms` falls on - used
@@ -80,7 +89,8 @@ const clock12 = (minutes: number) => {
 };
 
 /** "9:35am - 3:55pm" */
-export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" | "endMinutes"> = getGlobalWindow()): string {
+export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" | "endMinutes" | "alwaysOn"> = getGlobalWindow()): string {
+  if (config.alwaysOn) return "always on, 24 hours a day, every day";
   return `${clock12(config.startMinutes)} - ${clock12(config.endMinutes)}`;
 }
 
@@ -88,6 +98,7 @@ export function describeWindow(config: Pick<TradingHoursConfig, "startMinutes" |
  * "Current time is 9:40am" / "Saturday 3:10pm - the market is closed on weekends". */
 export function describeTradingTime(ms: number, config: TradingHoursConfig = hoursConfigFor()): string {
   const { weekday, hour, minute } = easternParts(ms, config.timezone);
+  if (config.alwaysOn) return `Current time is ${clock12(hour * 60 + minute)} - always on, the window has no closing time`;
   const minutes = hour * 60 + minute;
   const now = clock12(minutes);
   const days: Record<string, string> = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };

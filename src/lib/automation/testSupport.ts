@@ -26,6 +26,7 @@ export function setTestBotEnv(): void {
 }
 
 export const NDX_BOT_ID = "ndx_ema_bias";
+export const BTC_BOT_ID = "btc_bybit";
 
 /** The NDX bot's required-with-no-default settings, set to concrete test
  * values. These are test numbers only - the real ones come from Blue. */

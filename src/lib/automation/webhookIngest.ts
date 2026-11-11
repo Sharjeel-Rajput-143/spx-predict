@@ -1,11 +1,12 @@
 import "server-only";
 import crypto from "node:crypto";
-import { isKnownBot } from "./bots";
+import { BTC_BOT_ID, isKnownBot } from "./bots";
+import { LIVE_BOT_ID } from "./bybitLiveLimits";
 import { withBotLock } from "./botLock";
 import { getWebhookSecret } from "./config";
 import { processSignal, receiveAndSaveSignal } from "./engine";
 import { startEodScheduler } from "./eodSweep";
-import { executorStatus } from "./sharedExecutor";
+import { executorStatus, liveExecutorProblem } from "./sharedExecutor";
 import { signalsStore, storageProblem } from "./store";
 import type { BrokerExecutor } from "./types";
 
@@ -66,6 +67,8 @@ export interface IngestOptions {
   test?: boolean;
   /** The caller was already authenticated another way (a named webhook's secret URL), so the shared secret in the body isn't checked. */
   trusted?: boolean;
+  /** Set only by the mirror (liveMirror.ts), server side: the signal is a copy of this demo bot's. The live bot accepts a signal from nowhere else: not the shared secret, not a test alert. */
+  mirrorOf?: string;
 }
 
 export interface IngestResult {
@@ -103,12 +106,19 @@ export function ingestWebhook(parsed: unknown, options: IngestOptions): IngestRe
 
   // A misconfigured broker executor (EXECUTOR=tradier without its token) refuses
   // signals up front rather than failing halfway through one.
-  const problem = executorStatus().error;
+  // Each bot is held to its OWN executor: a broken demo executor setting does not refuse the live bot's copy of an alert (its executor is checked by the engine, and it refuses in words).
+  const target = (parsed as { bot?: unknown }).bot;
+  const problem = target === LIVE_BOT_ID && options.mirrorOf === BTC_BOT_ID ? liveExecutorProblem() : executorStatus().error;
   if (problem) return { status: 503, body: { error: problem } };
 
   const { bot, signal, symbol, price, bar_time: barTime, interval } = body;
 
   if (typeof bot !== "string" || !isKnownBot(bot)) {
+    logRejectedSignal(body, "unknown_bot");
+    return { status: 400, body: { error: "Unknown bot." } };
+  }
+  // The live bot is reached only by the mirror. Anyone else naming it (an outside call with the shared secret, the admin page's test alert) is told it does not exist.
+  if (bot === LIVE_BOT_ID && options.mirrorOf !== BTC_BOT_ID) {
     logRejectedSignal(body, "unknown_bot");
     return { status: 400, body: { error: "Unknown bot." } };
   }

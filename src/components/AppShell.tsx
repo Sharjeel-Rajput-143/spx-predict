@@ -8,12 +8,14 @@ import { cn } from "@/lib/format";
 import { useGame } from "./GameProvider";
 import { NotificationBell, bellShownFor } from "./NotificationBell";
 import { TEXT_SIZES, TEXT_SIZE_KEY, type TextSize } from "./automation/settings/sections";
-import { IconAutomation, IconCalendar, IconHistory, IconLogout, IconMoon, IconPanelLeft, IconPositions, IconPredict, IconSettings, IconSun, IconUser } from "./icons";
+import { ACTIVITY_EVENTS, createKeepalive } from "@/components/sessionKeepalive";
+import { IconAutomation, IconBybit, IconCalendar, IconHistory, IconLogout, IconMoon, IconPanelLeft, IconPositions, IconPredict, IconSettings, IconSun, IconUser } from "./icons";
 
 /** Automation leads; the rest follow. Predict and Leaderboard are hidden for
  * now - their routes still work, they're just not linked. */
-const NAV = [
+export const NAV = [
   { href: "/automations", label: "Automation", Icon: IconAutomation },
+  { href: "/automation/bybit", label: "Bybit", Icon: IconBybit },
   { href: "/positions", label: "Positions", Icon: IconPositions },
   { href: "/calendar", label: "Calendar", Icon: IconCalendar },
   { href: "/history", label: "History", Icon: IconHistory },
@@ -23,9 +25,11 @@ const NAV = [
 
 const HOME = "/automations";
 
-const isActive = (pathname: string, href: string) => {
-  // The bot pages live under /automation/..., but belong to Automation.
-  if (href === "/automations") return pathname.startsWith("/automations") || pathname.startsWith("/automation/");
+export const isActive = (pathname: string, href: string) => {
+  // The bot pages live under /automation/..., but belong to Automation (the Bybit page has a tab of its own).
+  if (href === "/automations") return pathname.startsWith("/automations") || (pathname.startsWith("/automation/") && !pathname.startsWith("/automation/bybit") && !pathname.startsWith("/automation/live"));
+  // The Live page is reached from the Bybit page and belongs to its tab.
+  if (href === "/automation/bybit" && (pathname === "/automation/live" || pathname.startsWith("/automation/live/"))) return true;
   return pathname === href || pathname.startsWith(`${href}/`);
 };
 
@@ -86,6 +90,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       .then(setAuth)
       .catch(() => undefined);
   }, [pathname]);
+
+  // While signed in, real use of the page (not the data refreshing by itself) extends the sign-in; see /api/automation/keepalive.
+  const keepSignedIn = auth?.authRequired && auth.signedIn;
+  useEffect(() => {
+    if (!keepSignedIn) return;
+    const onActivity = createKeepalive({ ping: () => fetch("/api/automation/keepalive", { method: "POST" }) });
+    onActivity();
+    for (const name of ACTIVITY_EVENTS) window.addEventListener(name, onActivity, { passive: true });
+    return () => {
+      for (const name of ACTIVITY_EVENTS) window.removeEventListener(name, onActivity);
+    };
+  }, [keepSignedIn]);
 
   const toggleCollapsed = () =>
     setCollapsed((c) => {

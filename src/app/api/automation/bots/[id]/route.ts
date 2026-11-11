@@ -11,6 +11,8 @@ import {
   getFlipCooldownSeconds,
   isDryRun,
 } from "@/lib/automation/config";
+import { bybitSafeguards } from "@/lib/automation/bybitSafeguards";
+import { pullbackSettings } from "@/lib/automation/pullbackExit";
 import { countTodayErrors } from "@/lib/automation/errors";
 import { realizedToday } from "@/lib/automation/lossLimit";
 import { computeStats } from "@/lib/automation/pnl";
@@ -53,6 +55,8 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
   const atRisk = config ? sumActiveAllocationRisk(id, config.widthPoints, config.openingCreditEstimate) : 0;
   const stats = computeStats(positions);
   const limits = getBotLimits(id);
+  // The bot that trades Bybit is protected by Bybit's own daily loss limit (DAILY_MAX_LOSS_USD, after fees), not the engine's: the page shows that one.
+  const broker = bybitSafeguards(id, config?.underlying, now);
 
   // Accounts and groups already in use, for the header dropdowns.
   const accounts = new Set<string>();
@@ -97,6 +101,9 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       monitors: record.monitors ?? {},
       alerts: { ...DEFAULT_ALERTS, ...record.alerts },
       safeguards: record.safeguards ?? {},
+      /** The pullback exit and chain settings in force for this bot (the two Bybit bots, each its own; null for every other bot). */
+      pullback: id === "btc_bybit" || id === "btc_bybit_live" ? pullbackSettings(id) : null,
+      chainRunning: record.chainState ? { trades: record.chainState.count } : null,
       logClearedAt: record.logClearedAt ?? 0,
       dailyResetAt: record.dailyResetAt ?? 0,
     },
@@ -107,6 +114,8 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       totalPositionLimit: limits.totalPositionLimit,
       dailyNewPositionLimit: limits.dailyNewPositionLimit,
       dailyLossLimit: limits.dailyLossLimit,
+      /** The limit the Bybit executor enforces for the BTC bot (dollars), or null for every other bot. */
+      brokerDailyLossLimit: broker ? broker.limit : null,
       errorFailsafeThreshold: ERROR_FAILSAFE_THRESHOLD,
       dedupeWindowSeconds: DEDUPE_WINDOW_SECONDS,
       flipCooldownSeconds: getFlipCooldownSeconds(),
@@ -116,6 +125,7 @@ async function handleGET(req: NextRequest, { params }: { params: Promise<{ id: s
       dryRun: isDryRun(),
     },
     dayLoss: (() => {
+      if (broker) return { limit: broker.limit, realized: broker.realized, closedToday: broker.closedToday, unpriced: 0, lastCheck: null, afterFees: true };
       const today = realizedToday(id, now);
       const last = record.lossCheck && easternDateKey(record.lossCheck.at) === easternDateKey(now) ? record.lossCheck : null;
       return { limit: limits.dailyLossLimit, realized: today.realized, closedToday: today.closedToday, unpriced: today.unpriced, lastCheck: last };

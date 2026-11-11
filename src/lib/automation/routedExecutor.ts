@@ -20,6 +20,11 @@ export class RoutedExecutor implements BrokerExecutor {
   getSpreadQuote?: (req: SpreadQuoteRequest) => Promise<LegQuotes | null>;
   getUnderlyingQuote?: (symbol: string) => Promise<UnderlyingQuote | null>;
   isPaperAccount?: () => Promise<boolean>;
+  tradingWindowFor?: (underlying: string) => { start: string; end: string; alwaysOn?: boolean } | null;
+  lastBuyMinutesFor?: (underlying: string, now: number) => number | null;
+  syncPositions?: (botId: string, now: number) => Promise<number>;
+  entryBlock?: (botId: string, now: number) => Promise<{ outcome: "daily_loss_limit_reached" | "kill_switch"; reason: string } | null>;
+  getContractResult?: (ref: string) => Promise<{ settled: boolean; profit: number | null; status: string } | null>;
   getSpreadMark?: (position: Position, quantity: number) => Promise<number | null>;
   listBrokerPositions?: () => Promise<BrokerPosition[]>;
   getBalances?: () => Promise<BrokerBalances>;
@@ -38,7 +43,17 @@ export class RoutedExecutor implements BrokerExecutor {
     if (p.listBrokerPositions) this.listBrokerPositions = () => p.listBrokerPositions!();
     if (p.getBalances) this.getBalances = () => p.getBalances!();
     if (p.isPaperAccount) this.isPaperAccount = () => p.isPaperAccount!();
+    if (p.lastBuyMinutesFor) this.lastBuyMinutesFor = (underlying, now) => (this.takes(underlying) ? p.lastBuyMinutesFor!(underlying, now) : null);
+    if (p.entryBlock) this.entryBlock = (botId, now) => p.entryBlock!(botId, now);
+    if (p.syncPositions) this.syncPositions = (botId, now) => p.syncPositions!(botId, now);
+    if (p.getContractResult) this.getContractResult = (ref) => p.getContractResult!(ref);
+    if (p.tradingWindowFor) this.tradingWindowFor = (underlying) => (this.takes(underlying) ? p.tradingWindowFor!(underlying) : null);
     if (p.getSpreadMark) this.getSpreadMark = (position, quantity) => (this.takes(position.underlying) ? p.getSpreadMark!(position, quantity) : Promise.resolve(null));
+  }
+
+  /** The real broker behind the router, for the few screens that read from it directly. */
+  get primaryExecutor(): BrokerExecutor {
+    return this.primary;
   }
 
   /** Whether the primary (the real broker) takes this underlying. Unknown counts as yes: nothing is rerouted on a guess. */

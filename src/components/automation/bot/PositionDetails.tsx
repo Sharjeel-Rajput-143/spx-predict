@@ -7,6 +7,7 @@ import { IconAutomation, IconCopy, IconEdit } from "@/components/icons";
 import { cn } from "@/lib/format";
 import { breakeven, maxLoss, maxProfit, otmFraction, rewardRisk, type Spread } from "@/lib/automation/payoff";
 import { EXIT_OPTIONS_NOTE, exitOptionRows, hasExitOptions } from "@/lib/automation/exitOptionsText";
+import { brokerNameOf } from "@/lib/automation/brokerVenue";
 import { positionPL, positionPLKind, positionPremium, positionQuantity, positionRisk } from "@/lib/automation/pnl";
 import type { Order, Position, Signal } from "@/lib/automation/types";
 import { POSITION_TYPES } from "../builder/model";
@@ -58,7 +59,8 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
   const risk = positionRisk(p, estimate);
   const pl = positionPL(p);
   const plKind = positionPLKind(p);
-  const plSource = plKind === "estimated" ? "estimated from the underlying's price at the end-of-day sweep" : plKind === "manual" ? "entered by hand" : null;
+  const plSource = plKind === "estimated" ? "estimated from the underlying's price at the end-of-day sweep" : plKind === "manual" ? "entered by hand" : plKind === "broker" ? `reported by ${brokerNameOf(p.venue) ?? "the broker"} for the ${p.venue === "deriv" ? "contract" : "trade"}` : null;
+  const broker = brokerNameOf(p.venue);
   const spread: Spread | null = credit != null ? { type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike, credit, quantity } : null;
 
   const openSignal = p.openSignalId ? signals.find((s) => s.id === p.openSignalId) : undefined;
@@ -139,7 +141,7 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         <div className="grid gap-x-8 sm:grid-cols-2">
           <Rows
             rows={[
-              ["Total P/L", <span key="a" className={plClass(pl)}>{plText(pl)}{plSource && <span className="ml-1.5 text-[11px] font-medium text-faint">{plKind === "estimated" ? "estimated" : "by hand"}</span>}</span>, plSource ? `This result was ${plSource}, not read from a fill.` : NO_PRICE_TIP],
+              ["Total P/L", <span key="a" className={plClass(pl)}>{pl == null && p.resultUnknown ? p.resultUnknown : plText(pl)}{plSource && <span className="ml-1.5 text-[11px] font-medium text-faint">{plKind === "estimated" ? "estimated" : plKind === "broker" ? `from ${broker ?? "the broker"}` : "by hand"}</span>}</span>, plSource ? `This result was ${plSource}, not read from a fill.` : NO_PRICE_TIP],
               ["Return %", <span key="b" className={plClass(pl)}>{pl != null && premium ? pctText(pl / premium) : "—"}</span>, "Total P/L divided by the credit received."],
               ["Credit to open", premium != null ? usd(premium) : "—"],
               ["Market value", "—", NEEDS_CHAIN],
@@ -201,7 +203,9 @@ export function PositionDetails({ position: p, orders: allOrders, signals, estim
         {/* Payoff */}
         <section>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Profit and loss at expiry</h3>
-          {spread ? (
+          {broker ? (
+            <p className="rounded-lg bg-surface-2 px-3 py-6 text-center text-sm text-muted">{broker === "Bybit" ? "A Bybit perpetual position has no strikes: there is no spread payoff to draw. Its result is the profit or loss from its real fills, and Bybit's own figure once it reports one." : `A ${broker} contract has no strikes: there is no spread payoff to draw. Its result is whatever ${broker} reports for the contract.`}</p>
+          ) : spread ? (
             <PayoffChart spread={spread} underlying={underlying} underlyingLabel={underlyingLabel} />
           ) : (
             <p className="rounded-lg bg-surface-2 px-3 py-6 text-center text-sm text-muted">No credit is known for this position yet, so there is nothing to draw.</p>

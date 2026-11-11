@@ -14,7 +14,7 @@ import type { BotSummary } from "@/lib/automation/summary";
 import type { BotTemplate } from "@/lib/automation/types";
 import { cn } from "@/lib/format";
 import { usePolling } from "./usePolling";
-import { liveChipTip, ordersFooter, type ExecutorLike } from "./executorLabels";
+import { liveChipTip, ordersFooter, showsBybitTab, type ExecutorLike } from "./executorLabels";
 
 const POLL_MS = 5000;
 const usd = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -183,6 +183,11 @@ export function BotsList() {
         title="Automation"
         actions={
           <>
+            {showsBybitTab(executor) && (
+              <Link href="/automation/bybit" className={headerButtonClass}>
+                Bybit
+              </Link>
+            )}
             <Link href="/automation/status" className={headerButtonClass}>
               Testing
             </Link>

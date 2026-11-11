@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { checkInterruptedRuns, INTERRUPTED_AFTER_MS } from "./interrupted";
 import { alertsStore, botsStore, decisionsStore, positionsStore, runsStore, signalsStore, webhooksStore } from "./store";
-import { BASE_NOW, NDX_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
+import { BASE_NOW, BTC_BOT_ID, NDX_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 import { ensureBotRecord } from "./bots";
 
 // A run the server stopped partway through is noticed and said once; a run that only took a while is left alone.
@@ -70,6 +70,26 @@ describe("a call that was answered but never reached the bot", () => {
     expect(d.reason).toMatch(/BearishNDX.*never reached the bot/);
     expect(botsStore.get(NDX_BOT_ID)?.needsAttention).toBe(true);
     expect(await checkInterruptedRuns(BASE_NOW + 60_000)).toBe(0); // not again
+  });
+
+  it("is not said for a call that was answered under the bot the webhook was on BEFORE it was moved: that call did reach an engine", async () => {
+    ensureBotRecord(BTC_BOT_ID);
+    const at = BASE_NOW - INTERRUPTED_AFTER_MS - 5000;
+    hook(at);
+    signal("old-bot", INTERRUPTED_AFTER_MS + 5000 - 1500, { botId: NDX_BOT_ID, signal: "bearish", raw: { webhook: "BearishNDX" } }); // handled by the NDX bot at the time
+    runsStore.insert({ id: "old-bot", botId: NDX_BOT_ID, signalId: "old-bot", source: "webhook", automation: "Bearish signal", trigger: "TradingView", startedAt: BASE_NOW, nodes: [] });
+    webhooksStore.update("w1", { botId: BTC_BOT_ID }); // now moved to the BTC bot
+    expect(await checkInterruptedRuns(BASE_NOW)).toBe(0);
+    expect(decisionsStore.all().filter((x) => x.outcome === "run_interrupted")).toHaveLength(0);
+    expect(botsStore.get(BTC_BOT_ID)?.needsAttention).toBeFalsy();
+  });
+
+  it("is still said when no signal from that webhook followed at all, whichever bot it is on now", async () => {
+    ensureBotRecord(BTC_BOT_ID);
+    hook(BASE_NOW - INTERRUPTED_AFTER_MS - 5000);
+    webhooksStore.update("w1", { botId: BTC_BOT_ID });
+    expect(await checkInterruptedRuns(BASE_NOW)).toBe(1);
+    expect(botsStore.get(BTC_BOT_ID)?.needsAttention).toBe(true);
   });
 
   it("is not said when a signal from that webhook followed, however it ended (even rejected), or when the call is recent", async () => {

@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { Card, SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/format";
+import { BTC_LABEL, botTrades, resultsByDay, useBybitReply } from "./BtcTrades";
+import { signedDollars, plTone } from "./BybitPanel";
 import { nyseCalendarDay, type NyseCalendarDay } from "@/lib/nyseCalendar";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -27,6 +29,13 @@ const TEXT: Record<NyseCalendarDay["status"], string> = { open: "Regular session
  * acted on during a closure, and on an early close the window ends 5 minutes
  * before 1:00 PM ET. */
 export function CalendarView() {
+  const { reply } = useBybitReply(15_000);
+  const btcDays = useMemo(() => (reply?.active && reply.view ? resultsByDay(botTrades(reply.view)) : null), [reply]);
+  return <CalendarGrid btcDays={btcDays} />;
+}
+
+/** The month grid. `btcDays` is the BTC Bybit Bot's net result per New York day (null when Bybit is not the broker). */
+export function CalendarGrid({ btcDays = null }: { btcDays?: Map<string, { pnl: number; trades: number }> | null }) {
   const today = useMemo(etToday, []);
   const [cursor, setCursor] = useState({ y: today.y, m: today.m });
 
@@ -91,10 +100,13 @@ export function CalendarView() {
               if (d === null) return <div key={`b${i}`} />;
               const s = statusOf(cursor.y, cursor.m, d);
               const isToday = cursor.y === today.y && cursor.m === today.m && d === today.d;
+              const key = `${cursor.y}-${String(cursor.m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+              const btc = btcDays?.get(key);
               return (
                 <div
                   key={d}
-                  title={s.label}
+                  title={btc ? `${BTC_LABEL}: ${btc.trades} trade${btc.trades === 1 ? "" : "s"}, ${signedDollars(btc.pnl)} after fees` : s.label}
+                  data-testid={btc ? "btc-day" : undefined}
                   className={cn(
                     "min-h-16 rounded-lg border p-1.5 text-left",
                     isToday ? "border-accent" : "border-line",
@@ -109,6 +121,14 @@ export function CalendarView() {
                       {s.label}
                     </div>
                   )}
+                  {btc && (
+                    <div className={cn("mt-0.5 text-[10px] font-semibold leading-tight tabular", plTone(btc.pnl))}>
+                      {signedDollars(btc.pnl)}
+                      <span className="block font-normal text-faint">
+                        BTC · {btc.trades} trade{btc.trades === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -118,6 +138,7 @@ export function CalendarView() {
             <Legend className="bg-down-soft" label="Market closed" />
             <Legend className="bg-amber-500/10" label="Early close (1:00 PM ET)" />
             <Legend className="bg-surface-2/50" label="Weekend" />
+            {btcDays && <span className="text-faint">BTC · result of the BTC Bybit Bot that day, after fees ({BTC_LABEL}; New York dates)</span>}
           </div>
         </Card>
 
@@ -135,6 +156,33 @@ export function CalendarView() {
                   : "Bots act within their configured window (see a bot's Settings)."}
             </p>
           </Card>
+
+          {btcDays && (
+            <Card className="p-4" data-testid="btc-days">
+              <SectionTitle>{BTC_LABEL}, by day</SectionTitle>
+              <p className="mb-2 text-xs text-muted">The BTC Bybit Bot trades around the clock, so this calendar's market hours and closures do not stop it.</p>
+              {btcDays.size === 0 ? (
+                <p className="text-sm text-muted">No closed trades yet.</p>
+              ) : (
+                <ul className="divide-y divide-line text-sm">
+                  {[...btcDays.entries()]
+                    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+                    .slice(0, 10)
+                    .map(([day, r]) => (
+                      <li key={day} className="flex items-center justify-between gap-3 py-2">
+                        <div>
+                          <div className="font-medium">{day}</div>
+                          <div className="text-xs text-muted">
+                            {r.trades} trade{r.trades === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                        <span className={cn("font-semibold tabular", plTone(r.pnl))}>{signedDollars(r.pnl)}</span>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </Card>
+          )}
 
           <Card className="p-4">
             <SectionTitle>Upcoming closures</SectionTitle>

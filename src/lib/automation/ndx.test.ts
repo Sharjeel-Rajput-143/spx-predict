@@ -1,3 +1,4 @@
+import { LIVE_BOT_ID } from "./bybitLiveLimits";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withBotLock } from "./botLock";
 import { ensureBotRecord, getBotLimits, getBotStaticConfig, updateBot } from "./bots";
@@ -8,7 +9,7 @@ import { MockExecutor } from "./executor";
 import { countTodayNewPositions } from "./safeguards";
 import { botsStore, decisionsStore, positionsStore, runsStore } from "./store";
 import { maxRisk } from "./strikes";
-import { BASE_NOW, NDX_BOT_ID, TEST_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
+import { BASE_NOW, BTC_BOT_ID, NDX_BOT_ID, TEST_BOT_ID, buildPosition, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "./testSupport";
 import type { SignalDirection } from "./types";
 
 // The addendum's NDX bot, driven through the same engine as SPX: same code,
@@ -262,7 +263,7 @@ describe("per-bot hours and sweep", () => {
 
     const at = (h: number, m: number) => Date.UTC(2026, 9, 6, h + 4, m); // EDT = UTC-4
     expect(await runDueSweeps(at(16, 0), noPrice)).toEqual([]); // before either
-    expect(await runDueSweeps(at(16, 10), noPrice)).toEqual([TEST_BOT_ID]); // SPX's 4:05 has passed, NDX's 4:15 has not
+    expect(await runDueSweeps(at(16, 10), noPrice)).toEqual([TEST_BOT_ID, BTC_BOT_ID, LIVE_BOT_ID]); // SPX's 4:05 (and the BTC bot's, on the simulation here) has passed, NDX's 4:15 has not
     expect(positionsStore.get("spx-open")?.status).toBe("expired");
     expect(positionsStore.get("ndx-open")?.status).toBe("open");
 

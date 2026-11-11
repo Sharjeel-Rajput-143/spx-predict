@@ -9,7 +9,8 @@ import { closePosition, closeTitle, pricingFor } from "./engine";
 import { activePositionsForBot } from "./safeguards";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
 import { sharedExecutor } from "./sharedExecutor";
-import { describeTradingTime, describeWindow, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
+import { describeTradingTime, describeWindow, isWithinTradingHours } from "./tradingHours";
+import { hoursFor } from "./tradingWindow";
 import type { BrokerExecutor, DecisionOutcome, MonitorKey, Position, PositionType, Signal, SignalDirection } from "./types";
 
 /**
@@ -87,7 +88,7 @@ export function runCloseMonitor(botId: string, key: MonitorKey, now: number = Da
     }
     if (bot.killSwitch) return skip(key, "kill_switch");
     if (!bot.enabled) return skip(key, "bot_off");
-    const hours = hoursConfigFor(config.hours);
+    const hours = hoursFor(options.executor ?? sharedExecutor, config.underlying, config.hours);
     if (!isWithinTradingHours(now, hours)) return skip(key, "outside_hours");
 
     const wrongSide = activePositionsForBot(botId, def.wrongType);
@@ -136,7 +137,7 @@ export function runCloseMonitor(botId: string, key: MonitorKey, now: number = Da
           continue;
         }
 
-        const closed = await closePosition(position, { id: confirmed.id, price: null }, executor, closeTimeoutMs, options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS, now, pricingFor(config, "close", options.ladderStepMs), undefined, { chase: true, marks: true });
+        const closed = await closePosition(position, { id: confirmed.id, price: null }, executor, closeTimeoutMs, options.pollIntervalMs ?? ORDER_POLL_INTERVAL_MS, now, pricingFor(config, "close", options.ladderStepMs), undefined, { chase: true, marks: true, reason: "monitor" });
         const tags = settings.tags?.length ? [...new Set([...(fresh(position).tags ?? []), ...settings.tags])] : undefined;
         if (settings.memo || tags) {
           positionsStore.update(position.id, {

@@ -113,7 +113,7 @@ describe("calling a webhook", () => {
   it("a plain-text alert message with no price, and only a stale quote, is answered at once and logged as rejected (no price)", async () => {
     feed.tick = { t: Date.now() - 10 * 60_000, price: 21_050.5 };
     const w = createWebhook({ name: "Stale", botId: NDX_BOT_ID, direction: "bullish" });
-    expect((await call(w.token, "Bullish signal")).status).toBe(202); // TradingView is not kept waiting
+    expect((await call(w.token, "Bullish signal")).status).toBe(200); // TradingView is not kept waiting
     await settle();
     expect(signalsStore.all().map((s) => [s.status, s.rejectReason])).toEqual([["rejected", "no_price"]]);
   });
@@ -136,7 +136,7 @@ describe("calling a webhook", () => {
   it("a call that found no price does not use up the minute", async () => {
     feed.tick = null;
     const w = createWebhook({ name: "NoQuote", botId: NDX_BOT_ID, direction: "bullish" });
-    expect((await call(w.token, "")).status).toBe(202);
+    expect((await call(w.token, "")).status).toBe(200);
     await settle();
     feed.tick = { t: Date.now(), price: 21_050.5 };
     expect((await call(w.token, "")).status).toBe(200);
@@ -147,7 +147,7 @@ describe("calling a webhook", () => {
     feed.tick = null;
     const w = createWebhook({ name: "A", botId: NDX_BOT_ID, direction: "bullish" });
     const res = await call(w.token, "");
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(200);
     expect((await res.json()).queued).toMatch(/live price/);
     await settle();
     expect(signalsStore.all()).toHaveLength(1);
@@ -162,7 +162,7 @@ describe("calling a webhook", () => {
     vi.setSystemTime(BASE_NOW); // inside trading hours
     feed.slowTick = { t: BASE_NOW, price: 21_050.5 }; // not there for the quick look, there for the longer one
     const w = createWebhook({ name: "Slow", botId: NDX_BOT_ID, direction: "bullish" });
-    expect((await call(w.token, "")).status).toBe(202);
+    expect((await call(w.token, "")).status).toBe(200);
     await settle();
     await settle();
     expect(signalsStore.all().map((s) => [s.status, s.price])).toEqual([["accepted", 21_050.5]]);

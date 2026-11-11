@@ -10,10 +10,12 @@ import { cn } from "@/lib/format";
 import { DashboardTab } from "./DashboardTab";
 import { LogTab } from "./LogTab";
 import { PositionsTab } from "./PositionsTab";
+import { canRunByHand } from "@/lib/automation/liveRunRule";
 import { RunModal } from "./RunModal";
 import { SettingsTab } from "./SettingsTab";
 import { Btn, Dropdown, MenuDivider, MenuItem, Modal, OnOffSwitch, Pill, TextPromptModal, Toasts, type ToastItem } from "./primitives";
 import { attentionDetail, outcomeInfo, TYPE_LABEL, type BotDetailData } from "./model";
+import { btcToastSuffix, isBtcPosition } from "./btcWording";
 import { usePolling } from "../usePolling";
 import { EXIT_OPTIONS_NOTE, botExitTriggers } from "@/lib/automation/exitOptionsText";
 
@@ -86,7 +88,8 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
       if (!kind || !data.bot.alerts[kind]) continue;
       const posId = d.detail?.positionId as string | undefined;
       const pos = posId ? positions.get(posId) : undefined;
-      const what = pos ? ` - ${TYPE_LABEL[pos.type]} ${pos.shortStrike}/${pos.longStrike}` : "";
+      // A BTC trade is a long or a short, not a spread with strikes.
+      const what = pos ? (isBtcPosition(pos) ? btcToastSuffix(d, pos) : ` - ${TYPE_LABEL[pos.type]} ${pos.shortStrike}/${pos.longStrike}`) : "";
       notify(tone === "ok" ? "ok" : tone === "error" ? "error" : "warn", `${label}${what}`);
     }
     seen.current = ids;
@@ -142,7 +145,9 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
     notify,
     patch,
     navigate,
-    openRun: (signal) => setRun({ signal }),
+    openRun: (signal) => {
+      if (canRunByHand(bot.id)) setRun({ signal }); // the live bot is never run by hand (liveRunRule.ts)
+    },
     viewPosition: (id) => {
       setFocusPositionId(id);
       navigate("positions");
@@ -244,7 +249,7 @@ export function BotDetail({ botId, initialTab }: { botId: string; initialTab: st
             >
               {(close) => (
                 <>
-                  <MenuItem onClick={() => { close(); setRun({}); }}>Run automation</MenuItem>
+                  {canRunByHand(bot.id) && <MenuItem onClick={() => { close(); setRun({}); }}>Run automation</MenuItem>}
                   <MenuItem onClick={async () => { close(); const r = await post("/clone"); if (r.ok) { notify("ok", "Cloned - the copy is switched off."); router.push(`/automation/bots/${r.json.bot.id}?tab=settings`); } else notify("error", r.json.error ?? "Could not clone."); }}>
                     Clone bot
                   </MenuItem>

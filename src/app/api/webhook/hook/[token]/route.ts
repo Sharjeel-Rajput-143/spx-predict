@@ -6,10 +6,22 @@ import { ingestWebhook } from "@/lib/automation/webhookIngest";
 import { WEBHOOK_MIN_INTERVAL_MS, checkAlertText, findWebhookByToken, isAttached, webhookUnderlying } from "@/lib/automation/webhooks";
 import { ensureBotRecord } from "@/lib/automation/bots";
 import { logDecision } from "@/lib/automation/decisions";
-import { SLOW_QUOTE_WAIT_MS, resolveHookPrice } from "@/lib/automation/hookPrice";
+import { SLOW_QUOTE_WAIT_MS, freshQuoteNow, resolveHookPrice } from "@/lib/automation/hookPrice";
+import { arrivalIdle, enqueueArrival } from "@/lib/automation/webhookQueue";
 import { checkInterruptedRuns } from "@/lib/automation/interrupted";
+import { runMirror } from "@/lib/automation/liveMirror";
 import { pruneOncePerDay } from "@/lib/automation/retention";
 import { deferWork, loadEverything, withStorage } from "@/lib/automation/withStorage";
+
+/** Starts the live job of this call (liveMirror.ts) and hands back a promise that cannot reject. If the mirror itself ever broke its promise and threw, or hung, the demo call would not notice:
+ * nothing the answer is built from depends on it. */
+function mirrorSafely(...args: Parameters<typeof runMirror>): Promise<void> | undefined {
+  try {
+    return runMirror(...args).catch(() => undefined);
+  } catch {
+    return undefined;
+  }
+}
 
 /** A named webhook's URL, the one TradingView is given. The secret is the URL itself. As in Option Alpha, the call is only a trigger:
  * the URL decides which signal it is, and the bot works from its own live quote of its underlying. The alert's text is read for one
@@ -93,44 +105,73 @@ async function handlePOST(req: NextRequest, { params }: { params: Promise<{ toke
         signalsStore.insert({ id: `sig-rejected-${now}-${crypto.randomUUID()}`, botId, signal: direction, barTime, price: 0, interval: "", receivedAt: now, status: "rejected", rejectReason: "no_price", raw: { webhook: hook.name } });
         return;
       }
-      const result = send(found);
-      if (result.status === 200) count();
-      else giveBack();
-      await result.processing;
+      // Both jobs start at the same moment and neither waits for the other (see liveMirror.ts). The live job first: nothing the demo job does, even a throw, can stop it.
+      const liveJob = mirrorSafely({ hook, direction: direction!, price: found, barTime });
+      try {
+        const result = send(found);
+        if (result.status === 200) count();
+        else giveBack();
+        await result.processing;
+      } catch (err) {
+        giveBack();
+        console.error("[automation] the demo job of this alert failed; the live job is independent and was started", err);
+      }
+      await liveJob;
     };
     return deferWork(NextResponse.json({ received: true }, { status: 200 }), background);
   }
 
-  // Records in files (a laptop, a server with a disk): answered as soon as the signal is saved; the bot finishes its work behind it.
-  // The price is the bot's own live quote, never one sent with the call.
+  // Records in files (a laptop, a server with a disk). The answer NEVER waits for a price: TradingView gives up after a few seconds, and the first call after a restart used to
+  // spend about 1.7 of them fetching a quote. Either a fresh quote is already held (the usual case: a poller keeps one), and the signal is saved at once, or the call is answered
+  // now and finds its price behind the answer. Either way the calls of one bot reach the engine in the order they arrived (webhookQueue.ts), the minute's slot is already taken
+  // and saved, and a call that never reaches the engine is reported by the watchdog (checkInterruptedRuns).
   const interruptedCheck = (async () => {
     // Housekeeping, finished behind the answer with the rest of the work: old log entries (once a day) and runs that never finished.
     pruneOncePerDay(now);
     await checkInterruptedRuns(now);
   })().catch(() => undefined);
-  const price = await resolveHookPrice(underlying, now);
-  if (price !== null) {
-    const result = send(price);
-    if (result.status === 200) count();
-    else giveBack();
-    return deferWork(NextResponse.json(result.body, { status: result.status }), Promise.all([result.processing, interruptedCheck]));
+  const quote = freshQuoteNow(underlying, now);
+  if (quote !== null && arrivalIdle(botId)) {
+    // Both jobs start at the same moment and neither waits for the other (see liveMirror.ts). The live job is started first and cannot be stopped by anything the demo job does.
+    const mirrored = mirrorSafely({ hook, direction: direction!, price: quote, barTime });
+    let result: ReturnType<typeof send> | null = null;
+    try {
+      result = send(quote);
+      if (result.status === 200) count();
+      else giveBack();
+    } catch (err) {
+      giveBack();
+      console.error("[automation] the demo job of this alert failed; the live job is independent and was started", err);
+    }
+    // TradingView's answer is built from the demo result alone.
+    if (!result) return deferWork(NextResponse.json({ error: "The demo bot could not take this alert." }, { status: 500 }), Promise.all([interruptedCheck, mirrored]));
+    return deferWork(NextResponse.json(result.body, { status: result.status }), Promise.all([result.processing, interruptedCheck, mirrored]));
   }
 
-  // No quote yet (a server that has only just started, or a slow feed): answer now, and keep looking for it a few seconds more
-  // in the background. If there is still none, the call is logged as rejected, so it shows in the bot's Log.
-  const late = (async () => {
-    const found = await resolveHookPrice(underlying, Date.now(), SLOW_QUOTE_WAIT_MS);
+  // No fresh quote yet (a server that has only just started, or a slow feed), or an earlier call of this bot is still waiting for its own: answered now, and this call takes its turn
+  // behind the others. If there is still no price after the wait, the call is logged as rejected, so it shows in the bot's Log, and the minute is given back.
+  let processing: Promise<void> | undefined;
+  let liveJob: Promise<void> | undefined;
+  const turn = enqueueArrival(botId, async () => {
+    const found = quote ?? (await resolveHookPrice(underlying, Date.now(), SLOW_QUOTE_WAIT_MS));
     if (found === null) {
       giveBack();
       signalsStore.insert({ id: `sig-rejected-${now}-${crypto.randomUUID()}`, botId, signal: direction, barTime, price: 0, interval: "", receivedAt: now, status: "rejected", rejectReason: "no_price", raw: { webhook: hook.name } });
       return;
     }
-    const result = send(found);
-    if (result.status === 200) count();
-    else giveBack();
-    await result.processing;
-  })();
-  return deferWork(NextResponse.json({ received: true, queued: "Waiting for a live price; the call is being processed." }, { status: 202 }), Promise.all([late, interruptedCheck]));
+    // Both jobs start at the same moment and neither waits for the other (see liveMirror.ts).
+    liveJob = mirrorSafely({ hook, direction: direction!, price: found, barTime });
+    try {
+      const result = send(found);
+      if (result.status === 200) count();
+      else giveBack();
+      processing = result.processing;
+    } catch (err) {
+      giveBack();
+      console.error("[automation] the demo job of this alert failed; the live job is independent and was started", err);
+    }
+  });
+  return deferWork(NextResponse.json({ received: true, queued: "Waiting for a live price; the call is being processed." }, { status: 200 }), Promise.all([turn.then(() => processing), interruptedCheck, turn.then(() => liveJob)]));
 }
 
 /** A look that triggers nothing: it answers 200 for any address (so it says nothing about which tokens exist), after opening the same

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
+import { BTC_BOT_ID, NDX_BOT_ID, TEST_BOT_ID, resetAutomationStores, setNdxTestEnv, setTestBotEnv } from "@/lib/automation/testSupport";
 import { GET, PATCH } from "./route";
 
 setTestBotEnv();
@@ -20,12 +20,12 @@ describe("GET /api/automation/settings", () => {
     vi.stubEnv("WEBHOOK_SECRET", "super-secret-value-123");
     const body = await (await get()).json();
     expect(body.window).toEqual({ start: "09:35", end: "15:55", source: "environment", timezone: "America/New_York" });
-    expect(body.settings.sessionTimeoutMinutes).toBe(60);
-    expect(body.sessionTimeoutChoices).toEqual([30, 60, 120, 240, 480]);
+    expect(body.settings.sessionTimeoutMinutes).toBe(1440);
+    expect(body.sessionTimeoutChoices).toEqual([30, 60, 120, 240, 480, 1440]);
     expect(body.executor).toMatchObject({ kind: "mock", venue: "mock", error: null });
     expect(body.email).toEqual({ enabled: false, to: null, senderWired: false });
     expect(body.webhook).toMatchObject({ path: "/api/webhook/tradingview", secretSet: true });
-    expect(body.webhook.bots.map((b: { id: string; underlying: string }) => [b.id, b.underlying])).toEqual([[TEST_BOT_ID, "SPX"], [NDX_BOT_ID, "NDX"]]);
+    expect(body.webhook.bots.map((b: { id: string; underlying: string }) => [b.id, b.underlying])).toEqual([[TEST_BOT_ID, "SPX"], [NDX_BOT_ID, "NDX"], [BTC_BOT_ID, "BTC"]]);
     expect(body.accounts.find((a: { id: string }) => a.id === "paper-ndx").bots).toEqual(["NDX Bias Bot"]);
   });
 

@@ -44,6 +44,16 @@ export type DecisionOutcome =
   | "total_position_limit_reached"
   | "daily_limit_reached"
   | "daily_loss_limit_reached"
+  /** A Bybit trade's stop loss was moved to breakeven by the risk monitor, or the trade was closed because the price was already past the new stop. */
+  | "breakeven_stop"
+  /** The pullback exit closed a Bybit demo trade: its profit fell a set amount below its peak (pullbackExit.ts). */
+  | "pullback_exit"
+  /** The chain mode's tight stop closed a chain trade (kept by the app, not by Bybit). */
+  | "chain_stop"
+  /** The chain mode opened the next trade, opposite to the one that just closed; or ended the chain, with the reason (pullbackExit.ts). */
+  | "chain_open"
+  | "chain_ended"
+  | "after_last_buy_time"
   | "allocation_limit_reached"
   | "invalid_strikes"
   | "symbol_mismatch"
@@ -214,6 +224,16 @@ export interface Bot {
   killSwitch?: boolean;
   needsAttention: boolean;
   needsAttentionReason: string | null;
+  /** Bybit: the day the daily loss limit (DAILY_MAX_LOSS_USD) was reached. New entries are refused until the next day (see bybitDay.ts). */
+  riskTrip?: { day: string; at: number; reason: string };
+  /** Bybit: the trade history on the Bybit page was cleared at this time. Older trades are hidden from the list and left out of "total since cleared". Nothing is deleted, and the daily loss limit is not affected. */
+  bybitHistoryClearedAt?: number;
+  /** When "Reset today" was pressed on the Bybit page: the "Today" figure counts only trades closed after it. Display only: the daily loss limit does not use it. */
+  bybitTodayResetAt?: number;
+  /** Pullback exit and chain mode settings of the Bybit DEMO bot (pullbackExit.ts). Never honoured for the live bot. */
+  pullback?: { enabled?: boolean; fallUsd?: number; minPeakUsd?: number; chainEnabled?: boolean; chainStopUsd?: number; chainMax?: number };
+  /** The running chain, if any: which alert started it, how many chain trades so far, and the trade whose close decides the next step. */
+  chainState?: { rootSignalId: string; count: number; lastPositionId: string; startedAt: number };
   /** The last evaluation of the daily loss limit (see lossLimit.ts), for the Settings tab. */
   lossCheck?: LossCheckSnapshot;
   createdAt: number;
@@ -327,13 +347,27 @@ export interface Position {
   optionRoot?: string;
   /** How an expired position's result was settled: estimated from the underlying, or typed in by a person. Unset = no result recorded. */
   settlement?: PositionSettlement;
+  /** Set on a Deriv or Bybit position whose real result is not known yet: "unknown, check Deriv". Never replaced by an estimate; cleared when the broker's own result is read. */
+  resultUnknown?: string;
+  /** How the position was closed (set when it closes): a signal flip, Bybit's stop loss or take profit, the daily loss limit, the kill switch, a person, the end-of-day sweep. */
+  closeReason?: CloseReason;
+  /** Set once a Bybit trade's stop loss was moved to breakeven (see bybitExecutor.moveStopToBreakeven): the new stop price and when. Per trade, so a flip or a new trade starts without it. */
+  breakevenStop?: { price: number; at: number };
+  /** The best profit this Bybit trade has reached, in dollars on the mark price, saved so a restart does not forget it (the pullback exit). */
+  peakProfitUsd?: number;
+  peakAt?: number;
+  /** Set on a trade the chain mode opened: the alert that started the chain, and which chain trade this is (1 is the first). */
+  chain?: { rootSignalId: string; index: number };
   /** Placed by the admin page's Send test alert (the real webhook path, flagged internally). */
   test?: boolean;
 }
 
+export type CloseReason = "signal_flip" | "stop_loss" | "take_profit" | "daily_limit" | "kill_switch" | "end_of_day" | "manual" | "exit_rule" | "monitor" | "liquidation" | "closed_at_broker" | "breakeven_stop" | "breakeven_close" | "pullback_exit" | "chain_stop";
+
 /** The result of a position that expired rather than being closed by a fill. */
 export interface PositionSettlement {
-  kind: "estimated" | "manual";
+  /** "broker": the result as the broker itself reports it (Deriv's own profit for the contract). Never an estimate for a Deriv position. */
+  kind: "estimated" | "manual" | "broker";
   /** Total profit or loss in dollars for the whole position. */
   pl: number;
   /** Estimated: the underlying's price it was worked out from. */
@@ -413,7 +447,7 @@ export interface OrderState {
   events?: OrderEvent[];
 }
 
-export type ExecutorVenue = "mock" | "tradier" | "ibkr";
+export type ExecutorVenue = "mock" | "tradier" | "ibkr" | "deriv" | "bybit";
 
 export interface OpenSpreadRequest {
   botId: string;
@@ -441,6 +475,8 @@ export interface CloseOrderOptions {
   quantity?: number;
   /** As on OpenSpreadRequest: lets a broker refuse a repeat of the same order. */
   clientOrderId?: string;
+  /** A person pressed Close position: an executor with a trading window (Deriv's) still sends it outside the window, because a position must never be left unable to close. */
+  manual?: boolean;
 }
 
 /** The broker's own quote for an underlying (an index), with the time the quote is from. */
@@ -515,6 +551,22 @@ export interface BrokerExecutor {
   getBalances?(): Promise<BrokerBalances>;
   /** Whether the broker's own answer says this is a paper account (the bridge's /health `paper`). Absent on executors that are not a real broker. */
   isPaperAccount?(): Promise<boolean>;
+  /** The hours (New York time, "HH:MM") this executor may place orders in for this underlying, or null when it has none. Orders outside them are never sent (see tradingWindow.ts). */
+  tradingWindowFor?(underlying: string): { start: string; end: string; alwaysOn?: boolean } | null;
+  /** The last minute of the day (minutes after midnight New York time, on the day of `now`) a NEW contract may be bought for this underlying, or null when there is no such limit. Closes are never held to it. */
+  lastBuyMinutesFor?(underlying: string, now: number): number | null;
+  /** The broker's own result for a contract an order reference names: settled or not, and its profit as the broker reports it. Null when the reference is not this broker's. */
+  getContractResult?(ref: string): Promise<{ settled: boolean; profit: number | null; status: string } | null>;
+  /**
+   * A broker that can close a trade by itself (Bybit's stop loss and take profit) is asked what happened to this bot's open positions: one the account no longer
+   * holds is marked closed here, with how it closed and its real exit price, so the next signal starts from flat. Returns how many it changed. Reads, then records; sends no order.
+   */
+  syncPositions?(botId: string, now: number): Promise<number>;
+  /**
+   * Whether a NEW entry is refused right now for a rule the broker itself enforces (Bybit's daily loss limit and kill switch), and why. Null = allowed. The engine logs it
+   * as a skip with that outcome. Reads only.
+   */
+  entryBlock?(botId: string, now: number): Promise<{ outcome: "daily_loss_limit_reached" | "kill_switch"; reason: string } | null>;
   /** The broker's mark for a held spread (the short leg's market price less the long leg's), or null when it is not known. Never a guess. */
   getSpreadMark?(position: Position, quantity: number): Promise<number | null>;
 }

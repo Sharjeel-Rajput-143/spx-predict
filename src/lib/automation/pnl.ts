@@ -1,3 +1,4 @@
+import { reportsOwnResult } from "./brokerVenue";
 import type { Position } from "./types";
 
 /**
@@ -11,6 +12,8 @@ export function positionQuantity(p: Position): number {
 }
 
 export function positionPL(p: Position): number | null {
+  // A Deriv or Bybit position's result is the broker's own report when it has been read: never worked out from strikes or a credit.
+  if (reportsOwnResult(p) && p.settlement?.kind === "broker") return p.settlement.pl;
   // An expired position has no fill to price it by; its result is what the end-of-day sweep
   // estimated from the underlying, or what a person typed in - and says so (positionPLKind).
   if (p.status === "expired") return p.settlement?.pl ?? null;
@@ -18,9 +21,10 @@ export function positionPL(p: Position): number | null {
   return (p.credit - p.closePrice) * 100 * positionQuantity(p);
 }
 
-/** Where a P/L came from: a close order's fill, an estimate from the underlying's price, or a person. */
-export function positionPLKind(p: Position): "fill" | "estimated" | "manual" | null {
+/** Where a P/L came from: a close order's fill, an estimate from the underlying's price, a person, or the broker's own report of the contract (Deriv). */
+export function positionPLKind(p: Position): "fill" | "estimated" | "manual" | "broker" | null {
   if (positionPL(p) === null) return null;
+  if (reportsOwnResult(p) && p.settlement?.kind === "broker") return "broker";
   return p.status === "expired" ? (p.settlement?.kind ?? null) : "fill";
 }
 

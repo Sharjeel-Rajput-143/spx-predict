@@ -4,7 +4,7 @@ import { isAuthRequired } from "./config";
 
 import { loginEmail, sessionKeyOrNull } from "@/lib/auth/credentials";
 import { userIdForEmail } from "@/lib/auth/users";
-import { signSession, verifySession } from "@/lib/auth/sessionToken";
+import { renewSessionToken, signSession, verifySession } from "@/lib/auth/sessionToken";
 
 export const SESSION_COOKIE_NAME = "automation_session";
 
@@ -17,6 +17,19 @@ export function createSession(): string {
   const key = sessionKeyOrNull();
   if (!key) throw new Error("AUTH_SECRET is not set.");
   return signSession(loginEmail() || "operator", getAppSettings().sessionTimeoutMinutes * 60_000, key);
+}
+
+/**
+ * A sliding timeout: for someone who is still using the app, a new cookie value whose idle window (the Settings page's
+ * session timeout) starts again now. It never runs past 24 hours after the original sign-in, a signed-out token gets
+ * nothing, and the password is never involved. Null = nothing to renew (not signed in, past the hard limit, or sign-in is off).
+ */
+export function renewSession(token: string | undefined | null, now: number = Date.now()): { token: string; maxAgeSeconds: number } | null {
+  if (!isAuthRequired() || !token || signedOut.has(token)) return null;
+  const key = sessionKeyOrNull();
+  if (!key) return null;
+  const next = renewSessionToken(token, key, getAppSettings().sessionTimeoutMinutes * 60_000, now);
+  return next ? { token: next.token, maxAgeSeconds: Math.max(1, Math.floor((next.expiresAt - now) / 1000)) } : null;
 }
 
 export function isValidSession(token: string | undefined | null): boolean {

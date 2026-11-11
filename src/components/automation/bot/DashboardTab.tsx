@@ -8,7 +8,8 @@ import type { Decision } from "@/lib/automation/types";
 import type { BotContext } from "./BotDetail";
 import { LineChart, type ChartPoint } from "./LineChart";
 import { InfoTip, KeyValue, Pill } from "./primitives";
-import { NO_PRICE_TIP, TYPE_LABEL, etDayKey, etShortTime, outcomeInfo, pctText, plClass, plText, usd, type BotDetailData } from "./model";
+import { NO_PRICE_TIP, TYPE_LABEL, etDayKey, etShortTime, outcomeInfo, pctText, plClass, plText, usd, usd2, type BotDetailData } from "./model";
+import { btcActivity, isBtcPosition, isBtcUnderlying } from "./btcWording";
 
 type Metric = "pl" | "opened";
 
@@ -18,12 +19,16 @@ export function DashboardTab({ ctx }: { ctx: BotContext }) {
   const allocation = data.config?.allocationLimit ?? null;
   const returnPct = stats.closedPL != null && allocation ? stats.closedPL / allocation : null;
   const [metric, setMetric] = useState<Metric>(stats.priced > 0 ? "pl" : "opened");
+  // The BTC bot trades a tiny size, so its results are cents: +$0.72 must not read as +$1. The option bots keep whole dollars.
+  const cents = isBtcUnderlying(data.config?.underlying);
+  const digits = cents ? 2 : 0;
+  const money = cents ? usd2 : usd;
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
       <div className="min-w-0 space-y-4">
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <Tile label="Closed P/L" tip={NO_PRICE_TIP} value={<span className={plClass(stats.closedPL)}>{plText(stats.closedPL)}</span>} />
+          <Tile label="Closed P/L" tip={NO_PRICE_TIP} value={<span className={plClass(stats.closedPL)}>{plText(stats.closedPL, digits)}</span>} />
           <Tile label="Return" tip="Closed P/L as a share of the bot's allocation." value={<span className={plClass(returnPct)}>{pctText(returnPct, 2)}</span>} />
           <Tile label="Change" tip="Unrealized change needs live option prices, which Phase 1 doesn't have." value="—" />
           <Tile label="Change %" tip="Unrealized change needs live option prices, which Phase 1 doesn't have." value="—" />
@@ -35,15 +40,15 @@ export function DashboardTab({ ctx }: { ctx: BotContext }) {
           <h2 className="mb-4 text-base font-semibold">Position stats</h2>
           <div className="grid grid-cols-2 gap-x-6 gap-y-5 md:grid-cols-4">
             <Stat label="Closed positions" value={stats.finished} link onClick={() => navigate("positions")} />
-            <Stat label="Closed P/L" value={<span className={plClass(stats.closedPL)}>{plText(stats.closedPL)}</span>} />
+            <Stat label="Closed P/L" value={<span className={plClass(stats.closedPL)}>{plText(stats.closedPL, digits)}</span>} />
             <Stat label="Profit factor" value={stats.profitFactor != null ? stats.profitFactor.toFixed(2) : "—"} tip="Gross wins divided by gross losses. Blank until there is at least one loss." />
-            <Stat label="Max drawdown" value={stats.maxDrawdown != null ? usd(stats.maxDrawdown) : "—"} tip="The largest peak-to-trough drop in realized P/L." />
+            <Stat label="Max drawdown" value={stats.maxDrawdown != null ? money(stats.maxDrawdown) : "—"} tip="The largest peak-to-trough drop in realized P/L." />
             <Stat label="Win rate" value={pctText(stats.winRate, 1, false)} />
             <Stat label="Wins" value={stats.priced ? stats.wins : "—"} />
             <Stat label="Losses" value={stats.priced ? stats.losses : "—"} />
-            <Stat label="Avg P/L" value={<span className={plClass(stats.avgPL)}>{plText(stats.avgPL)}</span>} />
-            <Stat label="Avg win" value={<span className="text-up">{plText(stats.avgWin)}</span>} />
-            <Stat label="Avg loss" value={<span className="text-down">{plText(stats.avgLoss)}</span>} />
+            <Stat label="Avg P/L" value={<span className={plClass(stats.avgPL)}>{plText(stats.avgPL, digits)}</span>} />
+            <Stat label="Avg win" value={<span className="text-up">{plText(stats.avgWin, digits)}</span>} />
+            <Stat label="Avg loss" value={<span className="text-down">{plText(stats.avgLoss, digits)}</span>} />
             <Stat
               label="Streak"
               link={!!stats.streak}
@@ -74,10 +79,10 @@ export function DashboardTab({ ctx }: { ctx: BotContext }) {
           {capital ? (
             <KeyValue
               rows={[
-                [<>Allocation</>, usd(capital.allocation)],
-                [<>Net liquid<InfoTip text="Allocation plus realized P/L. Blank until closes are priced." /></>, capital.netLiquid != null ? usd(capital.netLiquid) : "—"],
-                [<>At risk<InfoTip text="Maximum loss on open positions: (width - credit) x 100 x quantity." /></>, usd(capital.atRisk)],
-                [<>Available<InfoTip text="Allocation minus what's at risk." /></>, usd(capital.available)],
+                [<>Allocation</>, money(capital.allocation)],
+                [<>Net liquid<InfoTip text="Allocation plus realized P/L. Blank until closes are priced." /></>, capital.netLiquid != null ? money(capital.netLiquid) : "—"],
+                [<>At risk<InfoTip text="Maximum loss on open positions: (width - credit) x 100 x quantity." /></>, money(capital.atRisk)],
+                [<>Available<InfoTip text="Allocation minus what's at risk." /></>, money(capital.available)],
               ]}
             />
           ) : (
@@ -134,6 +139,8 @@ function PerformanceChart({ data, metric, onMetric }: { data: BotDetailData; met
       .map((p, i) => ({ at: p.openedAt ?? 0, value: i + 1 }));
   }, [data, metric]);
 
+  const cents = isBtcUnderlying(data.config?.underlying);
+  const dollars = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString("en-US", cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : undefined)}`;
   const since = points[0] ? new Date(points[0].at).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric" }) : null;
 
   return (
@@ -153,7 +160,7 @@ function PerformanceChart({ data, metric, onMetric }: { data: BotDetailData; met
       </div>
       <LineChart
         points={points}
-        format={metric === "pl" ? (n) => (n < 0 ? `-$${Math.abs(n).toLocaleString("en-US")}` : `$${n.toLocaleString("en-US")}`) : (n) => String(n)}
+        format={metric === "pl" ? dollars : (n) => String(n)}
         empty={metric === "pl" ? "No priced closes yet - Closed P/L needs fill prices from the executor." : "No positions opened yet."}
         integer={metric === "opened"}
       />
@@ -189,6 +196,8 @@ function ActivityCard({ ctx }: { ctx: BotContext }) {
   const describe = (d: Decision): { title: string; reason?: string } => {
     const info = outcomeInfo(d.outcome);
     const pos = (d.detail?.positionId as string | undefined) ? positions.get(d.detail.positionId as string) : undefined;
+    // A BTC trade is not a spread: it is named long or short, and how it ended (see btcWording.ts).
+    if (pos && isBtcPosition(pos)) return btcActivity(d, pos, info.label);
     return pos ? { title: `${info.label}: ${TYPE_LABEL[pos.type]} ${pos.shortStrike}/${pos.longStrike}` } : { title: info.label, reason: d.reason };
   };
 

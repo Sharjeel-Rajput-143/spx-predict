@@ -14,7 +14,8 @@ import { nyseCalendarDay } from "@/lib/nyseCalendar";
 import { activePositionsForBot } from "./safeguards";
 import { sharedExecutor } from "./sharedExecutor";
 import { spreadMarket } from "./smartPricing";
-import { easternDateKey, easternMinutesOfDay, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
+import { easternDateKey, easternMinutesOfDay, isWithinTradingHours } from "./tradingHours";
+import { hoursFor } from "./tradingWindow";
 import type { BrokerExecutor, Position } from "./types";
 
 /**
@@ -103,7 +104,8 @@ export function runExitChecks(botId: string, now: number = Date.now(), options: 
     } catch {
       return { ...result, skipped: "not_set_up" };
     }
-    if (!isWithinTradingHours(now, hoursConfigFor(WINDOW))) return { ...result, skipped: "outside_hours" };
+    // A Deriv-backed bot is judged against Deriv's own window (09:35 to 15:55 by default), so no exit order goes to Deriv outside it.
+    if (!isWithinTradingHours(now, hoursFor(options.executor ?? sharedExecutor, config.underlying, WINDOW))) return { ...result, skipped: "outside_hours" };
 
     const candidates = activePositionsForBot(botId).filter(
       (p) => p.status === "open" && !p.manual && p.exitOptions && Object.keys(p.exitOptions).length > 0 && ordersStore.query((o) => o.positionId === p.id && o.kind === "close" && (o.status === "working" || o.status === "partially_filled")).length === 0,
@@ -148,7 +150,7 @@ export function runExitChecks(botId: string, now: number = Date.now(), options: 
         // The expiration exit is the last chance before the close: it goes at market, whatever the bot's usual close pricing is.
         const ownPricing: ClosePricing | undefined = met.kind === "expiration" ? { speed: "market" } : bot.closeSettings?.[position.type === "short_put_spread" ? "bearish" : "bullish"]?.pricing;
         const pricing = applyClosePricing(pricingFor(config, "close", options.ladderStepMs), ownPricing);
-        const closed = await closePosition(position, { id: null, price: reading.underlying }, executor, closeTimeoutMs, options.pollIntervalMs ?? 1000, now, pricing, undefined, { chase: true, marks: true });
+        const closed = await closePosition(position, { id: null, price: reading.underlying }, executor, closeTimeoutMs, options.pollIntervalMs ?? 1000, now, pricing, undefined, { chase: true, marks: true, reason: "exit_rule" });
         rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: [{ label: "Why", value: met.text }], steps: closed.steps, outcome: closed.outcome, reason: closed.reason });
         if (closed.ok) {
           result.closed++;

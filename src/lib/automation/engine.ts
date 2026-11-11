@@ -45,8 +45,9 @@ import { botsStore, ordersStore, positionsStore, signalsStore } from "./store";
 import { describePlan, maxRisk, planStrikes, roundingWords, validateStrikes, type StrikePair, type StrikePlan } from "./strikes";
 import { checkHolds, defaultCheck, describeCheck, isDefaultForm, matching, positionsWord, typeLabel } from "./positionChecks";
 import { RunRecorder, describeLegs, typeName } from "./runTrace";
-import { describeTradingTime, describeWindow, easternDateKey, hoursConfigFor, isWithinTradingHours } from "./tradingHours";
-import type { BotStaticConfig, BrokerExecutor, SpreadQuoteRequest, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
+import { describeTradingTime, describeWindow, easternDateKey, isWithinTradingHours } from "./tradingHours";
+import { hasExecutorWindow, hoursFor, lastBuyCheck } from "./tradingWindow";
+import type { BotStaticConfig, BrokerExecutor, CloseReason, SpreadQuoteRequest, DecisionOutcome, Order, Position, PositionType, Signal, SignalDirection } from "./types";
 
 export interface ReceiveSignalInput {
   botId: string;
@@ -120,7 +121,10 @@ interface DuplicateMatch {
  * without that ordering each would see the other and both would be dropped -
  * the engine must act on exactly one. */
 /** A signal the bot made for itself to retry a missed open: it is spaced by the retry rules, so the duplicate check neither applies to it nor counts it. */
-const isRetrySignal = (s: Pick<Signal, "raw">) => (s.raw as { origin?: unknown } | null)?.origin === "retry";
+const isRetrySignal = (s: Pick<Signal, "raw">) => {
+  const origin = (s.raw as { origin?: unknown } | null)?.origin;
+  return origin === "retry" || origin === "chain"; // a chain trade's signal (pullbackExit.ts) is the bot's own too: it is spaced by the chain's rules, not the duplicate check
+};
 
 function findDuplicateSignal(signal: Signal): DuplicateMatch | null {
   if (isRetrySignal(signal)) return null;
@@ -142,6 +146,17 @@ function findDuplicateSignal(signal: Signal): DuplicateMatch | null {
   }
 
   return null;
+}
+
+/** Asks a broker that can close a trade by itself what became of this bot's open positions (see BrokerExecutor.syncPositions). Never throws: a failed read is said in the Log. */
+export async function syncBrokerPositions(botId: string, executor: BrokerExecutor, now: number): Promise<number> {
+  if (!executor.syncPositions) return 0;
+  try {
+    return await executor.syncPositions(botId, now);
+  } catch (err) {
+    logDecision({ signalId: null, botId, outcome: "executor_error", reason: `Could not check the broker for trades it closed by itself: ${errorMessage(err)}`, detail: { sync: true }, now });
+    return 0;
+  }
 }
 
 function errorMessage(err: unknown): string {
@@ -249,7 +264,7 @@ export async function closePosition(
   /** How many of the position's contracts to close; unset or all of them = the whole position. */
   contracts?: number,
   /** `chase`: this close may continue past its ladder's top price (REHEARSAL close chase, CLOSE_CHASE_MAX). `marks`: its prices may be capped by the broker's marks (REHEARSAL, CLOSE_USE_MARKS). Both left off for the close inside a flip. */
-  options?: { chase?: boolean; marks?: boolean },
+  options?: { chase?: boolean; marks?: boolean; manual?: boolean; reason?: CloseReason },
 ): Promise<CloseResult> {
   const total = position.filledQuantity || position.requestedQuantity;
   const target = contracts !== undefined ? Math.min(total, Math.max(1, contracts)) : total;
@@ -359,7 +374,7 @@ export async function closePosition(
     kind: "close",
     positionId: position.id,
     now,
-    place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${position.id}:close:${attempt}:${++closeStep}`, pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
+    place: (price) => executor.placeCloseOrder(position, { clientOrderId: `${position.id}:close:${attempt}:${++closeStep}`, ...(options?.manual ? { manual: true } : {}), pricePercent: pricing?.percent, ...(price !== null ? { limitDebit: price } : {}), ...(partial ? { quantity: target } : {}) }),
     prices: ladder ? [...ladder.prices, ...(chase?.prices ?? [])] : null,
     ...(chase && ladder ? { chase: { from: ladder.prices.length } } : {}),
     // The broker refused a price as too far through its market: price again from its own numbers (never past the ladder's final price - or, for a
@@ -405,6 +420,7 @@ export async function closePosition(
       underlyingAtClose: signal?.price ?? null,
       closeSignalId: signal?.id ?? null,
       splitFrom: position.id,
+      ...(options?.reason ? { closeReason: options.reason } : {}),
     };
     positionsStore.insert(part);
     positionsStore.update(position.id, { status: "open", requestedQuantity: total - target, filledQuantity: total - target, closeSignalId: null });
@@ -416,6 +432,7 @@ export async function closePosition(
       closedAt: Date.now(),
       closePrice: state.averagePrice ?? null,
       underlyingAtClose: signal?.price ?? null,
+      ...(options?.reason ? { closeReason: options.reason } : {}),
     });
     return { ok: true, outcome: "closed", reason: `Close order filled.${chased}`, pricing: pricingNote, steps };
   }
@@ -597,6 +614,9 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     plan = planStrikes(wantedType(signal.signal as SignalDirection), signal.price, staticConfig);
   }
 
+  // Step 0a: a broker that can close a trade by itself (Bybit's stop loss and take profit) is asked first what became of the open positions: one the account no
+  // longer holds is marked closed here, so the signal below starts from flat. A failed read is said in the Log and the run goes on (a close still checks the account).
+  await syncBrokerPositions(botId, options.executor, now);
   // Step 0: stale-position safety net (the EOD sweep is the primary mechanism).
   expireStalePositions(botId, now);
 
@@ -635,11 +655,13 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
   }
 
   // Step 2: hours guard.
-  const hours = hoursConfigFor(staticConfig.hours);
+  // An executor with its own trading window (Deriv's) decides the hours for what it trades; nothing is sent to it outside them, and no test alert skips them.
+  const hours = hoursFor(options.executor, staticConfig.underlying, staticConfig.hours);
+  const executorWindow = hasExecutorWindow(options.executor, staticConfig.underlying);
   const realInHours = isWithinTradingHours(now, hours);
   // Only the admin page's Send test alert can skip the clock, and only when AUTOMATION_TEST_MODE=true.
   // The flag is set server-side after the secret check; a webhook body can't carry it.
-  const hoursSkipped = !realInHours && (signal.raw as { test?: unknown } | null)?.test === true && isTestMode();
+  const hoursSkipped = !realInHours && !executorWindow && (signal.raw as { test?: unknown } | null)?.test === true && isTestMode();
   const inHours = realInHours || hoursSkipped;
   rec.decision(
     `Current market time is between ${describeWindow(hours)}`,
@@ -647,7 +669,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
     hoursSkipped ? `Testing mode: clock check skipped. ${describeTradingTime(now, hours)}` : describeTradingTime(now, hours),
   );
   if (!inHours) {
-    log("outside_hours", "Outside the configured trading window.");
+    log("outside_hours", executorWindow ? `Skipped: outside trading window (${describeWindow(hours)} New York time, Monday to Friday). Nothing was sent to the broker.` : "Outside the configured trading window.");
     return;
   }
 
@@ -777,7 +799,7 @@ async function runSignal(signal: Signal, options: ProcessSignalOptions, rec: Run
 
     // REHEARSAL (CLOSE_USE_MARKS, paper only): the flip's close is capped by the broker's marks like a manual close is. Never the chase, and
     // nothing here touches the open that follows. If this close fails, the flip stops below and nothing new is opened, as before.
-    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, applyClosePricing(pricingFor(staticConfig, "close", options.ladderStepMs), ownClose), contracts < total ? contracts : undefined, { marks: true });
+    const result = await closePosition(position, signal, options.executor, closeTimeoutMs, pollIntervalMs, now, applyClosePricing(pricingFor(staticConfig, "close", options.ladderStepMs), ownClose), contracts < total ? contracts : undefined, { marks: true, reason: "signal_flip" });
     // The Memo and Tags set on this trigger's Close Position step go on the position it closed.
     const stepNote = bot.closeSettings?.[direction];
     if (stepNote?.memo || stepNote?.tags?.length) {
@@ -956,6 +978,16 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
     return finish("already_in_position", "An active position of the wanted type already exists.");
   }
 
+  // An executor with a last buy time (Deriv's): a contract bought after it could still be open when the end-of-day sell cannot sell it, so a NEW open after it is
+  // skipped here - logged, not sent, not an error, no position made and no flag (a flip's close has already happened above). Closes are never held to it.
+  const lastBuy = lastBuyCheck(executor, staticConfig.underlying, now);
+  if (lastBuy) {
+    rec?.decision(`New contracts are bought up to ${lastBuy.at} New York time`, !lastBuy.late, lastBuy.late ? "Past the last buy time" : "Not past it");
+    if (lastBuy.late) {
+      return finish("after_last_buy_time", `Skipped: after last buy time (${lastBuy.at} New York time: the end of the trading window less the contract's length and a margin). Nothing was sent to the broker.`, { lastBuyAt: lastBuy.at });
+    }
+  }
+
   const totalActive = activePositionsForBot(botId).filter((p) => !gone.has(p.id));
   rec?.decision(`Bot has fewer than ${limits.totalPositionLimit} open position${limits.totalPositionLimit === 1 ? "" : "s"}`, totalActive.length < limits.totalPositionLimit, `${totalActive.length} open`);
   if (totalActive.length >= limits.totalPositionLimit) {
@@ -966,6 +998,16 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   rec?.decision(`Bot opened fewer than ${limits.dailyNewPositionLimit} new positions today`, todayNewPositions < limits.dailyNewPositionLimit, `${todayNewPositions} opened today`);
   if (todayNewPositions >= limits.dailyNewPositionLimit) {
     return stopAtLimit("daily_limit_reached", "Daily new-position limit reached.", { limit: limits.dailyNewPositionLimit, openedToday: todayNewPositions });
+  }
+
+  // A rule the broker itself enforces on NEW entries (Bybit's daily loss limit, DAILY_MAX_LOSS_USD, and its kill switch). A close is never held to it.
+  if (ctx.executor.entryBlock && !ctx.dryRun) {
+    const blocked = await ctx.executor.entryBlock(botId, now);
+    rec?.decision("No broker rule (daily loss limit, kill switch) blocks a new entry", blocked === null, blocked ? blocked.reason : "No rule blocks it");
+    if (blocked) {
+      if (blocked.outcome === "daily_loss_limit_reached") botsStore.update(botId, { needsAttention: true, needsAttentionReason: `daily_loss_limit_reached: ${blocked.reason}` });
+      return finish(blocked.outcome, blocked.reason, { brokerRule: blocked.outcome });
+    }
   }
 
   // The daily loss limit (off unless set): today's realized result plus the open loss. It blocks NEW OPENS only - the close of a flip has already
@@ -1244,6 +1286,15 @@ async function openStage(ctx: OpenStageContext): Promise<StageResult> {
   orderSteps = result.steps;
   pricingDetail = { ...pricingDetail, steps: result.steps };
   if (!result.ok) {
+    // An executor that says for certain the order was never taken (Deriv's refusal of a proposal or a buy, a failed sign-in) leaves nothing
+    // at the broker: the position is rejected, not left "opening" for a person. Anything unclear still stays as it was (failOpen below).
+    if (result.stage === "place" && result.error instanceof OrderNotPlacedError && !result.error.needsResolve) {
+      positionsStore.update(position.id, { status: "rejected" });
+      const reason = `Open order not placed: ${errorMessage(result.error)} Nothing was sent to the broker, so no position was opened.`;
+      recordError(botId, "open_failed", { positionId: position.id, reason }, now);
+      botsStore.update(botId, { needsAttention: true, needsAttentionReason: reason });
+      return finish("open_rejected", reason, { positionId: position.id });
+    }
     return failOpen(result.stage === "place" ? `Open order failed: ${errorMessage(result.error)}` : `Lost track of open order ${result.ref}: ${errorMessage(result.error)}`);
   }
   const { state, timedOut } = result;
@@ -1318,10 +1369,10 @@ export async function manualOpen(
       rec.decision("Bot is switched on", false, "Bot is off");
       return log("automations_off", "Bot off: the Open step is blocked. Nothing was opened.");
     }
-    const hours = hoursConfigFor(staticConfig.hours);
+    const hours = hoursFor(options.executor, staticConfig.underlying, staticConfig.hours);
     const inHours = isWithinTradingHours(now, hours);
     rec.decision(`Current market time is between ${describeWindow(hours)}`, inHours, describeTradingTime(now, hours));
-    if (!inHours) return log("outside_hours", "Outside the configured trading window.");
+    if (!inHours) return log("outside_hours", hasExecutorWindow(options.executor, staticConfig.underlying) ? `Skipped: outside trading window (${describeWindow(hours)} New York time, Monday to Friday). Nothing was sent to the broker.` : "Outside the configured trading window.");
 
     const longStrike = input.type === "short_put_spread" ? input.shortStrike - staticConfig.widthPoints : input.shortStrike + staticConfig.widthPoints;
     return await openStage({
@@ -1352,6 +1403,8 @@ export async function manualClose(positionId: string, options: ManualOptions & {
   const position = positionsStore.get(positionId);
   if (!position) throw new Error("Position not found.");
   const { botId } = position;
+  await syncBrokerPositions(botId, options.executor, now);
+  if (positionsStore.get(positionId)?.status === "closed") throw new Error("This position was already closed at the broker (its stop loss or take profit, or by hand); it is marked closed now.");
   const rec = new RunRecorder({ botId, signalId: null, source: "ui", automation: "Manual close", trigger: "Manual action", startedAt: now });
   const log = (outcome: DecisionOutcome, reason: string, ok = false): StageResult => {
     logDecision({ signalId: null, botId, outcome, reason, detail: { manual: true, positionId, runId: rec.id }, now });
@@ -1393,7 +1446,7 @@ export async function manualClose(positionId: string, options: ManualOptions & {
       now,
       botConfig ? pricingFor(botConfig, "close", options.ladderStepMs) : undefined,
       undefined,
-      { chase: true, marks: true },
+      { chase: true, marks: true, manual: true, reason: "manual" },
     );
     rec.action({ action: "close", title: closeTitle(position), position: positionsStore.get(position.id) ?? position, params: closeParamsFor(position, closeTimeoutMs, botConfig?.closePricePercent, { ...closeHow, note: result.pricing }), steps: result.steps, outcome: result.outcome, reason: result.reason });
     // A close refused for want of a quote changed nothing and is not a failure of the bot: the person who pressed the button sees the message and can press it again.

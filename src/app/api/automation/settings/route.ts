@@ -1,3 +1,4 @@
+import { LIVE_BOT_ID } from "@/lib/automation/bybitLiveLimits";
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_TIMEOUT_CHOICES, getAlertEmail, getAppSettings, getGlobalWindow, updateAppSettings, type AppSettingsPatch } from "@/lib/automation/appSettings";
 import { botDisplayName, getBotStaticConfig, listBotIds } from "@/lib/automation/bots";
@@ -40,7 +41,8 @@ function snapshot() {
     webhook: {
       path: "/api/webhook/tradingview",
       secretSet: Boolean(process.env.WEBHOOK_SECRET),
-      bots: bots.filter((b) => !b.archived).map((b) => ({ id: b.id, name: b.name, underlying: b.underlying })),
+      // The live bot is reached only through the mirror: it is never offered as a bot to attach a webhook to or to send a test alert to.
+      bots: bots.filter((b) => !b.archived && b.id !== LIVE_BOT_ID).map((b) => ({ id: b.id, name: b.name, underlying: b.underlying })),
     },
   };
 }

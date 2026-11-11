@@ -118,7 +118,7 @@ export function SettingsView() {
                 load();
                 return res.ok ? null : (json.error ?? "Couldn't rename it.");
               }}
-              canTest={data.executor.venue === "mock" || ((data.executor.venue === "tradier" || data.executor.venue === "ibkr") && data.executor.sandbox === true)}
+              canTest={data.executor.venue === "mock" || ((data.executor.venue === "tradier" || data.executor.venue === "ibkr" || data.executor.venue === "deriv" || data.executor.venue === "bybit") && data.executor.sandbox === true)}
               onTest={async (id) => {
                 const res = await fetch(`/api/automation/webhooks/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
                 const j = await res.json().catch(() => ({}));

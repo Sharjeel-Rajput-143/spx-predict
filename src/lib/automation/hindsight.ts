@@ -1,4 +1,5 @@
 import { easternMinutesOfDay } from "./tradingHours";
+import { reportsOwnResult } from "./brokerVenue";
 import { payoffAt } from "./payoff";
 import { positionPL, positionQuantity } from "./pnl";
 import { easternDateKey } from "./tradingHours";
@@ -44,7 +45,7 @@ export async function hindsight(positions: Position[], now: number, lookup: Clos
   const today = easternDateKey(now);
   const closeIsFinal = easternMinutesOfDay(now) >= 16 * 60 + 30;
   // Closed by a close order (not expired) with a result of its own, and the expiry's close is final.
-  const early = positions.filter((p) => p.status === "closed" && positionPL(p) !== null);
+  const early = positions.filter((p) => p.status === "closed" && !reportsOwnResult(p) && positionPL(p) !== null); // a Deriv contract or a Bybit perpetual has no strikes to value at a close
   const usable = (p: Position) => p.credit != null && (p.expiry < today || (p.expiry === today && closeIsFinal));
 
   const days = [...new Set(early.filter(usable).map((p) => `${p.underlying}|${p.expiry}`))].sort((a, b) => b.split("|")[1].localeCompare(a.split("|")[1])).slice(0, MAX_DAYS);

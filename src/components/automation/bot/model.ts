@@ -30,6 +30,9 @@ export interface BotDetailData {
     monitors?: Partial<Record<"bullishClose" | "bearishClose", { enabled: boolean; memo?: string; tags?: string[] }>>;
     alerts: BotAlerts;
     safeguards: BotSafeguards;
+    /** This bot's pullback exit / chain settings in force (the two Bybit bots, each its own); null for every other bot. */
+    pullback?: { enabled: boolean; fallUsd: number; minPeakUsd: number; chainEnabled: boolean; chainStopUsd: number; chainMax: number } | null;
+    chainRunning?: { trades: number } | null;
     logClearedAt: number;
     dailyResetAt: number;
   };
@@ -41,6 +44,8 @@ export interface BotDetailData {
     dailyNewPositionLimit: number;
     /** Dollars; 0 = off. */
     dailyLossLimit: number;
+    /** The BTC bot only: the limit the Bybit executor really enforces (DAILY_MAX_LOSS_USD, dollars). Null for every other bot. */
+    brokerDailyLossLimit?: number | null;
     errorFailsafeThreshold: number;
     dedupeWindowSeconds: number;
     flipCooldownSeconds: number;
@@ -56,6 +61,8 @@ export interface BotDetailData {
     realized: number;
     closedToday: number;
     unpriced: number;
+    /** True when the realized figure is the Bybit bot's, counted after fees. */
+    afterFees?: boolean;
     lastCheck: { at: number; limit: number; realized: number; openLoss: number | null; openLossWhy?: string; total: number; hit: boolean } | null;
   };
   capital: { allocation: number; atRisk: number; available: number; netLiquid: number | null } | null;
@@ -101,6 +108,12 @@ export const OUTCOMES: Record<string, { label: string; tone: Tone }> = {
   total_position_limit_reached: { label: "Position limit", tone: "warn" },
   daily_limit_reached: { label: "Daily limit", tone: "warn" },
   daily_loss_limit_reached: { label: "Daily loss limit", tone: "warn" },
+  breakeven_stop: { label: "Breakeven stop", tone: "ok" },
+  pullback_exit: { label: "Pullback exit", tone: "ok" },
+  chain_stop: { label: "Chain stop", tone: "warn" },
+  chain_open: { label: "Chain trade opened", tone: "ok" },
+  chain_ended: { label: "Chain ended", tone: "skip" },
+  after_last_buy_time: { label: "After last buy time", tone: "skip" },
   allocation_limit_reached: { label: "Allocation limit", tone: "warn" },
   overlapping_strikes: { label: "Strikes overlap", tone: "warn" },
   webhook_text_mismatch: { label: "Alert text doesn't match", tone: "error" },

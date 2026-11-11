@@ -5,14 +5,14 @@ import { settingsStore } from "./store";
 import { currentUserId } from "./userContext";
 import type { AppSettings } from "./types";
 
-export const SESSION_TIMEOUT_CHOICES = [30, 60, 120, 240, 480] as const;
+export const SESSION_TIMEOUT_CHOICES = [30, 60, 120, 240, 480, 1440] as const;
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   tradingWindow: null,
   emailAlerts: { enabled: false, to: "", onTrade: true, onWarningError: true, includeTest: true },
   // Errors always raise a notification. Warnings are useful and rare, so on; every trade, twice on a flip, would be noise, so off.
   notifications: { trades: false, warnings: true },
-  sessionTimeoutMinutes: 60,
+  sessionTimeoutMinutes: 1440, // a day: signed in while in use, signed out after 24 hours of no use (and never kept past 24 hours from the sign-in)
 };
 
 /** The row of whoever is signed in (the owner's is "app", as it always was; anyone else's is "app:<userId>"). With nobody signed in (the engine) it is the owner's. */

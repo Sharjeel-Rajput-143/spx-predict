@@ -1,4 +1,5 @@
 import "server-only";
+import { LIVE_BOT_ID } from "./bybitLiveLimits";
 import { positionsStore } from "./store";
 import { maxRisk } from "./strikes";
 import { easternDateKey } from "./tradingHours";
@@ -16,14 +17,18 @@ export function activePositionsForBots(botIds: string[]): Position[] {
   return positionsStore.query((p) => ids.has(p.botId) && ACTIVE_POSITION_STATUSES.includes(p.status));
 }
 
-/** "New positions per trading day" counts positions whose opening attempt
- * (openedAt, set when the position row is first created in `opening`
- * status) falls on today's America/New_York trading date - regardless of
- * whether that attempt ultimately filled, partially filled, or was rejected. */
+/** (A chain trade, see pullbackExit.ts, is not counted: it has its own cap per alert, and must not use up the day's allowance for real alerts.) */
+/**
+ * How many new positions the bot opened today (New York date): what the trades-a-day limit counts.
+ *  - The DEMO bot: chain trades (pullbackExit.ts) are not counted, and "Reset daily counter" (`resetAt`) restarts the count.
+ *  - The LIVE bot: chain trades ARE counted (every live trade uses up the day's allowance), and the reset is IGNORED: nothing on a page can restart the live count.
+ */
 export function countTodayNewPositions(botId: string, nowMs: number, resetAt = 0): number {
   const today = easternDateKey(nowMs);
+  const live = botId === LIVE_BOT_ID;
+  const since = live ? 0 : resetAt;
   return positionsStore.query(
-    (p) => p.botId === botId && !p.splitFrom && p.openedAt != null && p.openedAt > resetAt && easternDateKey(p.openedAt) === today,
+    (p) => p.botId === botId && !p.splitFrom && (live || !p.chain) && p.openedAt != null && p.openedAt > since && easternDateKey(p.openedAt) === today,
   ).length;
 }
 

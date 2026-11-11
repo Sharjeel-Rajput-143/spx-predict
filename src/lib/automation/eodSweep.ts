@@ -15,9 +15,20 @@ import { settleExpiredFromClose } from "./settleExpired";
 import { runDueMonitors } from "./monitors";
 import { recoverInFlightPositions } from "./recovery";
 import { flagMismatches, reconcile } from "./reconcile";
-import { executorStatus, sharedExecutor } from "./sharedExecutor";
+import { bybitExecutor, executorStatus, sharedExecutor } from "./sharedExecutor";
+import { runBybitRiskCheck } from "./bybitRisk";
+import { liveRiskTick, liveWatchdogTick } from "./bybitLiveWatchdog";
+import { ledgerSweep } from "./ledger";
+import { PULLBACK_TICK_MS, pullbackTick } from "./pullbackExit";
+import { LIVE_BOT_ID } from "./bybitLiveLimits";
+import { bootLive } from "./liveGuard";
+import { scheduleAutoResume, tidyMirror } from "./liveControl";
+import { WATCHDOG_INTERVAL_MS, watchdogTick } from "./bybitWatchdog";
 import { botsStore, positionsStore } from "./store";
-import { easternDateKey, easternMinutesOfDay } from "./tradingHours";
+import { describeWindow, easternDateKey, easternMinutesOfDay, isWithinTradingHours, windowEndMinutes } from "./tradingHours";
+import { hoursFor } from "./tradingWindow";
+import { warmQuoteFeeds } from "./hookPrice";
+import { UNKNOWN_RESULT, isDerivPosition, settleDerivResults } from "./derivResults";
 import { ACTIVE_POSITION_STATUSES, type BrokerExecutor, type EodSweepMode, type Position } from "./types";
 import { getLastTick } from "@/lib/marketData/tickStore";
 
@@ -26,27 +37,49 @@ const TICK_MS = 60_000;
 const MAX_PRICE_AGE_MS = 30 * 60_000;
 // On globalThis: the scheduler is started from instrumentation.ts and by the webhook route, which Next
 // compiles as separate module graphs. One scheduler, one record of what was swept today.
-const shared = globalThis as typeof globalThis & { __eodSweepState?: { started: boolean; ticking: boolean; lastReconcileAt: number; swept: Map<string, string> } };
-const state = (shared.__eodSweepState ??= { started: false, ticking: false, lastReconcileAt: 0, swept: new Map() });
+const shared = globalThis as typeof globalThis & { __eodSweepState?: { started: boolean; ticking: boolean; riskTicking: boolean; lastReconcileAt: number; swept: Map<string, string> } };
+const state = (shared.__eodSweepState ??= { started: false, ticking: false, riskTicking: false, lastReconcileAt: 0, swept: new Map() });
 /** Per bot: each bot has its own sweep time, so each has its own "done today". */
 const lastSweptTradingDate = state.swept;
 
 /** When this bot's positions are swept (minutes after midnight ET): its own
  * setting, or 4:05pm. A bot whose inputs aren't complete holds no positions,
  * so it just gets the default rather than stopping the other bots' sweeps. */
-export function sweepMinutesFor(botId: string): number {
+export function sweepMinutesFor(botId: string, executor?: Pick<BrokerExecutor, "tradingWindowFor">, now: number = Date.now()): number {
+  let base = DEFAULT_EOD_SWEEP_MINUTES;
+  let underlying: string | undefined;
   try {
-    const time = getBotStaticConfig(botId).eodSweepTime;
-    return time ? parseClockMinutes(time, "eodSweepTime") : DEFAULT_EOD_SWEEP_MINUTES;
+    const config = getBotStaticConfig(botId);
+    underlying = config.underlying;
+    base = config.eodSweepTime ? parseClockMinutes(config.eodSweepTime, "eodSweepTime") : DEFAULT_EOD_SWEEP_MINUTES;
   } catch {
-    return DEFAULT_EOD_SWEEP_MINUTES;
+    /* the default */
+  }
+  // A bot whose orders go to an executor with its own trading window (Deriv's) is swept INSIDE that window: a minute before it ends at the latest
+  // (a minute, so a tick a few seconds late still lands inside), and on an early-close day a minute before that day's end.
+  if (executor && underlying && executor.tradingWindowFor?.(underlying)) {
+    return Math.min(base, windowEndMinutes(now, hoursFor(executor, underlying)) - 1);
+  }
+  return base;
+}
+
+/** True for a bot whose executor is always on (a market that never closes, such as crypto): it has no end of day, so nothing is swept and a position stays held until a signal closes it. */
+export function hasNoEndOfDay(botId: string, executor?: Pick<BrokerExecutor, "tradingWindowFor">): boolean {
+  try {
+    return executor?.tradingWindowFor?.(getBotStaticConfig(botId).underlying)?.alwaysOn === true;
+  } catch {
+    return false;
   }
 }
 
 /** What the sweep does with this bot's positions: its own setting, or estimate. */
-export function sweepModeFor(botId: string): EodSweepMode {
+export function sweepModeFor(botId: string, executor?: Pick<BrokerExecutor, "tradingWindowFor">): EodSweepMode {
   try {
-    return getBotStaticConfig(botId).eodSweepMode ?? "estimate";
+    const config = getBotStaticConfig(botId);
+    // With an executor that trades real contracts (Deriv), "estimate" or "manual" would mark a position expired while the contract is still held at the
+    // broker. Such a bot's position is always sold: the sweep closes it.
+    if (executor?.tradingWindowFor?.(config.underlying)) return "market";
+    return config.eodSweepMode ?? "estimate";
   } catch {
     return "estimate";
   }
@@ -85,6 +118,11 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Marks a position expired. With a price its P/L is estimated from the payoff at that price. */
 function expirePosition(p: Position, now: number, price: number | null, estimate: boolean): "estimated" | "awaiting" {
+  // A Deriv position is never given an estimate (it has no strikes or credit in Deriv's terms): it expires with its result unknown until Deriv's own is read.
+  if (isDerivPosition(p)) {
+    positionsStore.update(p.id, { status: "expired", closedAt: now, resultUnknown: UNKNOWN_RESULT });
+    return "awaiting";
+  }
   const credit = p.credit;
   if (estimate && price !== null && credit != null && p.status === "open") {
     const spread = { type: p.type, shortStrike: p.shortStrike, longStrike: p.longStrike, credit, quantity: positionQuantity(p) };
@@ -108,7 +146,8 @@ function expirePosition(p: Position, now: number, price: number | null, estimate
  */
 export function sweepBot(botId: string, now: number = Date.now(), options: SweepOptions = {}): Promise<SweepResult> {
   return withBotLock(botId, async () => {
-    const mode = sweepModeFor(botId);
+    const executor = options.executor ?? sharedExecutor;
+    const mode = sweepModeFor(botId, executor);
     const result: SweepResult = { botId, mode, swept: 0, estimated: 0, closedAtMarket: 0, awaitingEntry: 0, failed: 0 };
     const active = positionsStore.query((p) => p.botId === botId && ACTIVE_POSITION_STATUSES.includes(p.status));
     result.swept = active.length;
@@ -122,8 +161,15 @@ export function sweepBot(botId: string, now: number = Date.now(), options: Sweep
         logDecision({ signalId: null, botId, outcome: "dry_run", reason: `Dry run: the end-of-day sweep would close ${active.length} position${active.length === 1 ? "" : "s"} at market.`, detail: { sweep: true, mode }, now });
         return result;
       }
-      const executor = options.executor ?? sharedExecutor;
       for (const position of active) {
+        // An executor with its own trading window is never sent an order outside it: the position is left for a person, and the Log says so.
+        if (executor.tradingWindowFor?.(position.underlying) && !isWithinTradingHours(now, hoursFor(executor, position.underlying))) {
+          result.failed++;
+          const reason = `end-of-day sweep: skipped, outside trading window (${describeWindow(hoursFor(executor, position.underlying))} New York time). Nothing was sent to the broker, so the ${position.status} position is still held: close it by hand.`;
+          logDecision({ signalId: null, botId, outcome: "outside_hours", reason, detail: { sweep: true, positionId: position.id }, now });
+          botsStore.update(botId, { needsAttention: true, needsAttentionReason: reason });
+          continue;
+        }
         if (position.status !== "open") {
           // Opening or already closing: we can't tell what the broker holds, so a person has to look.
           expirePosition(position, now, null, false);
@@ -148,7 +194,7 @@ export function sweepBot(botId: string, now: number = Date.now(), options: Sweep
           now,
           marketPricing,
           undefined,
-          { chase: true, marks: true },
+          { chase: true, marks: true, reason: "end_of_day" },
         );
         logDecision({ signalId: null, botId, outcome: closed.outcome, reason: `End-of-day sweep: ${closed.reason}`, detail: { sweep: true, mode, positionId: position.id, ...(closed.steps ? { steps: closed.steps } : {}) }, now });
         if (closed.ok) {
@@ -208,7 +254,8 @@ export async function runDueSweeps(now: number, options: SweepOptions = {}): Pro
   const swept: string[] = [];
   for (const botId of listBotIds()) {
     if (lastSweptTradingDate.get(botId) === today) continue;
-    if (minutes >= sweepMinutesFor(botId)) {
+    if (hasNoEndOfDay(botId, options.executor ?? sharedExecutor)) continue;
+    if (minutes >= sweepMinutesFor(botId, options.executor ?? sharedExecutor, now)) {
       lastSweptTradingDate.set(botId, today); // claimed before the work, so a slow sweep isn't started twice
       try {
         await sweepBot(botId, now, options);
@@ -226,7 +273,7 @@ export async function runDueSweeps(now: number, options: SweepOptions = {}): Pro
 /** Only a real broker executor, configured, with orders actually being sent, has anything to recover or compare. */
 function brokerReady(): boolean {
   const s = executorStatus();
-  return (s.venue === "tradier" || s.venue === "ibkr") && !s.error && !isDryRun();
+  return (s.venue === "tradier" || s.venue === "ibkr" || s.venue === "deriv" || s.venue === "bybit") && !s.error && !isDryRun();
 }
 
 async function tick(): Promise<void> {
@@ -237,6 +284,7 @@ async function tick(): Promise<void> {
     pruneOncePerDay(Date.now()); // old log entries, once a day
     await checkInterruptedRuns(Date.now()); // a run the server stopped partway through, said once in the Log
     await settleExpiredFromClose().catch(() => 0); // a result for any expired position the sweep missed, from that day's close
+    await settleDerivResults(sharedExecutor).catch(() => 0); // a Deriv or Bybit position's result, as the broker itself reports it (never an estimate)
     await runDueEntryRetries(Date.now()).catch(() => []); // an open that an alert asked for and that was dropped, tried again (quiet when there is none)
     await runDueExitChecks(Date.now()); // each open position's own exit options (profit taking, stop loss, touch); quiet when nothing is met
     await runDueMonitors(Date.now()); // Close Monitors (off unless a person switched one on); quiet when there is nothing to do
@@ -256,12 +304,55 @@ async function tick(): Promise<void> {
   }
 }
 
+/** How often Bybit's risk check runs while a Bybit position is open: the daily loss limit, the kill switch, and a trade Bybit closed by its own stop. */
+const RISK_TICK_MS = 10_000;
+
+/** One pass of the Bybit risk check over the bots. Quiet (and free) when Bybit is not the broker or nothing is open. Exported for the tests. */
+export async function riskTick(now: number = Date.now()): Promise<number> {
+  if (state.riskTicking || isDryRun()) return 0;
+  const bybit = bybitExecutor();
+  if (!bybit) return 0;
+  state.riskTicking = true;
+  let acted = 0;
+  try {
+    for (const botId of listBotIds()) {
+      if (botId === LIVE_BOT_ID) continue; // the live bot is checked against the LIVE account by liveRiskTick, never against the demo one
+      const run = await runBybitRiskCheck(botId, sharedExecutor, bybit, now).catch((err) => {
+        console.error(`[automation] Bybit risk check failed for ${botId}`, err);
+        return null;
+      });
+      acted += run?.actions.length ?? 0;
+    }
+    // A trade that has just closed gets Bybit's own result (after fees) as soon as Bybit lists it: asked every few seconds for the first 15 minutes. Until then the day's
+    // numbers use the fills less estimated fees (see bybitDay.ts), so the daily loss limit never waits on this.
+    await settleDerivResults(sharedExecutor, now, { retryAfterMs: 8_000, recentMs: 15 * 60_000 }).catch(() => 0);
+    ledgerSweep(now); // judge the demo trades that have just closed (counted or not) for the live gate
+  } finally {
+    state.riskTicking = false;
+  }
+  return acted;
+}
+
 /** On startup, settle any order a crash or restart left in flight (reads each back from the broker; sends nothing). */
 function recoverOnStartup(): void {
   if (!brokerReady()) return;
   recoverInFlightPositions(sharedExecutor)
     .then((results) => results.length > 0 && console.warn(`[automation] recovery after restart: ${results.map((r) => `${r.was}->${r.action}`).join(", ")}`))
     .catch((err) => console.error("[automation] recovery after restart failed", err));
+}
+
+/** Starts the quote feed of every active bot's underlying, so the first webhook call after a start finds a fresh quote (see warmQuoteFeeds). Never throws. */
+export function warmBotFeeds(): string[] {
+  const underlyings: string[] = [];
+  for (const id of listBotIds()) {
+    try {
+      if (botsStore.get(id)?.archived) continue;
+      underlyings.push(getBotStaticConfig(id).underlying);
+    } catch {
+      /* a bot with incomplete settings has nothing to warm */
+    }
+  }
+  return warmQuoteFeeds(underlyings);
 }
 
 /** Started once when the server boots (src/instrumentation.ts), and again - harmlessly - by the first
@@ -274,9 +365,25 @@ export function startEodScheduler(): void {
   if (process.env.VERCEL) return;
   if (state.started) return;
   state.started = true;
+  bootLive(); // the live toggle and the mirror are OFF after every start (a saved ON state is resumed below, only after its own checks)
+  warmBotFeeds();
   recoverOnStartup();
   void tick();
   setInterval(() => void tick(), TICK_MS);
+  setInterval(() => void riskTick(), RISK_TICK_MS);
+  // The stop-loss watchdog: the first look is the startup check; then every 1.5 seconds (see bybitWatchdog.ts).
+  void watchdogTick();
+  setInterval(() => void watchdogTick(), WATCHDOG_INTERVAL_MS);
+  // The pullback exit and the chain mode (pullbackExit.ts): the Bybit demo bot only, its own tick, quiet when nothing is open.
+  setInterval(() => void pullbackTick(), PULLBACK_TICK_MS);
+  // The live account has its own watchdog and risk check (nothing at all happens in them without a live key).
+  void liveWatchdogTick();
+  setInterval(() => void liveWatchdogTick(), WATCHDOG_INTERVAL_MS);
+  setInterval(() => void liveRiskTick(), RISK_TICK_MS);
+  // The toggle's saved ON state is resumed once after a start, if nothing had tripped and the account check passes (liveControl.attemptAutoResume); never in a dry run.
+  void scheduleAutoResume();
+  // With the toggle OFF the mirror stays ON only while a live position is held; this turns it OFF once none is.
+  setInterval(() => void tidyMirror(), RISK_TICK_MS);
 }
 
 /** Test hook: forget which bots were already swept. */

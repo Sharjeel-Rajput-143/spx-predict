@@ -115,3 +115,23 @@ describe("what the server reports", () => {
     expect(status.executor.error).toMatch(/BRIDGE_SYMBOLS/);
   });
 });
+
+describe("with Bybit as the broker the labels name BTC, never NDX", () => {
+  // Whatever symbols a status carries (BRIDGE_SYMBOLS defaults to NDX for the IBKR bridge), Bybit serves the BTC bot only.
+  const bybit = { venue: "bybit" as const, sandbox: true, bridgeSymbols: ["NDX"] };
+  it("the line under the bots list", () => {
+    expect(ordersFooter(bybit)).toBe("BTC orders go to the Bybit paper account; other bots use the simulation");
+    expect(ordersFooter({ venue: "bybit", sandbox: true })).toBe("BTC orders go to the Bybit paper account; other bots use the simulation");
+    expect(ordersFooter({ venue: "bybit", sandbox: true, bridgeSymbols: ["BTC"] })).toBe("BTC orders go to the Bybit paper account; other bots use the simulation");
+    expect(ordersFooter(bybit)).not.toMatch(/NDX/);
+  });
+  it("the routing note on the accounts row", () => {
+    expect(routingNote(bybit)).toMatch(/^Orders for BTC go to Bybit\./);
+    expect(routingNote(bybit)).not.toMatch(/Orders for NDX/);
+    expect(routingNote({ venue: "bybit", sandbox: true })).toMatch(/^Orders for BTC go to Bybit\./);
+  });
+  it("the other brokers still name their own symbols", () => {
+    expect(ordersFooter(paper)).toBe("NDX orders go to the Interactive Brokers paper account; other bots use the simulation");
+    expect(routingNote(paper)).toMatch(/Orders for NDX go to the bridge/);
+  });
+});

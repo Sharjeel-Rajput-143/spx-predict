@@ -10,9 +10,12 @@ import { AddAutomationDrawer } from "../builder/AddAutomationDrawer";
 import { AutomationBuilder } from "../builder/AutomationBuilder";
 import { builtInFlow, monitorFlow } from "../builder/builtin";
 import { liveNodeEditor, monitorNodeEditor } from "../builder/LiveNodeEditors";
+import { LIVE_BOT_ID } from "@/lib/automation/bybitLiveLimits";
+import { canRunByHand } from "@/lib/automation/liveRunRule";
 import type { AutomationDraft } from "../builder/model";
 import { DEFAULT_FOLDER, blankDraft, detach, loadAttached, loadLibrary, loadSymbolSettings, setAttachmentEnabled, type Attachment, type SymbolSettings } from "../builder/store";
 import { clock12 } from "../builder/builtin";
+import { PullbackEditor } from "./PullbackEditor";
 import { SymbolsPanel } from "./SymbolsPanel";
 import { TriggerWebhook } from "./TriggerWebhook";
 import type { BotAlerts, BotSafeguards, MonitorKey } from "@/lib/automation/types";
@@ -79,6 +82,7 @@ export function SettingsTab({ ctx }: { ctx: BotContext }) {
 
       <div className="space-y-4">
         <SafeguardsCard ctx={ctx} />
+        {data.bot.pullback ? <PullbackCard ctx={ctx} /> : null}
         <ScanSpeedsCard exitTriggers={botExitTriggers(data.bot.openSettings)} />
         <SymbolsCard botId={data.bot.id} underlying={data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX"} />
         <AlertsCard ctx={ctx} />
@@ -216,7 +220,7 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
       {(close) => (
         <>
           <MenuItem onClick={() => { close(); openBuiltIn(dir); }}>View flow</MenuItem>
-          <MenuItem onClick={() => { close(); openRun(dir); }}>Run now...</MenuItem>
+          {canRunByHand(data.bot.id) && <MenuItem onClick={() => { close(); openRun(dir); }}>Run now...</MenuItem>}
           <MenuItem onClick={() => { close(); navigator.clipboard?.writeText(payloadFor(dir, bot.id, data.config?.underlying ?? data.bot.draft?.underlying ?? "SPX")).then(() => notify("ok", "Webhook message copied.")); }}>Copy webhook message</MenuItem>
           <MenuItem onClick={() => { close(); setDrawer(dir); }}>Details</MenuItem>
         </>
@@ -237,9 +241,11 @@ function AutomationsCard({ ctx }: { ctx: BotContext }) {
             <Btn kind="secondary" className="flex items-center gap-1.5 !py-1.5"  onClick={() => setAdding({})}>
               <IconPlus width={14} height={14} /> Add automation
             </Btn>
-            <Btn kind="secondary" className="!py-1.5"  onClick={() => openRun()}>
-              Run
-            </Btn>
+            {canRunByHand(data.bot.id) && (
+              <Btn kind="secondary" className="!py-1.5"  onClick={() => openRun()}>
+                Run
+              </Btn>
+            )}
           </div>
         }
       />
@@ -384,7 +390,7 @@ function MonitorDrawer({ monitor, windowText, ctx, onClose }: { monitor: Monitor
   );
 }
 
-function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx: BotContext; onClose: () => void }) {
+export function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx: BotContext; onClose: () => void }) {
   const { data, patch, notify, openRun } = ctx;
 
   return (
@@ -400,9 +406,11 @@ function TriggerDrawer({ dir, ctx, onClose }: { dir: "bullish" | "bearish"; ctx:
           saveAlwaysOn={(on) => patch({ alwaysOn: { ...(data.bot.alwaysOn ?? { bullish: true, bearish: true }), [dir]: on } }, "Always On saved.")}
         />
 
-        <Btn kind="secondary" className="w-full"  onClick={() => { onClose(); openRun(dir); }}>
-          Run this trigger now...
-        </Btn>
+        {canRunByHand(data.bot.id) && (
+          <Btn kind="secondary" className="w-full"  onClick={() => { onClose(); openRun(dir); }}>
+            Run this trigger now...
+          </Btn>
+        )}
         <Link href="/settings" className="block text-center text-xs text-muted hover:text-fg">
           Webhook settings <IconChevronRight width={11} height={11} className="inline" />
         </Link>
@@ -574,6 +582,13 @@ function NotesCard({ ctx }: { ctx: BotContext }) {
 // ---------------------------------------------------------------------------
 // Safeguards, timing, alerts
 // ---------------------------------------------------------------------------
+// Pullback exit and chain mode (both Bybit bots, each with its own values: the shared PullbackEditor)
+function PullbackCard({ ctx }: { ctx: BotContext }) {
+  const { data, patch } = ctx;
+  return <PullbackEditor pb={data.bot.pullback!} chainRunning={data.bot.chainRunning} live={data.bot.id === LIVE_BOT_ID} save={(body, text) => patch({ pullback: body }, text)} />;
+}
+
+// ---------------------------------------------------------------------------
 
 const signedUsd = (n: number) => `${n < 0 ? "-" : n > 0 ? "+" : ""}${usd2(Math.abs(n))}`;
 const checkTime = (ms: number) => `${new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET`;
@@ -582,6 +597,8 @@ function SafeguardsCard({ ctx }: { ctx: BotContext }) {
   const { data, notify, reload } = ctx;
   const { limits, config, counts, dayLoss } = data;
   const [editing, setEditing] = useState(false);
+  /** The BTC bot's real limit (the Bybit executor's), when this is that bot; the engine's own figure is off for it. */
+  const brokerLimit = limits.brokerDailyLossLimit ?? null;
 
   const resetDaily = async () => {
     const res = await fetch(`/api/automation/bots/${data.bot.id}/daily-reset`, { method: "POST" });
@@ -594,19 +611,36 @@ function SafeguardsCard({ ctx }: { ctx: BotContext }) {
       <CardHeader title="Safeguards" tip="Limits the engine enforces before it opens anything. Closing is never blocked." action={<EditButton onClick={() => setEditing(true)} label="Edit safeguards" />} />
       <div className="space-y-4">
         <Stat label="Allocation" tip="The most the bot may have at risk at once.">{data.bot.allocation != null ? usd(data.bot.allocation) : "—"}</Stat>
-        <Stat label="Daily positions" tip="New positions the bot may open per trading day.">
+        <Stat label="Daily positions" tip="New positions the bot may open per New York day. Each new open counts once: a flip is one (its close is not counted), and an open that was refused by the broker counts too. At the limit the new open is skipped and the bot switches itself off until you switch it back on; a close is never blocked.">
           {limits.dailyNewPositionLimit} per day
           <span className="block text-xs font-normal text-faint">
-            {counts.newPositionsToday} today ·{" "}
-            <button onClick={resetDaily} className="text-accent hover:underline">
-              reset
-            </button>
+            {counts.newPositionsToday} today
+            {data.bot.id === LIVE_BOT_ID ? (
+              <span data-testid="no-live-reset"> · restarts by itself on the next New York day (it cannot be reset)</span>
+            ) : (
+              <>
+                {" "}·{" "}
+                <button onClick={resetDaily} className="text-accent hover:underline">
+                  reset
+                </button>
+              </>
+            )}
           </span>
         </Stat>
-        <Stat label="Daily loss limit" tip="New opens are refused once today's realized loss plus the open position's loss reaches this. Closing is never blocked, the bot stays on, and it starts again at zero each New York trading day.">
-          {limits.dailyLossLimit > 0 ? usd2(limits.dailyLossLimit) : "Off"}
+        <Stat
+          label="Daily loss limit"
+          tip={
+            brokerLimit != null
+              ? (data.bot.id === LIVE_BOT_ID
+                ? "The LIVE daily loss limit (set on the Live page, never above $3), counted on this bot's own live trades after fees. When today's result plus the open trade's loss reaches it, the open trade is closed, the live switch goes OFF and no new entry is made until the next New York day."
+                : "The Bybit limit (DAILY_MAX_LOSS_USD in .env.local), counted on this bot's own trades after fees. When today's result plus the open trade's loss reaches it, the open trade is closed and no new entry is made until the next New York day. It is changed in .env.local, not here.")
+              : "New opens are refused once today's realized loss plus the open position's loss reaches this. Closing is never blocked, the bot stays on, and it starts again at zero each New York trading day."
+          }
+        >
+          {brokerLimit != null ? usd2(brokerLimit) : limits.dailyLossLimit > 0 ? usd2(limits.dailyLossLimit) : "Off"}
           <span className="block text-xs font-normal text-faint" data-testid="day-result">
-            Today: realized {signedUsd(dayLoss.realized)} ({dayLoss.closedToday} closed or expired{dayLoss.unpriced > 0 ? `, ${dayLoss.unpriced} with no price counted as 0` : ""})
+            Today: realized {signedUsd(dayLoss.realized)}
+            {dayLoss.afterFees ? " after fees" : ""} ({dayLoss.closedToday} closed or expired{dayLoss.unpriced > 0 ? `, ${dayLoss.unpriced} with no price counted as 0` : ""})
           </span>
           {dayLoss.lastCheck && (
             <span className="block text-xs font-normal text-faint" data-testid="last-check">
@@ -633,6 +667,7 @@ function choices(base: number[], current: number): number[] {
 export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: () => void }) {
   const { data, patch } = ctx;
   const { limits, config } = data;
+  const isLiveBot = data.bot.id === LIVE_BOT_ID;
   const [allocation, setAllocation] = useState(String(config?.allocationLimit ?? data.bot.allocation ?? ""));
   const [daily, setDaily] = useState(limits.dailyNewPositionLimit);
   const [total, setTotal] = useState(limits.totalPositionLimit);
@@ -669,7 +704,16 @@ export function SafeguardsDrawer({ ctx, onClose }: { ctx: BotContext; onClose: (
         <Field label="Allocation" hint="Total capital to open positions.">
           <input className={inputClass} inputMode="decimal" value={allocation} onChange={(e) => setAllocation(e.target.value)} />
         </Field>
-        <Field label="Daily loss limit ($)" hint="New opens stop for the day once today's realized loss plus the open loss reaches this. Closes are never blocked. Blank uses the DAILY_LOSS_LIMIT setting (off if unset); 0 turns it off for this bot.">
+        <Field
+          label="Daily loss limit ($)"
+          hint={
+            limits.brokerDailyLossLimit != null
+              ? (isLiveBot
+                ? `Leave this blank: this bot is protected by the live daily loss limit, ${usd2(limits.brokerDailyLossLimit)}, counted after fees. Change that one on the Live page (never above $3).`
+                : `Leave this blank: this bot is protected by Bybit's own limit, ${usd2(limits.brokerDailyLossLimit)} (DAILY_MAX_LOSS_USD in .env.local), counted after fees. Change that one in .env.local.`)
+              : "New opens stop for the day once today's realized loss plus the open loss reaches this. Closes are never blocked. Blank uses the DAILY_LOSS_LIMIT setting (off if unset); 0 turns it off for this bot."
+          }
+        >
           <input className={inputClass} inputMode="decimal" value={lossLimit} onChange={(e) => setLossLimit(e.target.value)} aria-label="Daily loss limit" placeholder="blank = default" />
         </Field>
         <Field label="Daily positions" hint="Max positions opened in one day.">
